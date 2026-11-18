@@ -3415,4 +3415,26 @@ public class ModifyMetadataToolTest
         assertSame(color, item.getColor());
     }
 
+    /**
+     * The opaque payloads' prose is the only carrier of these state-changing rules: a field list
+     * that is not an array silently becomes a whole-object RLS, a weight without the auto flag is
+     * refused, re-adding a CommonAttribute owner rewrites its use, and wrap:false inherits.
+     */
+    @Test
+    public void testPayloadDescriptionsKeepTheirStateChangingRules()
+    {
+        com.google.gson.JsonObject props = com.google.gson.JsonParser.parseString(
+            new ModifyMetadataTool().getInputSchema()).getAsJsonObject().getAsJsonObject("properties"); //$NON-NLS-1$
+        String rights = props.getAsJsonObject("rights").get("description").getAsString(); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(rights, rights.contains("rlsFields = an array of field-name strings it applies to (omit or [] " //$NON-NLS-1$
+            + "for the whole object)")); //$NON-NLS-1$
+        String content = props.getAsJsonObject("content").get("description").getAsString(); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(content, content.contains("Re-adding a listed CommonAttribute owner SETS its use (omitted -> " //$NON-NLS-1$
+            + "'Use'), a listed ExchangePlan member its given autoRecord; re-adding a plain reference is a no-op.")); //$NON-NLS-1$
+        String template = props.getAsJsonObject("template").get("description").getAsString(); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(template, template.contains("widthWeightFactor? (only with autoWidthCalculation:true)")); //$NON-NLS-1$
+        assertTrue(template, template.contains("Non-empty text clears parameter and vice versa; '' clears the named one.")); //$NON-NLS-1$
+        assertTrue(template, template.contains("but wrap:false restores inherited placement")); //$NON-NLS-1$
+        assertTrue(template, template.contains("Omitted or null cell keys keep their values")); //$NON-NLS-1$
+    }
 }

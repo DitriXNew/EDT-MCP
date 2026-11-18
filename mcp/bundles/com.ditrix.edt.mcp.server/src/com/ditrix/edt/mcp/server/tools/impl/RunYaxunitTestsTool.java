@@ -282,12 +282,7 @@ public class RunYaxunitTestsTool implements IMcpTool
      * {@code update_database}).
      */
     static final String EXTERNAL_INFOBASE_CHANGES_DESCRIPTION =
-        "How to answer EDT's blocking 'Infobase configuration changes' modal when the infobase was " //$NON-NLS-1$
-            + "changed outside EDT (Designer, ibcmd, a CLI pipeline) since the last EDT interaction: " //$NON-NLS-1$
-            + "'override' (default) keeps the project configuration and overwrites the infobase, " //$NON-NLS-1$
-            + "'import' pulls the external changes into the PROJECT sources, 'cancel' aborts the update " //$NON-NLS-1$
-            + "with an error. Omitted, the modal is still answered (with 'override'), so an " //$NON-NLS-1$
-            + "unattended call never blocks on it."; //$NON-NLS-1$
+        ExternalInfobaseChangesPolicy.PARAMETER_DESCRIPTION;
 
     /**
      * Shared schema doc for the {@code updateScope} parameter (also forwarded by

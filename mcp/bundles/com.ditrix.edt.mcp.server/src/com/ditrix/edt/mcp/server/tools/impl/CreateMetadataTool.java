@@ -225,45 +225,36 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 + "'Subsystem.<Parent>.Subsystem.<Child>', repeatable to any depth - the parent " //$NON-NLS-1$
                 + "chain must already exist. The trailing Name is the new node's " //$NON-NLS-1$
                 + "programmatic Name; type / kind tokens may be English or Russian.", true) //$NON-NLS-1$
-            .integerProperty("insertPosition", "Optional 1-based position in the destination metadata collection. "
-                + "1 is first; omit to append. Refuses values outside 1..size+1 before creation. "
-                + "Not applicable to form/XDTO content, predefined data or standalone external roots.")
+            .integerProperty("insertPosition",
+                "1-based position in the destination collection (1 = first); omit to append; values " //$NON-NLS-1$
+                + "outside 1..size+1 are refused. Not for form / XDTO content, predefined data or " //$NON-NLS-1$
+                + "standalone external roots.") //$NON-NLS-1$
             .objectArrayProperty("properties", //$NON-NLS-1$
-                "Optional properties to apply at creation, as [{name, value, language?}]. For most " //$NON-NLS-1$
-                + "kinds this applies 'synonym' (with optional 'language' code) and 'comment'; other " //$NON-NLS-1$
-                + "property names are rejected (set them via modify_metadata). A Subsystem (top-level or " //$NON-NLS-1$
-                + "nested) also takes what modify_metadata sets on it, e.g. includeInCommandInterface. Templates also accept " //$NON-NLS-1$
-                + "'templateType': TextDocument, SpreadsheetDocument or DataCompositionSchema (English or Russian). A FORM CONTENT member " //$NON-NLS-1$
-                + "('...Form.<F>.<Kind>.<Name>') takes a DIFFERENT vocabulary: 'title' (with optional " //$NON-NLS-1$
-                + "'language'), 'parent' (the group to nest a visual item under), 'dataPath' / " //$NON-NLS-1$
-                + "'attribute' (the bound attribute of a Field / Table), 'command' (a Button's " //$NON-NLS-1$
-                + "command) and 'type' (a Group's kind). XDTO PACKAGE MEMBERS " //$NON-NLS-1$
-                + "('XDTOPackage.<Package>.ObjectType.<Name>' / '...Property.<Name>' / " //$NON-NLS-1$
-                + "'...ObjectType.<Type>.Property.<Name>') use a DIFFERENT vocabulary instead: an " //$NON-NLS-1$
-                + "ObjectType takes the optional boolean flags 'open' / 'abstract' / 'mixed' / " //$NON-NLS-1$
-                + "'ordered' / 'sequenced'; a Property REQUIRES 'type' (a built-in XSD type name like " //$NON-NLS-1$
-                + "'string', the EXACT name of an ObjectType already in the same package for a " //$NON-NLS-1$
-                + "same-package reference, or an object {nsUri, name}) plus the optional 'lowerBound' / " //$NON-NLS-1$
-                + "'upperBound' (integers, ObjectType-nested properties only), 'nillable' / 'fixed' " //$NON-NLS-1$
-                + "(booleans, 'fixed'=true needs a 'default') and 'default' (string). A PREDEFINED " //$NON-NLS-1$
-            + "item ('...Predefined.<Item>') uses yet another vocabulary: 'description' / 'code' " //$NON-NLS-1$
-                + "on every owner, 'isFolder' / 'parent' on a Catalog / ChartOfCharacteristicTypes (a " //$NON-NLS-1$
-                + "ChartOfAccounts nests through 'parent' too; a ChartOfCalculationTypes takes neither), " //$NON-NLS-1$
-                + "plus owner-specific properties - 'valueType' (alias " //$NON-NLS-1$
-                + "'type'; same {types:[...]} shape as an mdclass attribute's 'type') on a " //$NON-NLS-1$
-                + "ChartOfCharacteristicTypes item; 'accountType' / 'offBalance' / 'order' / " //$NON-NLS-1$
-                + "'accountingFlags' / 'extDimensionTypes' on a ChartOfAccounts item; 'base' / " //$NON-NLS-1$
-                + "'displaced' / 'leading' / 'actionPeriodIsBase' on a ChartOfCalculationTypes item " //$NON-NLS-1$
-                + "(see the guide for which apply to each owner).") //$NON-NLS-1$
+                "Properties to apply at creation, as [{name, value, language?}]. Most kinds: only " //$NON-NLS-1$
+                + "'synonym' (with a 'language' code) and 'comment'; other names are rejected (use " //$NON-NLS-1$
+                + "modify_metadata). A Subsystem also takes what modify_metadata sets on it, e.g. " //$NON-NLS-1$
+                + "includeInCommandInterface. A Template: 'templateType' = TextDocument / " //$NON-NLS-1$
+                + "SpreadsheetDocument / DataCompositionSchema (English or Russian). A form content member " //$NON-NLS-1$
+                + "('...Form.<F>.<Kind>.<Name>'): 'title' (+ 'language'), 'parent' (the group to nest " //$NON-NLS-1$
+                + "under), 'dataPath' / 'attribute' (a Field's / Table's bound attribute), 'command' (a " //$NON-NLS-1$
+                + "Button's), 'type' (a Group's kind). An XDTO ObjectType: boolean 'open' / 'abstract' / " //$NON-NLS-1$
+                + "'mixed' / 'ordered' / 'sequenced'. An XDTO Property REQUIRES 'type' (an XSD type like " //$NON-NLS-1$
+                + "'string', the exact name of an ObjectType in the same package, or {nsUri, name}), " //$NON-NLS-1$
+                + "optional 'lowerBound' / 'upperBound' (integers, ObjectType-nested properties only), " //$NON-NLS-1$
+                + "'nillable', 'fixed' (true needs 'default'), 'default' (string). A predefined item " //$NON-NLS-1$
+                + "('...Predefined.<Item>'): 'description' / 'code'; 'isFolder' / 'parent' on a Catalog or " //$NON-NLS-1$
+                + "ChartOfCharacteristicTypes ('parent' also on a ChartOfAccounts); 'valueType' (alias " //$NON-NLS-1$
+                + "'type', {types:[...]} like an attribute's 'type') on a ChartOfCharacteristicTypes; " //$NON-NLS-1$
+                + "'accountType' / 'offBalance' / 'order' / 'accountingFlags' / 'extDimensionTypes' on a " //$NON-NLS-1$
+                + "ChartOfAccounts; 'base' / 'displaced' / 'leading' / 'actionPeriodIsBase' on a " //$NON-NLS-1$
+                + "ChartOfCalculationTypes.") //$NON-NLS-1$
             .booleanProperty(KEY_EXPECTED_NOT_EXISTS,
                 "Optional stale-intent guard (default false): assert the node does not yet exist for " //$NON-NLS-1$
                 + "a sharper precondition error. A real duplicate is always rejected anyway.") //$NON-NLS-1$
             .booleanProperty("normalizeYo", //$NON-NLS-1$
-                "Normalize the Russian letter 'ё'->'е' / 'Ё'->'Е' in the new node's NAME (the trailing " //$NON-NLS-1$
-                + "FQN segment) and in any synonym / comment / predefined-item description value " //$NON-NLS-1$
-                + "(default true). 'ё' in a Name is " //$NON-NLS-1$
-                + "flagged by the 1C standard mdo-ru-name-unallowed-letter, so normalizing on input " //$NON-NLS-1$
-                + "stores a compliant name. Set false to keep 'ё' exactly as supplied.") //$NON-NLS-1$
+                "Default true: stores 'ё' / 'Ё' as 'е' / 'Е' in the new Name (last FQN segment) and in " //$NON-NLS-1$
+                + "any synonym, comment or predefined-item description, so 'Всё' becomes 'Все'; false keeps " //$NON-NLS-1$
+                + "'ё'.") //$NON-NLS-1$
             .booleanProperty(KEY_SET_AS_DEFAULT,
                 "Default false. Form OBJECT create (FQN 'Type.Object.Form.FormName'): registers the new " //$NON-NLS-1$
                 + "form as the owner's default for formType. Report / ExternalReport template create " //$NON-NLS-1$
@@ -296,26 +287,22 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 + "base configuration or a non-handler FQN.", //$NON-NLS-1$
                 "Before", "After", "Instead") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             .enumProperty(KEY_COMMON_MODULE_KIND,
-                "CommonModule top-object only. Selects a standards-compliant flag combination the " //$NON-NLS-1$
-                + "common-module-type validator accepts (no warning), instead of a bare module: " //$NON-NLS-1$
-                + COMMON_MODULE_KINDS + ". Defaults to 'Server'. Ignored for other types. Combine " //$NON-NLS-1$
-                + "with 'serverCall' / 'privileged' / 'returnValuesReuse'. These are create-time-only " //$NON-NLS-1$
-                + "(the flag set cannot be re-derived post-hoc).", //$NON-NLS-1$
+                "CommonModule only, create-time only: the module's flag set, one the common-module-type " //$NON-NLS-1$
+                + "check accepts; default 'Server'. Combine with serverCall / privileged / " //$NON-NLS-1$
+                + "returnValuesReuse.", //$NON-NLS-1$
                 CommonModuleKind.SERVER.token(), CommonModuleKind.SERVER_CALL.token(),
                 CommonModuleKind.CLIENT_MANAGED.token(), CommonModuleKind.CLIENT_ORDINARY.token(),
                 CommonModuleKind.CLIENT_SERVER.token(), CommonModuleKind.GLOBAL.token())
             .booleanProperty("serverCall", //$NON-NLS-1$
-                "CommonModule top-object only. When true, the server module is callable from the " //$NON-NLS-1$
-                + "client (server call). Valid only with a server kind and incompatible with " //$NON-NLS-1$
-                + "'Global'. Ignored for other types.") //$NON-NLS-1$
+                "CommonModule only: true makes a server module callable from the client. Only with the " //$NON-NLS-1$
+                + "'Server', 'ServerCall' or 'ClientServer' kind; not with privileged.") //$NON-NLS-1$
             .booleanProperty("privileged", //$NON-NLS-1$
-                "CommonModule top-object only. When true, the module runs with full (privileged) " //$NON-NLS-1$
-                + "access. Valid only with the 'Server' kind (not a server call). Ignored for other " //$NON-NLS-1$
-                + "types.") //$NON-NLS-1$
+                "CommonModule only: true runs the module with full rights. 'Server' kind only, not with " //$NON-NLS-1$
+                + "serverCall or returnValuesReuse.") //$NON-NLS-1$
             .enumProperty("returnValuesReuse", //$NON-NLS-1$
-                "CommonModule top-object only. Reuse of return values: 'DontUse' (default), " //$NON-NLS-1$
-                + "'DuringRequest' or 'DuringSession'. 'DuringSession' yields a cached module accepted " //$NON-NLS-1$
-                + "by the common-module-type validator. Ignored for other types.", //$NON-NLS-1$
+                "CommonModule only: default 'DontUse'; 'DuringSession' (a cached module) only with the " //$NON-NLS-1$
+                + "'Server', 'ServerCall', 'ClientManaged' or 'ClientOrdinary' kind; 'DuringRequest' is " //$NON-NLS-1$
+                + "refused.", //$NON-NLS-1$
                 "DontUse", "DuringRequest", "DuringSession") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             .stringProperty(KEY_TARGET_NAMESPACE,
                 "XDTOPackage top-object only. URI namespace for the new package; a non-empty " //$NON-NLS-1$

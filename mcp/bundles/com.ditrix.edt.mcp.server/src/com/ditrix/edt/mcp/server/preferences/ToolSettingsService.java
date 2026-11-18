@@ -915,6 +915,58 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
         return changed;
     }
 
+    /**
+     * The stored progressive-disclosure preference, without the environment override.
+     *
+     * @return {@code true} if the saved setting turns disclosure on
+     */
+    public boolean getStoredProgressiveDisclosure()
+    {
+        IPreferenceStore store = getStore();
+        return store == null ? PreferenceConstants.DEFAULT_PROGRESSIVE_DISCLOSURE
+            : store.getBoolean(PreferenceConstants.PREF_PROGRESSIVE_DISCLOSURE);
+    }
+
+    /**
+     * Saves the progressive-disclosure preference.
+     *
+     * @param enabled {@code true} to list only the core toolset until a client reveals more
+     */
+    public void setProgressiveDisclosure(boolean enabled)
+    {
+        IPreferenceStore store = getStore();
+        if (store != null)
+        {
+            applyProgressiveDisclosure(store, enabled);
+        }
+    }
+
+    /**
+     * Writes the preference and pushes {@code notifications/tools/list_changed} when it changed:
+     * disclosure decides which tools {@code tools/list} shows, like the disabled set.
+     *
+     * @param store the preference store to write (never {@code null})
+     * @param enabled the new value
+     * @return {@code true} when the stored value changed and clients were notified
+     */
+    boolean applyProgressiveDisclosure(IPreferenceStore store, boolean enabled)
+    {
+        boolean changed;
+        synchronized (this)
+        {
+            changed = store.getBoolean(PreferenceConstants.PREF_PROGRESSIVE_DISCLOSURE) != enabled;
+            if (changed)
+            {
+                store.setValue(PreferenceConstants.PREF_PROGRESSIVE_DISCLOSURE, enabled);
+            }
+        }
+        if (changed)
+        {
+            notifyToolsListChangedBounded(NOTIFY_WAIT_MS);
+        }
+        return changed;
+    }
+
     /** How long a caller (possibly the UI thread) waits for the tools/list_changed broadcast. */
     static final long NOTIFY_WAIT_MS = 1000;
 

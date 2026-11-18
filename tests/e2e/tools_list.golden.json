@@ -1023,7 +1023,7 @@
           "type": "string"
         },
         "commonModuleKind": {
-          "description": "CommonModule top-object only. Selects a standards-compliant flag combination the common-module-type validator accepts (no warning), instead of a bare module: 'Server', 'ServerCall', 'ClientManaged', 'ClientOrdinary', 'ClientServer', 'Global'. Defaults to 'Server'. Ignored for other types. Combine with 'serverCall' / 'privileged' / 'returnValuesReuse'. These are create-time-only (the flag set cannot be re-derived post-hoc).",
+          "description": "CommonModule only, create-time only: the module's flag set, one the common-module-type check accepts; default 'Server'. Combine with serverCall / privileged / returnValuesReuse.",
           "enum": [
             "Server",
             "ServerCall",
@@ -1054,11 +1054,11 @@
           "type": "boolean"
         },
         "insertPosition": {
-          "description": "Optional 1-based position in the destination metadata collection. 1 is first; omit to append. Refuses values outside 1..size+1 before creation. Not applicable to form/XDTO content, predefined data or standalone external roots.",
+          "description": "1-based position in the destination collection (1 = first); omit to append; values outside 1..size+1 are refused. Not for form / XDTO content, predefined data or standalone external roots.",
           "type": "integer"
         },
         "normalizeYo": {
-          "description": "Normalize the Russian letter 'ё'->'е' / 'Ё'->'Е' in the new node's NAME (the trailing FQN segment) and in any synonym / comment / predefined-item description value (default true). 'ё' in a Name is flagged by the 1C standard mdo-ru-name-unallowed-letter, so normalizing on input stores a compliant name. Set false to keep 'ё' exactly as supplied.",
+          "description": "Default true: stores 'ё' / 'Ё' as 'е' / 'Е' in the new Name (last FQN segment) and in any synonym, comment or predefined-item description, so 'Всё' becomes 'Все'; false keeps 'ё'.",
           "type": "boolean"
         },
         "objectFields": {
@@ -1068,21 +1068,21 @@
           "type": "array"
         },
         "privileged": {
-          "description": "CommonModule top-object only. When true, the module runs with full (privileged) access. Valid only with the 'Server' kind (not a server call). Ignored for other types.",
+          "description": "CommonModule only: true runs the module with full rights. 'Server' kind only, not with serverCall or returnValuesReuse.",
           "type": "boolean"
         },
         "projectName": {
           "type": "string"
         },
         "properties": {
-          "description": "Optional properties to apply at creation, as [{name, value, language?}]. For most kinds this applies 'synonym' (with optional 'language' code) and 'comment'; other property names are rejected (set them via modify_metadata). A Subsystem (top-level or nested) also takes what modify_metadata sets on it, e.g. includeInCommandInterface. Templates also accept 'templateType': TextDocument, SpreadsheetDocument or DataCompositionSchema (English or Russian). A FORM CONTENT member ('...Form.<F>.<Kind>.<Name>') takes a DIFFERENT vocabulary: 'title' (with optional 'language'), 'parent' (the group to nest a visual item under), 'dataPath' / 'attribute' (the bound attribute of a Field / Table), 'command' (a Button's command) and 'type' (a Group's kind). XDTO PACKAGE MEMBERS ('XDTOPackage.<Package>.ObjectType.<Name>' / '...Property.<Name>' / '...ObjectType.<Type>.Property.<Name>') use a DIFFERENT vocabulary instead: an ObjectType takes the optional boolean flags 'open' / 'abstract' / 'mixed' / 'ordered' / 'sequenced'; a Property REQUIRES 'type' (a built-in XSD type name like 'string', the EXACT name of an ObjectType already in the same package for a same-package reference, or an object {nsUri, name}) plus the optional 'lowerBound' / 'upperBound' (integers, ObjectType-nested properties only), 'nillable' / 'fixed' (booleans, 'fixed'=true needs a 'default') and 'default' (string). A PREDEFINED item ('...Predefined.<Item>') uses yet another vocabulary: 'description' / 'code' on every owner, 'isFolder' / 'parent' on a Catalog / ChartOfCharacteristicTypes (a ChartOfAccounts nests through 'parent' too; a ChartOfCalculationTypes takes neither), plus owner-specific properties - 'valueType' (alias 'type'; same {types:[...]} shape as an mdclass attribute's 'type') on a ChartOfCharacteristicTypes item; 'accountType' / 'offBalance' / 'order' / 'accountingFlags' / 'extDimensionTypes' on a ChartOfAccounts item; 'base' / 'displaced' / 'leading' / 'actionPeriodIsBase' on a ChartOfCalculationTypes item (see the guide for which apply to each owner).",
+          "description": "Properties to apply at creation, as [{name, value, language?}]. Most kinds: only 'synonym' (with a 'language' code) and 'comment'; other names are rejected (use modify_metadata). A Subsystem also takes what modify_metadata sets on it, e.g. includeInCommandInterface. A Template: 'templateType' = TextDocument / SpreadsheetDocument / DataCompositionSchema (English or Russian). A form content member ('...Form.<F>.<Kind>.<Name>'): 'title' (+ 'language'), 'parent' (the group to nest under), 'dataPath' / 'attribute' (a Field's / Table's bound attribute), 'command' (a Button's), 'type' (a Group's kind). An XDTO ObjectType: boolean 'open' / 'abstract' / 'mixed' / 'ordered' / 'sequenced'. An XDTO Property REQUIRES 'type' (an XSD type like 'string', the exact name of an ObjectType in the same package, or {nsUri, name}), optional 'lowerBound' / 'upperBound' (integers, ObjectType-nested properties only), 'nillable', 'fixed' (true needs 'default'), 'default' (string). A predefined item ('...Predefined.<Item>'): 'description' / 'code'; 'isFolder' / 'parent' on a Catalog or ChartOfCharacteristicTypes ('parent' also on a ChartOfAccounts); 'valueType' (alias 'type', {types:[...]} like an attribute's 'type') on a ChartOfCharacteristicTypes; 'accountType' / 'offBalance' / 'order' / 'accountingFlags' / 'extDimensionTypes' on a ChartOfAccounts; 'base' / 'displaced' / 'leading' / 'actionPeriodIsBase' on a ChartOfCalculationTypes.",
           "items": {
             "type": "object"
           },
           "type": "array"
         },
         "returnValuesReuse": {
-          "description": "CommonModule top-object only. Reuse of return values: 'DontUse' (default), 'DuringRequest' or 'DuringSession'. 'DuringSession' yields a cached module accepted by the common-module-type validator. Ignored for other types.",
+          "description": "CommonModule only: default 'DontUse'; 'DuringSession' (a cached module) only with the 'Server', 'ServerCall', 'ClientManaged' or 'ClientOrdinary' kind; 'DuringRequest' is refused.",
           "enum": [
             "DontUse",
             "DuringRequest",
@@ -1091,7 +1091,7 @@
           "type": "string"
         },
         "serverCall": {
-          "description": "CommonModule top-object only. When true, the server module is callable from the client (server call). Valid only with a server kind and incompatible with 'Global'. Ignored for other types.",
+          "description": "CommonModule only: true makes a server module callable from the client. Only with the 'Server', 'ServerCall' or 'ClientServer' kind; not with privileged.",
           "type": "boolean"
         },
         "setAsDefault": {
@@ -1224,7 +1224,7 @@
     "inputSchema": {
       "properties": {
         "baseProjectName": {
-          "description": "Name of the BASE configuration EDT project (required for extension; optional for externalObjects; REJECTED for configuration). Must be an existing, open V8 configuration project. Use list_projects to find it.",
+          "description": "The open BASE configuration project (see list_projects): required for extension, optional for externalObjects, REJECTED for configuration.",
           "type": "string"
         },
         "comment": {
@@ -1237,14 +1237,14 @@
           "type": "string"
         },
         "externalObject": {
-          "description": "Optional root to seed for projectKind=externalObjects: 'ExternalDataProcessor.<Name>' or 'ExternalReport.<Name>'; the TYPE token may be English or Russian and is not normalized; Name is a programmatic identifier whose 'ё'/'Ё' is normalized by default according to normalizeYo. Omit for an empty project; REJECTED for other project kinds.",
+          "description": "externalObjects only (REJECTED otherwise): the root to seed, 'ExternalDataProcessor.<Name>' or 'ExternalReport.<Name>' (type token English or Russian); omit for an empty project.",
           "type": "string"
         },
         "name": {
           "type": "string"
         },
         "normalizeYo": {
-          "description": "Normalize the Russian letter 'ё'->'е' / 'Ё'->'Е' in the seeded externalObject root NAME (default true). 'ё' in a Name is flagged by the 1C standard mdo-ru-name-unallowed-letter, so normalizing on input stores a compliant name. Set false to keep 'ё' exactly as supplied. The TYPE token is never normalized.",
+          "description": "Default true: stores 'ё' / 'Ё' as 'е' / 'Е' in the seeded externalObject root Name (never in the type token); false keeps 'ё'.",
           "type": "boolean"
         },
         "prefix": {
@@ -1270,7 +1270,7 @@
           "type": "string"
         },
         "scriptVariant": {
-          "description": "Script variant (Russian or English). configuration: sets the Configuration scriptVariant and default Language code (default Russian). externalObjects: applied post-create via setScriptVariant (non-fatal on failure). extension: REJECTED — scriptVariant is always inherited from the base configuration.",
+          "description": "configuration: the script variant and default language (default Russian); externalObjects: applied after creation (a failure there does not fail the create); extension: REJECTED (inherited from the base).",
           "enum": [
             "Russian",
             "English"
@@ -1284,7 +1284,7 @@
           "type": "string"
         },
         "version": {
-          "description": "Platform version string, e.g. '8.3.27' (configuration and externalObjects only; for extension: REJECTED — version is always inherited from the base configuration). Default: base runtime when bound, otherwise Version.LATEST; must match the base.",
+          "description": "Platform version, e.g. '8.3.27'; default: the base runtime when bound, else the latest; must match the base. REJECTED for an extension (inherited from the base).",
           "type": "string"
         }
       },
@@ -1604,7 +1604,7 @@
           "type": "array"
         },
         "externalInfobaseChanges": {
-          "description": "How to answer EDT's blocking 'Infobase configuration changes' modal when the infobase was changed outside EDT (Designer, ibcmd, a CLI pipeline) since the last EDT interaction: 'override' (default) keeps the project configuration and overwrites the infobase, 'import' pulls the external changes into the PROJECT sources, 'cancel' aborts the update with an error. Omitted, the modal is still answered (with 'override'), so an unattended call never blocks on it.",
+          "description": "Answer to EDT's 'Infobase configuration changes' modal when the infobase was changed outside EDT (Designer, ibcmd): 'override' (default, also when omitted, so the call never blocks) overwrites the infobase with the project and DISCARDS the external changes; 'import' pulls them into the PROJECT sources; 'cancel' aborts with an error.",
           "type": "string"
         },
         "launchConfigurationName": {
@@ -4302,7 +4302,7 @@
           "type": "integer"
         },
         "externalInfobaseChanges": {
-          "description": "How to answer EDT's blocking 'Infobase configuration changes' modal when the infobase was changed outside EDT (Designer, ibcmd, a CLI pipeline) since the last EDT interaction: 'override' (default) keeps the project configuration and overwrites the infobase, 'import' pulls the external changes into the PROJECT sources, 'cancel' aborts the update with an error. Omitted, the modal is still answered (with 'override'), so an unattended call never blocks on it.",
+          "description": "Answer to EDT's 'Infobase configuration changes' modal when the infobase was changed outside EDT (Designer, ibcmd): 'override' (default, also when omitted, so the call never blocks) overwrites the infobase with the project and DISCARDS the external changes; 'import' pulls them into the PROJECT sources; 'cancel' aborts with an error.",
           "type": "string"
         },
         "externalObjectName": {
@@ -4326,7 +4326,7 @@
           "type": "string"
         },
         "restartIfRunning": {
-          "description": "Default false: if a matching session is already running, short-circuit with alreadyRunning:true and do NOT relaunch (call terminate_launch to restart). true: non-interactively terminate the existing session, then relaunch — no 'Debug session already exists' modal blocks the call.",
+          "description": "Default false: a running matching session is not relaunched (alreadyRunning:true). true TERMINATES it without a prompt, then relaunches.",
           "type": "boolean"
         },
         "screen": {
@@ -4341,7 +4341,7 @@
           "type": "string"
         },
         "updateBeforeLaunch": {
-          "description": "Default true: silently apply the configuration->DB update before launching so no 'Update database?' modal blocks the call (even on a Russian-locale EDT the dialog is auto-confirmed); false skips the update and the platform may then show that modal; call edt_dialog to inspect and explicitly answer it. Ignored for Attach. A standalone-server configuration performs no database update on this route even when omitted, and an explicit true is refused - run update_database separately.",
+          "description": "Default true: runs the configuration->DB update before launching and auto-confirms its modal; false skips it, and the platform may then show that modal (answer it with edt_dialog). Ignored for Attach. A standalone server never updates on this route and refuses true: run update_database.",
           "type": "boolean"
         },
         "windowMode": {
@@ -4901,14 +4901,14 @@
     "inputSchema": {
       "properties": {
         "commands": {
-          "description": "COMMAND INTERFACE FQN only ('Subsystem.<Name>.CommandInterface' or 'Configuration.MainSectionCommandInterface'): section commands to change, as [{command, visible?, roles?, group?, after? | before?}], applied in order and validated as one batch. 'command' is the command FQN, e.g. 'Report.Sales.StandardCommand.Open' or 'CommonCommand.Print'; 'visible' the common visibility; 'roles' [{role: 'Role.<Name>', visible: true | false | 'default' (drops the override)}]; 'group' the panel group to move it to, e.g. 'NavigationPanelImportant', 'ActionsPanelReports' or 'CommandGroup.<Name>'; 'after' / 'before' another command of that group to order it by. get_metadata_details on the same FQN lists the section's commands and groups. Cannot be combined with other payloads.",
+          "description": "Only for 'Subsystem.<Name>.CommandInterface' or 'Configuration.MainSectionCommandInterface': [{command, visible?, roles?, group?, after? | before?}], applied in order as one batch. command = command FQN, e.g. 'CommonCommand.Print'; roles = [{role: 'Role.<Name>', visible: true | false | 'default'}]; group = panel group, e.g. 'NavigationPanelImportant' or 'CommandGroup.<Name>'; after / before = a command of that group. get_metadata_details on the same FQN lists them. Not with other payloads.",
           "items": {
             "type": "object"
           },
           "type": "array"
         },
         "content": {
-          "description": "Members to attach / detach in a structured membership list, dispatched by the FQN's kind (a COMMON ATTRIBUTE's owners, an EXCHANGE PLAN's content objects, a CATALOG's owners, a DOCUMENT's register records, a SUBSYSTEM's content objects), as [{op?, metadata, use?, autoRecord?}]. 'op' is 'add' (default) / 'remove'; 'metadata' is the member object FQN (e.g. 'Catalog.Products' or the Russian 'Справочник.Товары' - only the type token is bilingual). 'use' (CommonAttribute only, add only, default 'Use') is 'Use' / 'DontUse' / 'Auto'; 'autoRecord' (ExchangePlan only, add only) is 'Allow' / 'Deny' (omit to keep the platform default). A Catalog owner, a Document register record and a Subsystem content object are plain references (no flag). Adding is idempotent (a re-added CommonAttribute owner has its 'use' updated, a re-added ExchangePlan object its 'autoRecord'; a re-added plain reference is a no-op). Valid only for a CommonAttribute / ExchangePlan / Catalog / Document / Subsystem FQN (a Subsystem FQN may be nested); cannot be combined with 'properties'.",
+          "description": "Membership list to change, as [{op?, metadata, use?, autoRecord?}]: the owners of a CommonAttribute or Catalog, the content of an ExchangePlan or a (nested) Subsystem, the register records of a Document. op = 'add' (default) / 'remove'; metadata = member FQN, e.g. 'Catalog.Products'; use = 'Use' (default) / 'DontUse' / 'Auto', CommonAttribute only; autoRecord = 'Allow' / 'Deny', ExchangePlan only. Re-adding a listed CommonAttribute owner SETS its use (omitted -> 'Use'), a listed ExchangePlan member its given autoRecord; re-adding a plain reference is a no-op. Not with 'properties'.",
           "items": {
             "type": "object"
           },
@@ -4918,36 +4918,36 @@
           "type": "string"
         },
         "normalizeYo": {
-          "description": "Normalize the Russian letter 'ё'->'е' / 'Ё'->'Е' in localized-string values (synonym / title) and in the 'comment' property (default true). Matches the 1C standard mdo-ru-name-unallowed-letter. Other free-text strings can be identifier-like (e.g. XDTOPackage.namespace is a URI) and always keep the supplied value. Set false to keep 'ё' exactly as supplied everywhere.",
+          "description": "Default true: stores 'ё' / 'Ё' as 'е' / 'Е' in synonyms, titles and 'comment' (other strings stay as supplied); false keeps 'ё'.",
           "type": "boolean"
         },
         "projectName": {
           "type": "string"
         },
         "properties": {
-          "description": "Properties to set, as [{name, value, language?}]. 'name' is the property name (e.g. 'comment', 'synonym', 'indexing'); 'value' is the new value; 'language' is the code for a synonym (default: config default). Required unless the FQN is a Role and a role payload (rights / templates / roleProperties) is given.",
+          "description": "Properties to set, as [{name, value, language?}], e.g. {name: 'synonym', value: 'Products', language: 'en'}; 'language' defaults to the configuration's default language. Required unless a Role payload (rights / templates / roleProperties) is given.",
           "items": {
             "type": "object"
           },
           "type": "array"
         },
         "rights": {
-          "description": "ROLE only: per-object access rights to set, as [{object, right, value?, rls?, rlsFields?}]. 'object' is a metadata FQN (e.g. 'Catalog.Products' or the Russian 'Справочник.Товары'); 'right' is a bilingual right name (e.g. 'Read'/'Чтение', 'Update'/'Изменение'); 'value' is 'set' (allowed, default) / 'unset' (denied) / 'provided' (default/inherited), or a boolean (true=set, false=unset). 'rls' is an optional Row-Level-Security restriction condition (1C query text); 'rlsFields' is an optional array of field names the RLS applies to (omit / empty = whole-object restriction).",
+          "description": "ROLE only: [{object, right, value?, rls?, rlsFields?}]. object = metadata FQN; right = right name, English or Russian ('Read' / 'Чтение'); value = 'set' (default) / 'unset' / 'provided' (inherited) or a boolean; rls = restriction condition (1C query text); rlsFields = an array of field-name strings it applies to (omit or [] for the whole object).",
           "items": {
             "type": "object"
           },
           "type": "array"
         },
         "roleProperties": {
-          "description": "ROLE only: the three role properties, as optional booleans {setForNewObjects, setForAttributesByDefault, independentRightsOfChildObjects}. Only supplied flags are changed.",
+          "description": "ROLE only: {setForNewObjects?, setForAttributesByDefault?, independentRightsOfChildObjects?} booleans; omitted flags are unchanged.",
           "type": "object"
         },
         "template": {
-          "description": "TEMPLATE FQN only: TextDocument takes {text, mode?, oldText?, expectedHash?, expectedSource?, overwrite?}. Default searchReplace requires one literal oldText match; append adds exact text; only replace creates a missing file. Replacing an existing file requires expectedHash or expectedSource from get_metadata_details, or overwrite=true. SpreadsheetDocument takes the content to author, instead of 'properties'. An object with any of: 'cells' [{row, col (both 0-based, required), replace?, text? OR parameter? (a print-time parameter name), bold?, fontSize?, hAlign? ('Left'/'Center'/'Right'/'Auto'/'Width'), vAlign? ('Top'/'Center'/'Bottom'), wrap? (true word-wraps the cell text), textOrientation? (rotation in the platform's own unit - TENTHS of a degree, 0..3600, so 90 degrees is 900), autoIndent? (0..100), autoMarkIncomplete?}]; 'merges' [{fromRow, fromCol, toRow, toCol}] merged cell ranges; 'areas' [{name, fromRow, fromCol, toRow, toCol}] named areas (for ПолучитьОбласть / Вывести output); 'columnWidths' [{col, width?, autoWidthCalculation?, widthWeightFactor? - the share of the free width, only alongside autoWidthCalculation:true}] and 'rowHeights' [{row, height}] column / row sizes. Cells MERGE: omitted properties keep their values; replace:true resets omitted cell content and formatting. Non-empty text/parameter clears the other; an empty string clears the named content. bold:false disables bold; wrap:false unsets placement (inherit). Null counts as omitted; 0/false on numeric/boolean format keys overrides inheritance. Other cells, merges and areas are kept. Valid only for the matching template type; cannot be combined with 'properties' / 'content' / a Role payload.",
+          "description": "TEMPLATE FQN only, instead of 'properties'. TextDocument: {text, mode?, oldText?, expectedHash?, expectedSource?, overwrite?}; mode = 'searchReplace' (default, needs exactly one literal oldText match) / 'append' / 'replace' (the only mode that creates a missing file); replacing an existing file needs expectedHash or expectedSource from get_metadata_details, or overwrite=true. SpreadsheetDocument: {cells?, merges?, areas?, columnWidths?, rowHeights?}. cells [{row, col (both 0-based, required), replace?, text? | parameter?, bold?, fontSize?, hAlign? (Left/Center/Right/Auto/Width), vAlign? (Top/Center/Bottom), wrap?, textOrientation? (TENTHS of a degree: 90 degrees = 900), autoIndent? (0..100), autoMarkIncomplete?}]; merges [{fromRow, fromCol, toRow, toCol}]; areas [{name, fromRow, fromCol, toRow, toCol}]; columnWidths [{col, width?, autoWidthCalculation?, widthWeightFactor? (only with autoWidthCalculation:true)}]; rowHeights [{row, height}]. Omitted or null cell keys keep their values; replace:true resets them. Non-empty text clears parameter and vice versa; '' clears the named one. false / 0 on a format key overrides inheritance, but wrap:false restores inherited placement. Other cells, merges and areas are kept.",
           "type": "object"
         },
         "templates": {
-          "description": "ROLE only: RLS restriction templates to change, as [{op?, name, condition?}]. 'op' is 'add' (default) / 'edit' / 'delete'; 'name' is the template name; 'condition' is the RLS restriction text (required for add/edit).",
+          "description": "ROLE only: RLS templates as [{op?, name, condition?}]; op = 'add' (default) / 'edit' / 'delete'; condition is required for add and edit.",
           "items": {
             "type": "object"
           },
@@ -5647,7 +5647,7 @@
           "type": "array"
         },
         "externalInfobaseChanges": {
-          "description": "How to answer EDT's blocking 'Infobase configuration changes' modal when the infobase was changed outside EDT (Designer, ibcmd, a CLI pipeline) since the last EDT interaction: 'override' (default) keeps the project configuration and overwrites the infobase, 'import' pulls the external changes into the PROJECT sources, 'cancel' aborts the update with an error. Omitted, the modal is still answered (with 'override'), so an unattended call never blocks on it.",
+          "description": "Answer to EDT's 'Infobase configuration changes' modal when the infobase was changed outside EDT (Designer, ibcmd): 'override' (default, also when omitted, so the call never blocks) overwrites the infobase with the project and DISCARDS the external changes; 'import' pulls them into the PROJECT sources; 'cancel' aborts with an error.",
           "type": "string"
         },
         "launchConfigurationName": {
@@ -6733,14 +6733,14 @@
           "type": "string"
         },
         "checkInfobaseSessions": {
-          "description": "Before applying, refuse when infobase_sessions finds a non-agent standalone-server session (default true). false skips this safety pre-flight.",
+          "description": "Default true: refuse while infobase_sessions finds a non-agent standalone-server session; false skips this check.",
           "type": "boolean"
         },
         "confirm": {
           "type": "boolean"
         },
         "externalInfobaseChanges": {
-          "description": "How to answer EDT's blocking 'Infobase configuration changes' modal when the infobase was changed outside EDT (Designer, ibcmd, a CLI pipeline) since the last EDT interaction: 'override' (default) keeps the project configuration and overwrites the infobase, 'import' pulls the external changes into the PROJECT sources, 'cancel' aborts the update with an error. Omitted, the modal is still answered (with 'override'), so an unattended call never blocks on it.",
+          "description": "Answer to EDT's 'Infobase configuration changes' modal when the infobase was changed outside EDT (Designer, ibcmd): 'override' (default, also when omitted, so the call never blocks) overwrites the infobase with the project and DISCARDS the external changes; 'import' pulls them into the PROJECT sources; 'cancel' aborts with an error.",
           "type": "string"
         },
         "fullUpdate": {
@@ -6761,7 +6761,7 @@
           "type": "string"
         },
         "terminateRunningClients": {
-          "description": "Before applying, terminate any 1C client THIS EDT launched on the target infobase to free the exclusive lock (default true). false keeps a running client — the update then fails if that client holds the infobase exclusively.",
+          "description": "Default true: first terminates 1C clients THIS EDT launched on the infobase; false keeps them, and the update fails if one holds the infobase exclusively.",
           "type": "boolean"
         },
         "waitSeconds": {

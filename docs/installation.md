@@ -95,6 +95,8 @@ Go to **Window → Preferences → MCP Server**. The settings page has General, 
 
 Manage which tools are available to AI assistants. Tools are organized into groups that can be enabled or disabled together. See [Tool Management](tool-management.md#tool-management) for details.
 
+The **Progressive disclosure** checkbox below the tool tree (off by default) lists only the core toolset until the client reveals more. See [Progressive Tool Disclosure](tool-management.md#progressive-tool-disclosure-dynamic-toolsets) for which clients gain from it.
+
 ![MCP Server Tools tab](../img/SettingsTools.png)
 
 See [status-bar controls](status-bar.md) for execution status and user signals.

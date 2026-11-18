@@ -887,6 +887,38 @@ public class ToolSettingsServiceTest
             "", applyAndCapture(store, Set.of("ask_workmate", "git"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
     }
 
+    /** Disclosure decides what tools/list shows, so turning it on or off must tell the clients. */
+    @Test
+    public void testTogglingProgressiveDisclosureNotifiesClientsOnlyOnAChange()
+    {
+        PreferenceStore store = new PreferenceStore();
+        store.setDefault(PreferenceConstants.PREF_PROGRESSIVE_DISCLOSURE,
+            PreferenceConstants.DEFAULT_PROGRESSIVE_DISCLOSURE);
+
+        assertTrue(disclosureAndCapture(store, true).contains("notifications/tools/list_changed")); //$NON-NLS-1$
+        assertTrue(store.getBoolean(PreferenceConstants.PREF_PROGRESSIVE_DISCLOSURE));
+        assertEquals("re-applying the same value must stay silent", "", disclosureAndCapture(store, true)); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(disclosureAndCapture(store, false).contains("notifications/tools/list_changed")); //$NON-NLS-1$
+        assertFalse(store.getBoolean(PreferenceConstants.PREF_PROGRESSIVE_DISCLOSURE));
+    }
+
+    private static String disclosureAndCapture(PreferenceStore store, boolean enabled)
+    {
+        ByteArrayOutputStream sink = new ByteArrayOutputStream();
+        SseStreamRegistry.SseStream stream = SseStreamRegistry.getInstance().register(sink);
+        try
+        {
+            boolean changed = ToolSettingsService.getInstance().applyProgressiveDisclosure(store, enabled);
+            String received = sink.toString(StandardCharsets.UTF_8);
+            assertEquals(changed, received.contains("notifications/tools/list_changed")); //$NON-NLS-1$
+            return received;
+        }
+        finally
+        {
+            SseStreamRegistry.getInstance().unregister(stream);
+        }
+    }
+
     @Test
     public void testAStalledClientDoesNotBlockTheApplyingThread() throws Exception
     {

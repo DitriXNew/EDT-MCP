@@ -10,10 +10,10 @@ Apply the current EDT configuration to an infobase. Before applying, call infoba
 | applicationId | — | string | Application ID from get_applications; required if launchConfigurationName is omitted. |
 | fullUpdate | — | boolean | true = full reload, false = incremental (default false). |
 | confirm | — | boolean | true = apply the update; default false = preview only (resolves the target and reports what would change WITHOUT mutating the infobase). |
-| externalInfobaseChanges | — | string | How to answer EDT's blocking 'Infobase configuration changes' modal when the infobase was changed outside EDT (Designer, ibcmd, a CLI pipeline) since the last EDT interaction: 'override' (default) keeps the project configuration and overwrites the infobase, 'import' pulls the external changes into the PROJECT sources, 'cancel' aborts the update with an error. Omitted, the modal is still answered (with 'override'), so an unattended call never blocks on it. |
+| externalInfobaseChanges | — | string | Answer to EDT's 'Infobase configuration changes' modal when the infobase was changed outside EDT (Designer, ibcmd): 'override' (default, also when omitted, so the call never blocks) overwrites the infobase with the project and DISCARDS the external changes; 'import' pulls them into the PROJECT sources; 'cancel' aborts with an error. |
 | standaloneServerPortConflict | — | string | Answer to EDT's standalone-server port-conflict prompt: cancel (default) = fail and name the busy ports; reassign = let EDT move the server to free ports (rewrites its configuration). |
-| terminateRunningClients | — | boolean | Before applying, terminate any 1C client THIS EDT launched on the target infobase to free the exclusive lock (default true). false keeps a running client — the update then fails if that client holds the infobase exclusively. |
-| checkInfobaseSessions | — | boolean | Before applying, refuse when infobase_sessions finds a non-agent standalone-server session (default true). false skips this safety pre-flight. |
+| terminateRunningClients | — | boolean | Default true: first terminates 1C clients THIS EDT launched on the infobase; false keeps them, and the update fails if one holds the infobase exclusively. |
+| checkInfobaseSessions | — | boolean | Default true: refuse while infobase_sessions finds a non-agent standalone-server session; false skips this check. |
 | ignoreBranchBinding | — | boolean | true skips the refusal of a target whose infobase is not bound to the project's current Git branch (default false). |
 | waitSeconds | — | integer | Seconds to wait before returning a jobId; defaults to 20, accepts 0 to 45. |
 

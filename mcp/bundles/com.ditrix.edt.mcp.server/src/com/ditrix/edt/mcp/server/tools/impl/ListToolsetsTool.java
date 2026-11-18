@@ -101,8 +101,8 @@ public class ListToolsetsTool implements IMcpTool
             result.put("note", pd //$NON-NLS-1$
                 ? "Progressive disclosure is ON: only the core toolset and toolsets you reveal appear in " //$NON-NLS-1$
                     + "tools/list. Call enable_toolset(toolsets=[...]) with the ids below, then re-request tools/list." //$NON-NLS-1$
-                : "Progressive disclosure is OFF: every tool is already listed. Turn it on in EDT Preferences " //$NON-NLS-1$
-                    + "→ MCP Server to shrink tools/list and reveal toolsets on demand with enable_toolset."); //$NON-NLS-1$
+                : "Progressive disclosure is OFF: every tool is already listed, nothing to reveal. It is the " //$NON-NLS-1$
+                    + "user's setting: Window → Preferences → MCP Server → Tools → Progressive disclosure."); //$NON-NLS-1$
 
             return result.toJson();
         }

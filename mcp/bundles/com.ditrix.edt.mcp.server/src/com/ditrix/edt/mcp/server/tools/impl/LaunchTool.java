@@ -175,19 +175,13 @@ public class LaunchTool implements IMcpTool
                 "enum", List.of("normal", "minimized", "otherScreen", "isolated"), "default", "normal"))
             .integerProperty(KEY_SCREEN, "1-based monitor index for otherScreen; default first non-primary.")
             .booleanProperty("updateBeforeLaunch", //$NON-NLS-1$
-                "Default true: silently apply the configuration->DB update before launching so no " //$NON-NLS-1$
-                    + "'Update database?' modal blocks the call (even on a Russian-locale EDT the dialog " //$NON-NLS-1$
-                    + "is auto-confirmed); false skips the update and the platform may then show that " //$NON-NLS-1$
-                    + "modal; call edt_dialog to inspect and explicitly answer it. Ignored for Attach. A standalone-server configuration performs no database " //$NON-NLS-1$
-                    + "update on this route even when omitted, and an explicit true is refused - run " //$NON-NLS-1$
-                    + "update_database separately.") //$NON-NLS-1$
+                "Default true: runs the configuration->DB update before launching and auto-confirms its " //$NON-NLS-1$
+                + "modal; false skips it, and the platform may then show that modal (answer it with " //$NON-NLS-1$
+                + "edt_dialog). Ignored " //$NON-NLS-1$
+                + "for Attach. A standalone server never updates on this route and refuses true: run " //$NON-NLS-1$
+                + "update_database.") //$NON-NLS-1$
             .stringProperty("externalInfobaseChanges", //$NON-NLS-1$
-                "How to answer EDT's blocking 'Infobase configuration changes' modal when the infobase " //$NON-NLS-1$
-                    + "was changed outside EDT (Designer, ibcmd, a CLI pipeline) since the last EDT " //$NON-NLS-1$
-                    + "interaction: 'override' (default) keeps the project configuration and overwrites " //$NON-NLS-1$
-                    + "the infobase, 'import' pulls the external changes into the PROJECT sources, " //$NON-NLS-1$
-                    + "'cancel' aborts the update with an error. Omitted, the modal is still " //$NON-NLS-1$
-                    + "answered (with 'override'), so an unattended call never blocks on it.") //$NON-NLS-1$
+                ExternalInfobaseChangesPolicy.PARAMETER_DESCRIPTION)
             .stringProperty("standaloneServerPortConflict", //$NON-NLS-1$
                 StandaloneServerPortConflictPolicy.PARAMETER_DESCRIPTION)
             .stringProperty(KEY_STARTUP_OPTION,
@@ -211,10 +205,8 @@ public class LaunchTool implements IMcpTool
             .integerProperty(KEY_AUTOMATED_TESTING_PORT,
                 "TESTCLIENT only: port 1..65535; omitted uses the saved port or EDT default 1538.") //$NON-NLS-1$
             .booleanProperty("restartIfRunning", //$NON-NLS-1$
-                "Default false: if a matching session is already running, short-circuit with " //$NON-NLS-1$
-                    + "alreadyRunning:true and do NOT relaunch (call terminate_launch to restart). " //$NON-NLS-1$
-                    + "true: non-interactively terminate the existing session, then relaunch — no " //$NON-NLS-1$
-                    + "'Debug session already exists' modal blocks the call.") //$NON-NLS-1$
+                "Default false: a running matching session is not relaunched (alreadyRunning:true). true " //$NON-NLS-1$
+                + "TERMINATES it without a prompt, then relaunches.") //$NON-NLS-1$
             .build();
     }
 
