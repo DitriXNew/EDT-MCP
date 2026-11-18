@@ -364,6 +364,38 @@ public final class BslSyntaxChecker
         return null;
     }
 
+    /**
+     * For every line, the 1-based line of the innermost {@code #If}/{@code #Если} block that is open at
+     * that line, or {@code 0} when none is. An {@code #Else}/{@code #ElsIf} keeps the block open; the
+     * {@code #EndIf} line itself already reads the enclosing block. Region directives are ignored. Reads the
+     * same directives, by the same rules, as {@link #directiveOverlap}.
+     *
+     * @param lines raw module lines
+     * @return a same-sized array of 1-based opening lines ({@code 0} = outside every conditional block)
+     */
+    public static int[] openConditionalLines(List<String> lines)
+    {
+        List<String> masked = maskLiteralsAndComments(lines);
+        int[] open = new int[masked.size()];
+        Deque<Integer> conditionals = new ArrayDeque<>();
+        for (int i = 0; i < masked.size(); i++)
+        {
+            String code = masked.get(i);
+            String kind = isPreprocessorDirective(code)
+                ? DIRECTIVE_KINDS.get(directiveWord(code).toLowerCase(Locale.ROOT)) : null;
+            if ("close:I".equals(kind) && !conditionals.isEmpty()) //$NON-NLS-1$
+            {
+                conditionals.pop();
+            }
+            open[i] = conditionals.isEmpty() ? 0 : conditionals.peek();
+            if ("open:I".equals(kind)) //$NON-NLS-1$
+            {
+                conditionals.push(i + 1);
+            }
+        }
+        return open;
+    }
+
     private static String directiveWord(String code)
     {
         int start = code.indexOf('#') + 1;
