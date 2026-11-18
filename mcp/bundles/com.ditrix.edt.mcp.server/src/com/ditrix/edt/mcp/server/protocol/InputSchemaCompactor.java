@@ -82,6 +82,19 @@ public final class InputSchemaCompactor
     private static final Map<String, Set<String>> KEEP = buildKeepList();
 
     /**
+     * Payload parameters whose member schemas are enforced by the server's argument check but not
+     * published: on the wire they stay {@code object} / array of {@code object}, and their kept prose
+     * states the members. Publishing the members would add about 4 KB to every tools/list for a
+     * shape the prose already gives; the check refuses a wrong shape either way.
+     */
+    static final Map<String, Set<String>> MEMBERS_CHECKED_ON_SERVER = Map.of(
+        "modify_metadata", asSet("properties", "rights", "templates", "roleProperties", "content", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+            "commands", "template"), //$NON-NLS-1$ //$NON-NLS-2$
+        "create_metadata", asSet("properties"), //$NON-NLS-1$ //$NON-NLS-2$
+        "merge_rules", asSet("decisions"), //$NON-NLS-1$ //$NON-NLS-2$
+        "business_process_route_map", asSet("points", "connections")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+    /**
      * Parameter names whose description survives in EVERY tool that declares them, because
      * the description carries the VALUE SHAPE and the schema has no way to express it.
      * <p>
@@ -402,7 +415,36 @@ public final class InputSchemaCompactor
         keep.addAll(KEEP_IN_EVERY_TOOL);
         JsonElement copy = inputSchema.deepCopy();
         stripSchema(copy, keep);
+        hideServerCheckedMembers(copy, MEMBERS_CHECKED_ON_SERVER.getOrDefault(toolName, Collections.emptySet()));
         return copy;
+    }
+
+    /** Reduces each named parameter to its opaque form: {@code object}, or array of {@code object}. */
+    private static void hideServerCheckedMembers(JsonElement schema, Set<String> names)
+    {
+        JsonElement properties = schema.isJsonObject() ? schema.getAsJsonObject().get(KEY_PROPERTIES) : null;
+        if (names.isEmpty() || properties == null || !properties.isJsonObject())
+        {
+            return;
+        }
+        for (String name : names)
+        {
+            JsonElement param = properties.getAsJsonObject().get(name);
+            if (param == null || !param.isJsonObject())
+            {
+                continue;
+            }
+            JsonObject target = param.getAsJsonObject();
+            JsonElement items = target.get(KEY_ITEMS);
+            if (items != null && items.isJsonObject())
+            {
+                target = items.getAsJsonObject();
+            }
+            for (String keyword : Arrays.asList(KEY_PROPERTIES, "required", "additionalProperties")) //$NON-NLS-1$ //$NON-NLS-2$
+            {
+                target.remove(keyword);
+            }
+        }
     }
 
     /**

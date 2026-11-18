@@ -160,9 +160,16 @@ public class PayloadMemberSchemaTest
                 JsonParser.parseString(tool.getInputSchema())).getAsJsonObject().getAsJsonObject("properties"); //$NON-NLS-1$
             for (String name : entry.getValue())
             {
+                JsonObject param = compacted.getAsJsonObject(name);
                 assertTrue(entry.getKey() + "." + name + " lost its prose", //$NON-NLS-1$ //$NON-NLS-2$
-                    compacted.getAsJsonObject(name).has("description")); //$NON-NLS-1$
+                    param.has("description")); //$NON-NLS-1$
+                JsonObject shape = param.has("items") ? param.getAsJsonObject("items") : param; //$NON-NLS-1$ //$NON-NLS-2$
+                assertFalse(entry.getKey() + "." + name + " publishes the members the server checks", //$NON-NLS-1$ //$NON-NLS-2$
+                    shape.has("properties") || shape.has("required") || shape.has("additionalProperties")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                assertEquals(entry.getKey() + "." + name, "object", shape.get("type").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             }
+            assertEquals(new java.util.TreeSet<>(entry.getValue()),
+                new java.util.TreeSet<>(InputSchemaCompactor.MEMBERS_CHECKED_ON_SERVER.get(entry.getKey())));
         }
     }
 
