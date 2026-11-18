@@ -354,7 +354,7 @@ public class RenameMetadataObjectToolTest
         {
             long startMs = System.currentTimeMillis();
             String error = RenameMetadataObjectTool.runRenameBounded("Catalog.Products", "Goods", //$NON-NLS-1$ //$NON-NLS-2$
-                true, SHORT_TIMEOUT_MS, progress -> {
+                true, SHORT_TIMEOUT_MS, (progress, monitor) -> {
                     progress.enter(RenameProgress.Phase.PREPARING);
                     started.countDown();
                     awaitQuietly(release);
@@ -402,7 +402,7 @@ public class RenameMetadataObjectToolTest
         try
         {
             String error = RenameMetadataObjectTool.runRenameBounded("Catalog.Products", "Goods", //$NON-NLS-1$ //$NON-NLS-2$
-                true, SHORT_TIMEOUT_MS, progress -> {
+                true, SHORT_TIMEOUT_MS, (progress, monitor) -> {
                     progress.enter(RenameProgress.Phase.PREPARING);
                     progress.enter(RenameProgress.Phase.APPLYING);
                     applying.countDown();
@@ -470,7 +470,7 @@ public class RenameMetadataObjectToolTest
         try
         {
             String error = RenameMetadataObjectTool.runRenameBounded(objectFqn, "Goods", //$NON-NLS-1$
-                true, SHORT_TIMEOUT_MS, progress -> {
+                true, SHORT_TIMEOUT_MS, (progress, monitor) -> {
                     progress.enter(RenameProgress.Phase.PREPARING);
                     started.countDown();
                     awaitQuietly(release);
@@ -500,7 +500,7 @@ public class RenameMetadataObjectToolTest
         try
         {
             String error = RenameMetadataObjectTool.runRenameBounded("Catalog.Products", "Goods", //$NON-NLS-1$ //$NON-NLS-2$
-                true, SHORT_TIMEOUT_MS, progress -> {
+                true, SHORT_TIMEOUT_MS, (progress, monitor) -> {
                     progress.enter(RenameProgress.Phase.PREPARING);
                     started.countDown();
                     awaitQuietly(release);
@@ -530,7 +530,7 @@ public class RenameMetadataObjectToolTest
     {
         String payload = "# Rename Completed"; //$NON-NLS-1$
         String result = RenameMetadataObjectTool.runRenameBounded("Catalog.Products", "Goods", //$NON-NLS-1$ //$NON-NLS-2$
-            true, WEDGE_CEILING_MS, progress -> {
+            true, WEDGE_CEILING_MS, (progress, monitor) -> {
                 progress.enter(RenameProgress.Phase.APPLIED);
                 return payload;
             });
@@ -542,7 +542,7 @@ public class RenameMetadataObjectToolTest
     public void testFailureAfterAppliedPhaseCarriesTheStructuralCommitMarker()
     {
         String error = RenameMetadataObjectTool.runRenameBounded("Catalog.Products", "Goods", //$NON-NLS-1$ //$NON-NLS-2$
-            true, WEDGE_CEILING_MS, progress -> {
+            true, WEDGE_CEILING_MS, (progress, monitor) -> {
                 progress.enter(RenameProgress.Phase.APPLIED);
                 throw new IllegalStateException("report rendering failed"); //$NON-NLS-1$
             });
@@ -557,7 +557,7 @@ public class RenameMetadataObjectToolTest
     public void testHandOffFailureIsReportedWithItsOwnMessage()
     {
         String error = RenameMetadataObjectTool.runRenameBounded("Catalog.Products", "Goods", //$NON-NLS-1$ //$NON-NLS-2$
-            true, WEDGE_CEILING_MS, progress -> {
+            true, WEDGE_CEILING_MS, (progress, monitor) -> {
                 throw new IllegalStateException("workbench has not been created"); //$NON-NLS-1$
             });
 
@@ -678,7 +678,7 @@ public class RenameMetadataObjectToolTest
         try
         {
             String error = RenameMetadataObjectTool.runRenameBounded("Catalog.Products", "Goods", //$NON-NLS-1$ //$NON-NLS-2$
-                false, SHORT_TIMEOUT_MS, progress -> {
+                false, SHORT_TIMEOUT_MS, (progress, monitor) -> {
                     progress.enter(RenameProgress.Phase.PREPARING);
                     started.countDown();
                     awaitQuietly(release);
@@ -737,7 +737,7 @@ public class RenameMetadataObjectToolTest
     {
         long startMs = System.currentTimeMillis();
         String error = RenameMetadataObjectTool.runRenameBounded("Catalog.Products", "Goods", //$NON-NLS-1$ //$NON-NLS-2$
-            true, timeoutMs, progress -> {
+            true, timeoutMs, (progress, monitor) -> {
                 progress.enter(RenameProgress.Phase.PREPARING);
                 awaitQuietly(release);
                 return WEDGED_PAYLOAD;
@@ -785,7 +785,7 @@ public class RenameMetadataObjectToolTest
         try
         {
             error = RenameMetadataObjectTool.runRenameBounded(objectFqn, "Goods", //$NON-NLS-1$
-                true, SHORT_TIMEOUT_MS, progress -> {
+                true, SHORT_TIMEOUT_MS, (progress, monitor) -> {
                     ran.set(true);
                     progress.enter(RenameProgress.Phase.APPLYING);
                     return WEDGED_PAYLOAD;

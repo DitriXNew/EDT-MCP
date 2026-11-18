@@ -151,7 +151,7 @@ public class RenamePreviewAdmissionTest
 
     private static RenameMetadataObjectTool.IRenameAction blocked(CountDownLatch release)
     {
-        return progress -> {
+        return (progress, monitor) -> {
             release.await();
             return PREVIEW;
         };

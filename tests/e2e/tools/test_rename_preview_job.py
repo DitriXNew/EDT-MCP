@@ -352,6 +352,151 @@ def test_invalid_preview_options_are_refused_without_mutating_the_fixture():
         assert_no_diff()
 
 
+# ── #975: the preview is computed off EDT's UI thread and its job is cancellable ──────────
+#
+# A user module with many whole-word text hits of the target's name makes the preview run for a
+# while: every hit is its own change point, and rendering one reads and parses the module. Before
+# #975 all of it ran inside Display.syncExec, so EDT's UI thread - and every tool that needs it -
+# was blocked for the whole preview, and a cancel_job could not stop it (alreadyCommitted).
+
+_BUSY_TARGET = "E2E975Busy"
+_BUSY_RENAMED = "E2E975BusyRenamed"
+_BUSY_USER = "E2E975BusyUser"
+# Calibrated on stand C (EDT 2026.2.2): this many comment lines, four hits each, keep the preview
+# computing for well over the probing window below.
+_BUSY_LINES = 1500
+_UI_ANSWER_SECONDS = 5
+_JOB_ID = re.compile(r"^\| jobId \| ([^|]+) \|\s*$", re.MULTILINE)
+_JOB_STATE = re.compile(r"^# Background job: (\S+)", re.MULTILINE)
+
+
+def _busy_user_source():
+    hits = "    // %s %s %s %s\n" % ((_BUSY_TARGET,) * 4)
+    return ("Procedure Probe() Export\n    X = %s.Marker();\n%sEndProcedure\n"
+            % (_BUSY_TARGET, hits * _BUSY_LINES))
+
+
+@contextmanager
+def _seed_busy_modules():
+    """A disposable target and a user module holding _BUSY_LINES lines of text hits of its name."""
+    try:
+        sources = {
+            _BUSY_TARGET: "Function Marker() Export\n    Return 1;\nEndFunction\n",
+            _BUSY_USER: _busy_user_source(),
+        }
+        for name, source in sources.items():
+            assert_ok(call("create_metadata", {
+                "projectName": PROJECT, "fqn": "CommonModule." + name,
+                "commonModuleKind": "Server",
+            }), "create disposable common module " + name)
+            settle_or_fail("write the disposable common module")
+            path = "CommonModules/%s/Module.bsl" % name
+            assert_ok(call("write_module_source", {
+                "projectName": PROJECT, "modulePath": path, "mode": "replace",
+                "overwrite": True, "source": source,
+            }), "seed disposable module source " + name)
+            poll_disk_contains("src/" + path, "End", timeout=60,
+                               ctx="the seeded module must be exported before preview")
+        settle_or_fail("build the disposable busy-preview fixture")
+        yield
+    finally:
+        reset_model()
+
+
+def _start_busy_preview():
+    """Starts the busy preview without waiting and returns its jobId, or the refusal text."""
+    pending = call("rename_metadata_object", {
+        "projectName": PROJECT, "objectFqn": "CommonModule." + _BUSY_TARGET,
+        "newName": _BUSY_RENAMED, "waitSeconds": 0,
+    })
+    if pending.is_error:
+        return None, pending.error_text()
+    assert_contains(pending.text, PENDING_PREFIX, "the busy preview must continue as a job")
+    return _JOB_ID.search(pending.text).group(1).strip(), None
+
+
+def _job_status(job_id, wait=0):
+    status = call("get_job_status", {"jobId": job_id, "waitSeconds": wait})
+    assert_ok(status, "poll the preview job")
+    state = _JOB_STATE.search(status.text)
+    return (state.group(1) if state else ""), status.text
+
+
+def _end_job(job_id, limit=900):
+    """Asks the job to stop, then waits for it to leave RUNNING; returns the final state."""
+    call("cancel_job", {"jobId": job_id, "confirm": True})
+    deadline = time.time() + limit
+    state, _ = _job_status(job_id)
+    while state == "running" and time.time() < deadline:
+        state, _ = _job_status(job_id, wait=10)
+    return state
+
+
+@e2e_test(tool="rename_metadata_object", kind="write-metadata")
+def test_edt_ui_thread_answers_while_a_rename_preview_is_computed():
+    with _seed_busy_modules():
+        job_id, refused = _start_busy_preview()
+        assert job_id, "the busy preview must start: %s" % refused
+        try:
+            probes_while_running = 0
+            deadline = time.time() + 60
+            while time.time() < deadline:
+                started = time.time()
+                listed = call("edt_dialog", {"action": "list"})
+                took = time.time() - started
+                assert_ok(listed, "EDT's UI thread must answer while the preview is computed")
+                assert took < _UI_ANSWER_SECONDS, (
+                    "edt_dialog list took %.1fs while the preview was computed" % took)
+                state, _ = _job_status(job_id)
+                if state != "running":
+                    break
+                probes_while_running += 1
+                time.sleep(0.5)
+            assert probes_while_running >= 3, (
+                "the seed must keep the preview running across several UI probes, got %d - "
+                "raise _BUSY_LINES" % probes_while_running)
+        finally:
+            _end_job(job_id)
+
+
+@e2e_test(tool="rename_metadata_object", kind="write-metadata")
+def test_cancel_job_stops_a_running_rename_preview_and_a_repeat_is_accepted():
+    with _seed_busy_modules():
+        job_id, refused = _start_busy_preview()
+        assert job_id, "the busy preview must start: %s" % refused
+        repeat_id = None
+        try:
+            deadline = time.time() + 120
+            state, text = _job_status(job_id)
+            while ("Computing the change points" not in text
+                   and "Building the refactoring" not in text):
+                assert state == "running" and time.time() < deadline, (
+                    "the preview must reach its computation stage:\n" + text)
+                time.sleep(0.5)
+                state, text = _job_status(job_id)
+
+            outcome = call("cancel_job", {"jobId": job_id, "confirm": True})
+            assert_ok(outcome, "cancel the running preview")
+            assert_contains(outcome.text, "# Background job cancellation: cancelled",
+                            "a preview changes nothing, so its computation must be cancellable")
+            final = _end_job(job_id, limit=120)
+            assert final == "cancelled", "the cancelled preview must end cancelled, got " + final
+
+            # The place comes back once the stopped work has ended: a repeat is accepted again.
+            deadline = time.time() + 300
+            while True:
+                repeat_id, refused = _start_busy_preview()
+                if repeat_id:
+                    break
+                assert "already ended" in refused and time.time() < deadline, (
+                    "a repeat preview must be accepted once the stopped work ended: " + refused)
+                time.sleep(2)
+        finally:
+            _end_job(job_id)
+            if repeat_id:
+                _end_job(repeat_id)
+
+
 @e2e_test(tool="rename_metadata_object", kind="write-metadata")
 def test_default_wait_can_still_return_the_preview_inline_on_the_fixture():
     settle_or_fail("preview the small fixture inline")

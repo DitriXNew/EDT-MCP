@@ -396,6 +396,19 @@ public final class BackgroundJobs implements AutoCloseable
         }
 
         /**
+         * Whether a cancellation has already won this job while its worker is still unwinding -
+         * the state in which {@link #tryCommit()} would refuse. Asked by work that never commits,
+         * because it stays abandonable throughout, before it starts a step that would otherwise
+         * run after its cancelled outcome was decided. Never commits anything.
+         *
+         * @return {@code true} once a cancellation of this job was accepted
+         */
+        default boolean isCancellationRequested()
+        {
+            return false;
+        }
+
+        /**
          * Hands in the result of a committed cancellation that settled WITHOUT one - an owner's handler
          * that gave up waiting and answered {@link CommittedCancellation#stopInitiated} with a
          * {@code null} result - so the job, once cancelled, still carries the work's own account of what
@@ -1087,6 +1100,12 @@ public final class BackgroundJobs implements AutoCloseable
                 }
 
                 @Override
+                public boolean isCancellationRequested()
+                {
+                    return record.isCancellationRequested();
+                }
+
+                @Override
                 public long remainingMillis()
                 {
                     return record.remainingMillis(timeoutMs);
@@ -1267,6 +1286,11 @@ public final class BackgroundJobs implements AutoCloseable
             }
             committed = true;
             return true;
+        }
+
+        synchronized boolean isCancellationRequested()
+        {
+            return cancellationRequested;
         }
 
         /** See {@link ProgressReporter#cancellationResult}: fills a committed cancellation's missing result. */
