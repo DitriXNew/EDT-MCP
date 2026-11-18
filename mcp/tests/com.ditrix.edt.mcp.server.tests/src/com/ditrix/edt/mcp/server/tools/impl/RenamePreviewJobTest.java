@@ -37,7 +37,7 @@ public class RenamePreviewJobTest
         {
             RenameMetadataObjectTool tool = tool(jobs, (project, timeout) -> null);
             assertEquals(PREVIEW, start(tool, "Catalog.Products", "Goods", 5, 5_000,
-                progress -> PREVIEW));
+                (progress, monitor) -> PREVIEW));
         }
     }
 
@@ -51,7 +51,7 @@ public class RenamePreviewJobTest
             try
             {
                 RenameMetadataObjectTool tool = tool(jobs, (project, timeout) -> null);
-                String answer = start(tool, "Catalog.Products", "Goods", 0, 5_000, progress -> {
+                String answer = start(tool, "Catalog.Products", "Goods", 0, 5_000, (progress, monitor) -> {
                     entered.countDown();
                     release.await();
                     return PREVIEW;
@@ -84,7 +84,7 @@ public class RenamePreviewJobTest
             try
             {
                 RenameMetadataObjectTool tool = tool(jobs, (project, timeout) -> null);
-                String id = jobId(start(tool, "Catalog.Products", "Goods", 0, 5_000, progress -> {
+                String id = jobId(start(tool, "Catalog.Products", "Goods", 0, 5_000, (progress, monitor) -> {
                     release.await();
                     return ToolResult.error("Could not build the preview").toJson();
                 }));
@@ -97,7 +97,7 @@ public class RenamePreviewJobTest
                 assertTrue(rendered.contains("## Error\n\nCould not build the preview"));
                 assertFalse(rendered.contains("## Result"));
                 String inline = start(tool, "Catalog.Other", "OtherGoods", 5, 5_000,
-                    progress -> ToolResult.error("Could not build the preview").toJson());
+                    (progress, monitor) -> ToolResult.error("Could not build the preview").toJson());
                 assertEquals(ToolResult.error("Could not build the preview").toJson(), inline);
             }
             finally
@@ -120,7 +120,7 @@ public class RenamePreviewJobTest
                     settles.incrementAndGet();
                     return null;
                 });
-                RenameMetadataObjectTool.IRenameAction blocked = progress -> {
+                RenameMetadataObjectTool.IRenameAction blocked = (progress, monitor) -> {
                     release.await();
                     return PREVIEW;
                 };
@@ -148,7 +148,7 @@ public class RenamePreviewJobTest
         try (BackgroundJobs jobs = new BackgroundJobs(10, 2))
         {
             RenameMetadataObjectTool tool = tool(jobs, (project, timeout) -> null);
-            RenameMetadataObjectTool.IRenameAction work = progress -> "preview " + runs.incrementAndGet();
+            RenameMetadataObjectTool.IRenameAction work = (progress, monitor) -> "preview " + runs.incrementAndGet();
             assertEquals("preview 1", start(tool, "Catalog.Products", "Goods", 5, 5_000, work));
             assertEquals("preview 2", start(tool, "Catalog.Products", "Goods", 5, 5_000, work));
         }
@@ -163,7 +163,7 @@ public class RenamePreviewJobTest
             try
             {
                 RenameMetadataObjectTool tool = tool(jobs, (project, timeout) -> null);
-                RenameMetadataObjectTool.IRenameAction blocked = progress -> {
+                RenameMetadataObjectTool.IRenameAction blocked = (progress, monitor) -> {
                     release.await();
                     return PREVIEW;
                 };
@@ -224,7 +224,7 @@ public class RenamePreviewJobTest
             try
             {
                 RenameMetadataObjectTool tool = tool(jobs, (project, timeout) -> null);
-                String id = jobId(start(tool, "Catalog.Products", "Goods", 0, 500, progress -> {
+                String id = jobId(start(tool, "Catalog.Products", "Goods", 0, 500, (progress, monitor) -> {
                     progress.enter(RenameProgress.Phase.PREPARING);
                     await(release);
                     return PREVIEW;
@@ -291,7 +291,7 @@ public class RenamePreviewJobTest
             try
             {
                 RenameMetadataObjectTool tool = tool(jobs, (project, timeout) -> null);
-                RenameMetadataObjectTool.IRenameAction blocked = progress -> {
+                RenameMetadataObjectTool.IRenameAction blocked = (progress, monitor) -> {
                     release.await();
                     return PREVIEW;
                 };

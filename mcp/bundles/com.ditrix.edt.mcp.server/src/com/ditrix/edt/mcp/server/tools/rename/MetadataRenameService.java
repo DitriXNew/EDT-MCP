@@ -24,7 +24,9 @@ import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IResource;
 import org.eclipse.core.runtime.IPath;
+import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.NullProgressMonitor;
+import org.eclipse.core.runtime.OperationCanceledException;
 import org.eclipse.core.runtime.Platform;
 import org.osgi.framework.Bundle;
 
@@ -86,8 +88,13 @@ import com.ditrix.edt.mcp.server.utils.VendorSupportGuard;
  * 1. Preview mode (confirm=false, default): Returns list of affected refactoring items and problems.
  * 2. Execute mode (confirm=true): Performs the rename with all cascading code updates.
  * <p>
- * All model/EMF/LTK access here MUST run inside the caller's UI-thread {@code Display.syncExec}
- * scope; the tool adapter is responsible for that boundary.
+ * The tool adapter owns the thread boundary: a CONFIRM runs on EDT's UI thread (EDT's own rename
+ * wizard performs there too), while a PREVIEW runs on a background job thread, the way EDT's own
+ * rename builds its refactoring on a forked worker (issue #975). Model reads go through BM read
+ * transactions on either thread; the platform code that needs the UI thread (saving or reconciling
+ * an open editor) dispatches itself there. A preview polls the monitor given to
+ * {@link #rename(String, String, String, boolean, DisableRequest, String, int, RenameProgress, IProgressMonitor)}
+ * between its passes and between its leaves, and stops with {@link OperationCanceledException}.
  */
 public class MetadataRenameService
 {
@@ -143,6 +150,13 @@ public class MetadataRenameService
 
     private final boolean excludeTextOccurrences;
 
+    /**
+     * The monitor this call's preview passes poll; a never-cancelled one unless the adapter handed
+     * in its job's monitor. A confirm keeps the never-cancelled default: its apply path is not cut
+     * short by a deadline (see the tool adapter).
+     */
+    private IProgressMonitor monitor = new NullProgressMonitor();
+
     /** Default preserves EDT's checked text occurrences. */
     public MetadataRenameService()
     {
@@ -153,6 +167,56 @@ public class MetadataRenameService
     public MetadataRenameService(boolean excludeTextOccurrences)
     {
         this.excludeTextOccurrences = excludeTextOccurrences;
+    }
+
+    /**
+     * Sets the monitor this call's preview passes poll. Package-visible so the cancellation checks
+     * can be exercised without a workbench.
+     *
+     * @param callMonitor the monitor to poll, or {@code null} for a never-cancelled one
+     */
+    void useMonitor(IProgressMonitor callMonitor)
+    {
+        monitor = callMonitor == null ? new NullProgressMonitor() : callMonitor;
+    }
+
+    /** Stops the preview between two steps once its monitor is cancelled. */
+    private void checkCanceled()
+    {
+        if (monitor.isCanceled())
+        {
+            throw new OperationCanceledException();
+        }
+    }
+
+    /**
+     * Called first in a catch that degrades a failed pass to "no data": when the failure came from the
+     * preview being stopped - EDT raises its own {@link OperationCanceledException}, which reflection
+     * wraps - it stops the preview instead of being logged as an error and carried on past.
+     */
+    private void rethrowIfCanceled()
+    {
+        checkCanceled();
+    }
+
+    /**
+     * A monitor to hand one platform pass: it reports progress nowhere (several passes share a job,
+     * and its own monitor takes {@code beginTask} once) but answers {@code isCanceled()} from this
+     * call's monitor, so a pass that polls it unwinds when the preview is stopped.
+     *
+     * @return the monitor for one pass
+     */
+    IProgressMonitor passMonitor()
+    {
+        IProgressMonitor outer = monitor;
+        return new NullProgressMonitor()
+        {
+            @Override
+            public boolean isCanceled()
+            {
+                return super.isCanceled() || outer.isCanceled();
+            }
+        };
     }
 
     /**
@@ -232,7 +296,27 @@ public class MetadataRenameService
         boolean confirm, DisableRequest disableRequest, String expectedHash, int maxResults,
         RenameProgress progress)
     {
-        // Reported as the FIRST thing the UI thread does: it is what separates "the UI thread never
+        return rename(projectName, objectFqn, newName, confirm, disableRequest, expectedHash, maxResults,
+            progress, new NullProgressMonitor());
+    }
+
+    /**
+     * {@link #rename(String, String, String, boolean, DisableRequest, String, int, RenameProgress)}
+     * whose preview passes poll {@code monitor}: the reference passes EDT's refactoring lets us drive,
+     * our text search and the leaf walk that renders the change points stop at the next check once it
+     * is cancelled, by throwing {@link OperationCanceledException}. EDT's own
+     * {@code createMdObjectRenameRefactoring} pass takes no monitor and runs to its end regardless.
+     *
+     * @param monitor the monitor to poll; a confirm passes a never-cancelled one
+     * @return the Markdown report, or a {@link ToolResult#error} JSON payload
+     * @throws OperationCanceledException when {@code monitor} was cancelled before the preview finished
+     */
+    public String rename(String projectName, String objectFqn, String newName,
+        boolean confirm, DisableRequest disableRequest, String expectedHash, int maxResults,
+        RenameProgress progress, IProgressMonitor monitor)
+    {
+        useMonitor(monitor);
+        // Reported as the FIRST thing the rename thread does: it is what separates "the thread never
         // picked the work up" from "the work started" for a caller that gave up on its deadline.
         progress.enter(RenameProgress.Phase.PREPARING);
 
@@ -379,6 +463,8 @@ public class MetadataRenameService
             return ToolResult.error("Failed to create rename refactoring for: " + objectFqn
                 + ". Nothing was renamed. Use get_metadata_details to verify the target, then retry.").toJson(); //$NON-NLS-1$
         }
+        // EDT's pass above takes no monitor; a preview stopped while it ran goes no further.
+        checkCanceled();
 
         return ReadToolExecution.<java.util.function.Supplier<String>>readOnHost(project, "Prepare metadata rename changes", () -> {
             String lockedReferrers = supportLockRefusal(objectFqn, refactorings);
@@ -548,6 +634,7 @@ public class MetadataRenameService
                 return ToolResult.error("EDT created no rename refactoring for '" + normFqn
                     + "'. Nothing was renamed. Use get_metadata_details to verify the element, then retry.").toJson();
             }
+            checkCanceled();
             Collection<IRefactoring> refactorings = Collections.singletonList(refactoring);
             String lockedReferrers = ReadToolExecution.readOnHost(project, "Check form rename referrers",
                 () -> supportLockRefusal(normFqn, refactorings));
@@ -562,6 +649,10 @@ public class MetadataRenameService
             }
             return performRename(project, normFqn, newName, refactorings, disableRequest, expectedHash, progress,
                 "form element"); //$NON-NLS-1$
+        }
+        catch (OperationCanceledException e)
+        {
+            throw e; // a stopped preview is not a failure of the form rename
         }
         catch (Exception e)
         {
@@ -776,6 +867,7 @@ public class MetadataRenameService
     {
         Map<String, ExactMatchInfo> exactMatches = buildExactMatchInfo(project, targetObject, newName);
         List<ChangePoint> edtBslPreviewChanges = buildEdtBslPreviewChanges(targetObject, newName, exactMatches);
+        checkCanceled();
         return renderPreview(objectFqn, newName, targetObject.getName(), refactorings, maxResults,
             exactMatches, edtBslPreviewChanges);
     }
@@ -1442,6 +1534,8 @@ public class MetadataRenameService
         // stable cross-call handle for disableIndices. A leaf may render as
         // several display rows (multiple exact matches / text edits) or none
         // (suppressed), but it always consumes exactly one index. (card A2)
+        // A leaf can load and parse its module, so a stopped preview stops here, between leaves.
+        checkCanceled();
         int leafIndex = ctx.indexCounter[0]++;
         boolean hasExactMatches = ctx.exactMatches != null && !ctx.exactMatches.isEmpty();
         boolean isBslReferenceChange = isBslReferenceChange(change, currentFqn);
@@ -1618,6 +1712,7 @@ public class MetadataRenameService
 
     private Map<String, ExactMatchInfo> buildExactMatchInfo(IProject project, MdObject targetObject, String newName)
     {
+        checkCanceled();
         try
         {
             Object bslInjector = getBslInjector();
@@ -1639,7 +1734,6 @@ public class MetadataRenameService
             }
 
             Change normalChange = createRenameChange(refactoring, processor, newName);
-            NullProgressMonitor progressMonitor = new NullProgressMonitor();
 
             String oldName = (String) invokeMethod(processor, "getOriginalName", new Class<?>[0]); //$NON-NLS-1$
             EObject contextElement = (EObject) invokeMethod(processor, "getContextElement", new Class<?>[0]); //$NON-NLS-1$
@@ -1696,12 +1790,8 @@ public class MetadataRenameService
             collaborators.add(searchScopeSettings);
             collaborators.add(collector);
             Class<?> textSearcherClass = getClassOrThrow("com._1c.g5.v8.dt.search.core.TextSearcher"); //$NON-NLS-1$
-            for (String searchString : searchStrings)
-            {
-                Object searcher = newTextSearcher(textSearcherClass, searchString, collaborators);
-                invokeMethod(searcher, "search", //$NON-NLS-1$
-                    new Class<?>[] {getClassOrThrow("org.eclipse.core.runtime.IProgressMonitor")}, progressMonitor); //$NON-NLS-1$
-            }
+            searchAll(searchStrings,
+                searchString -> newTextSearcher(textSearcherClass, searchString, collaborators));
 
             Collection<?> matches = (Collection<?>) invokeMethod(supplier, "getMatches", //$NON-NLS-1$
                 new Class<?>[] {Change.class, getClassOrThrow("com._1c.g5.v8.dt.search.core.SimpleSearchResultCollector")}, //$NON-NLS-1$
@@ -1710,14 +1800,42 @@ public class MetadataRenameService
         }
         catch (Exception e)
         {
+            rethrowIfCanceled();
             Activator.logError("Error collecting exact rename matches", e); //$NON-NLS-1$
             return Map.of();
+        }
+    }
+
+    /** Builds one {@code TextSearcher} for a search string; reflective because its constructor drifts. */
+    @FunctionalInterface
+    interface SearcherFactory
+    {
+        Object create(String searchString) throws Exception; // NOSONAR reflective construction
+    }
+
+    /**
+     * Runs {@code TextSearcher.search(IProgressMonitor)} once per search string, handing each run a
+     * monitor that follows this call's own, and stops between strings once that one is cancelled.
+     *
+     * @param searchStrings the strings EDT's supplier asks to search for
+     * @param factory builds the searcher for one string
+     * @throws Exception whatever the reflective call raises
+     */
+    void searchAll(Collection<String> searchStrings, SearcherFactory factory) throws Exception // NOSONAR reflective boundary
+    {
+        for (String searchString : searchStrings)
+        {
+            checkCanceled();
+            Object searcher = factory.create(searchString);
+            invokeMethod(searcher, "search", //$NON-NLS-1$
+                new Class<?>[] {getClassOrThrow("org.eclipse.core.runtime.IProgressMonitor")}, passMonitor()); //$NON-NLS-1$
         }
     }
 
     private List<ChangePoint> buildEdtBslPreviewChanges(MdObject targetObject, String newName,
         Map<String, ExactMatchInfo> exactMatches)
     {
+        checkCanceled();
         try
         {
             Object bslInjector = getBslInjector();
@@ -1751,15 +1869,22 @@ public class MetadataRenameService
         }
         catch (Exception e)
         {
+            rethrowIfCanceled();
             Activator.logError("Error building EDT BSL preview changes", e); //$NON-NLS-1$
             return List.of();
         }
     }
 
-    private Change createRenameChange(Object refactoring, Object processor, String newName) throws Exception
+    /**
+     * Runs the Xtext rename's condition checks and change creation, handing them a monitor that
+     * follows this call's own, so the reference search inside them stops when the preview is
+     * stopped. Package-visible for the cancellation tests.
+     */
+    Change createRenameChange(Object refactoring, Object processor, String newName) throws Exception // NOSONAR reflective boundary
     {
+        checkCanceled();
         invokeMethod(processor, "setNewName", new Class<?>[] {String.class}, newName); //$NON-NLS-1$
-        NullProgressMonitor progressMonitor = new NullProgressMonitor();
+        IProgressMonitor progressMonitor = passMonitor();
         Class<?> monitorClass = getClassOrThrow("org.eclipse.core.runtime.IProgressMonitor"); //$NON-NLS-1$
 
         if (refactoring != null)
