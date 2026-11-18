@@ -17,10 +17,12 @@ import java.util.Map;
 import java.util.concurrent.Callable;
 import java.util.function.UnaryOperator;
 
+import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.IPath;
 import org.eclipse.emf.common.util.EList;
 import org.eclipse.emf.common.util.URI;
+import org.eclipse.emf.ecore.EClass;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.EReference;
 import org.eclipse.emf.ecore.InternalEObject;
@@ -31,10 +33,13 @@ import com._1c.g5.v8.bm.core.BmUriUtil;
 import com._1c.g5.v8.bm.core.IBmObject;
 import com._1c.g5.v8.bm.core.IBmTransaction;
 import com._1c.g5.v8.bm.integration.IBmModel;
+import com._1c.g5.v8.dt.core.filesystem.IProjectFileSystemSupport;
+import com._1c.g5.v8.dt.core.filesystem.IProjectFileSystemSupportProvider;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
+import com._1c.g5.wiring.ServiceAccess;
 import com.ditrix.edt.mcp.server.utils.BmModelResolver;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.GsonProvider;
@@ -45,10 +50,15 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
 import com.ditrix.edt.mcp.server.tools.base.WriteScope;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
+import com.ditrix.edt.mcp.server.utils.FormElementWriter;
+import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataPathResolver;
+import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.MetadataTopObjects;
+import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.RoleRightsOrphans;
 import com.ditrix.edt.mcp.server.utils.VendorSupportGuard;
+import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -83,7 +93,13 @@ import com.google.gson.JsonParser;
  * content forms ({@code com._1c.g5.v8.dt.form.model.Form}, persisted as
  * {@code .form}) and BSL module reference/context index objects
  * ({@code Module.bsl.mRIdx} / {@code Module.bsl.mCtxIdx}) - are excluded so they
- * are not mis-reported as a missing-{@code .mdo} desync.
+ * are not mis-reported as a missing-{@code .mdo} desync. The full export itself
+ * takes every top object EDT has a file exporter for, content forms included
+ * ({@link MetadataTopObjects#exportableSnapshot}).
+ * <p>
+ * <b>Scoped re-save.</b> {@code objects} names top objects or forms to re-write from
+ * the model as they stand; a form resolves to its content form, so its
+ * {@code Form.form} is rewritten. It is exclusive with the other write modes.
  * <p>
  * <b>Integrity report.</b> Before exporting, the tool computes the expected
  * {@code .mdo} path for each top object ({@code src/<TypeDir>/<Name>/<Name>.mdo},
@@ -141,6 +157,16 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
     /** Param: opt-in flag to schedule a full project revalidation after the export. */
     private static final String KEY_REVALIDATE = "revalidate"; //$NON-NLS-1$
 
+    /** Param: FQNs of top objects or forms to re-save from the model without changing them. */
+    static final String KEY_OBJECTS = "objects"; //$NON-NLS-1$
+
+    /** Result: the per-object outcome of a scoped re-save. */
+    private static final String KEY_RESAVED = "resaved"; //$NON-NLS-1$
+
+    /** Transit fields of a {@link #KEY_RESAVED} row: the file's state before the export. */
+    private static final String PREVIOUS_MODIFIED = "previousModified"; //$NON-NLS-1$
+    private static final String PREVIOUS_SIZE = "previousSize"; //$NON-NLS-1$
+
     /** Cap on how many FQNs are listed back in the JSON to keep responses bounded. */
     private static final int MAX_LISTED_FQNS = 500;
 
@@ -174,12 +200,14 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
     @Override
     public String getDescription()
     {
-        return "Write the in-memory model back out to the on-disk src/ .mdo files and report model-to-disk " //$NON-NLS-1$
+        return "Write the in-memory model back out to the on-disk src/ files and report model-to-disk " //$NON-NLS-1$
             + "desync; fixes 'object file does not exist' failures and dangling Configuration.mdo " //$NON-NLS-1$
-            + "references. Direction MODEL -> DISK, the opposite of clean_project. Dangling references are " //$NON-NLS-1$
-            + "REPORTED by default, not removed. Two opt-in modes are DESTRUCTIVE: re-exporting every " //$NON-NLS-1$
-            + "object overwrites on-disk edits, and removing dangling references rewrites " //$NON-NLS-1$
-            + "Configuration.mdo. Role-rights entries whose object no longer exists are also REPORTED by " //$NON-NLS-1$
+            + "references, and re-saves named objects or forms (objects) from the model without changing " //$NON-NLS-1$
+            + "them. Direction MODEL -> DISK, the opposite of clean_project. Dangling references are " //$NON-NLS-1$
+            + "REPORTED by default, not removed. Three opt-in modes are DESTRUCTIVE: re-exporting every " //$NON-NLS-1$
+            + "object or re-saving named ones overwrites on-disk edits - a value the model does not hold, " //$NON-NLS-1$
+            + "such as an enum literal EDT dropped on load, is lost for good - and removing dangling " //$NON-NLS-1$
+            + "references rewrites Configuration.mdo. Role-rights entries whose object no longer exists are also REPORTED by " //$NON-NLS-1$
             + "default; call once to review them, then again with cleanOrphanRoleRights=true to remove " //$NON-NLS-1$
             + "the proven-absent ones. Parameters and examples: get_tool_guide('resync_to_disk')."; //$NON-NLS-1$
     }
@@ -202,13 +230,20 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
                     + "proven absent - rewrites those roles' Rights.rights. Entries judged undetermined " //$NON-NLS-1$
                     + "are never removed. Default: false - only report orphanRoleRights.") //$NON-NLS-1$
             .booleanProperty(KEY_FULL_EXPORT,
-                "When true, force-export EVERY metadata top object's .mdo (a full disk refresh; " //$NON-NLS-1$
-                    + "slow on a large configuration - the export runs on the UI thread). " //$NON-NLS-1$
+                "When true, force-export EVERY top object EDT keeps a file for (.mdo, Form.form, " //$NON-NLS-1$
+                    + "Rights.rights, template content, ...): a full disk refresh, slow on a large " //$NON-NLS-1$
+                    + "configuration - the export runs on the UI thread. " //$NON-NLS-1$
                     + "Default: false - export only the objects whose .mdo is missing on disk.") //$NON-NLS-1$
+            .stringArrayProperty(KEY_OBJECTS,
+                "FQNs to re-save from the model as they stand, without changing them, e.g. " //$NON-NLS-1$
+                    + "['Catalog.Goods.Form.ItemForm'] (a form rewrites its Form.form) or ['Catalog.Goods']; " //$NON-NLS-1$
+                    + "Russian type tokens accepted. Needs overwriteDiskEdits=true; not combinable with " //$NON-NLS-1$
+                    + "fullExport, cleanDanglingReferences or cleanOrphanRoleRights.") //$NON-NLS-1$
             .booleanProperty(KEY_OVERWRITE_DISK_EDITS,
-                "Required confirmation for fullExport=true: force-exporting every .mdo from the " //$NON-NLS-1$
-                    + "in-memory model OVERWRITES any on-disk edits. Default: false - fullExport is " //$NON-NLS-1$
-                    + "rejected unless this is true. Ignored when fullExport=false.") //$NON-NLS-1$
+                "Required confirmation for fullExport=true and for objects: re-exporting from the " //$NON-NLS-1$
+                    + "in-memory model OVERWRITES on-disk edits, and a value EDT dropped on load (e.g. an " //$NON-NLS-1$
+                    + "unknown enum literal) is lost for good. Default: false - both are rejected unless " //$NON-NLS-1$
+                    + "this is true.") //$NON-NLS-1$
             .booleanProperty(KEY_REVALIDATE,
                 "When true, schedule a full project revalidation (clean build) after the export so " //$NON-NLS-1$
                     + "stale markers refresh. Default: false (export only).") //$NON-NLS-1$
@@ -223,7 +258,8 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
             .stringProperty(McpKeys.PROJECT_NAME, "The project that was re-synchronized") //$NON-NLS-1$
             .integerProperty("objectsExported", //$NON-NLS-1$
                 "Number of top objects queued for (re)writing - the missing subset by default, every " //$NON-NLS-1$
-                    + "object when fullExport=true. The tool waits for the export queue to drain before " //$NON-NLS-1$
+                    + "object with a file when fullExport=true, the resolved ones with objects. The tool " //$NON-NLS-1$
+                    + "waits for the export queue to drain before " //$NON-NLS-1$
                     + "answering, so a success normally means the writes have already run - but that " //$NON-NLS-1$
                     + "establishes the queue is empty, not that the bytes are correct (a platform-side " //$NON-NLS-1$
                     + "write failure is logged inside EDT), and the wait is skipped where the export " //$NON-NLS-1$
@@ -257,6 +293,10 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
                 "Set when the orphaned role-rights sweep could not complete cleanly") //$NON-NLS-1$
             .booleanProperty(KEY_REVALIDATE, "Whether a post-export revalidation was requested") //$NON-NLS-1$
             .stringProperty("revalidateWarning", "Set when the optional post-export revalidation failed") //$NON-NLS-1$ //$NON-NLS-2$
+            .objectArrayProperty(KEY_RESAVED,
+                "objects mode only: [{object, fqn, file, state}] - the requested address, the top object " //$NON-NLS-1$
+                    + "re-saved, its project-relative file, and state written | unchanged (not proven " //$NON-NLS-1$
+                    + "rewritten: same time stamp and size) | missing | unknown (no file path known)") //$NON-NLS-1$
             .stringProperty(McpKeys.MESSAGE, "Human-readable summary of the outcome") //$NON-NLS-1$
             .stringArrayProperty(WriteScope.RESULT_MEMBER, WriteScope.OUTPUT_SCHEMA_DESCRIPTION)
             .build();
@@ -356,6 +396,15 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
         try
         {
             JsonObject json = JsonParser.parseString(revalidated).getAsJsonObject();
+            JsonElement resaved = json.get(KEY_RESAVED);
+            if (resaved != null && resaved.isJsonArray())
+            {
+                com.ditrix.edt.mcp.server.utils.ProjectContext context =
+                    com.ditrix.edt.mcp.server.utils.ProjectContext.of(projectName);
+                File root = context.exists() ? projectRootOf(context.project()) : null;
+                json.addProperty(McpKeys.MESSAGE, settleResaved(resaved.getAsJsonArray(), root));
+                return GsonProvider.get().toJson(json);
+            }
             JsonElement before = json.get("missingBefore"); //$NON-NLS-1$
             if (before == null || !before.isJsonArray() || before.getAsJsonArray().isEmpty())
             {
@@ -458,6 +507,16 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
         // Default FALSE: fullExport re-exports EVERY .mdo from the in-memory model and would
         // overwrite any on-disk edits, so it must be confirmed with overwriteDiskEdits=true.
         boolean overwriteDiskEdits = JsonUtils.extractBooleanArgument(params, KEY_OVERWRITE_DISK_EDITS, false);
+        List<String> objects = JsonUtils.extractArrayArgument(params, KEY_OBJECTS);
+        if (params.get(KEY_OBJECTS) != null)
+        {
+            String objectsError = objectsGuardError(objects, fullExport, cleanDangling, cleanOrphanRights,
+                overwriteDiskEdits);
+            if (objectsError != null)
+            {
+                return objectsError;
+            }
+        }
         // Guard is an early-return BEFORE any BM read (unattended-safe): an unconfirmed fullExport
         // is rejected without touching the model. Only gates fullExport - the default missing-only
         // resync and cleanDanglingReferences paths are unaffected.
@@ -483,6 +542,10 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
         {
             return ToolResult.error("BM model not available for project: " + projectName).toJson(); //$NON-NLS-1$
         }
+        if (objects != null)
+        {
+            return resave(ctx, bmModel, objects, revalidate);
+        }
 
         // Step 1: enumerate the real metadata top objects of the configuration via
         // the BM model. getTopObjectIterator() yields every IBmObject top object
@@ -504,7 +567,8 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
         // export-everything refresh. When the dangling cleanup (step 5) removes
         // entries it re-exports the Configuration top object itself, so that case
         // does not need a full export either.
-        List<String> exportFqns = selectExportFqns(fullExport, allFqns, missingBefore);
+        List<String> exportFqns = selectExportFqns(fullExport,
+            fullExport ? MetadataTopObjects.exportableSnapshot(bmModel) : allFqns, missingBefore);
         // An empty export list (already in sync, no full export requested) is a genuine
         // no-op: nothing to write, trivially successful.
         if (exportFqns.isEmpty())
@@ -708,10 +772,302 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
     {
         if (fullExport && !overwriteDiskEdits)
         {
-            return ToolResult.error("fullExport=true re-exports EVERY .mdo from the in-memory model and " //$NON-NLS-1$
-                + "would overwrite on-disk edits; pass overwriteDiskEdits=true to confirm.").toJson(); //$NON-NLS-1$
+            return ToolResult.error("fullExport=true re-exports EVERY file of the in-memory model (.mdo, " //$NON-NLS-1$
+                + "Form.form, ...) and would overwrite on-disk edits, including values EDT dropped on load; " //$NON-NLS-1$
+                + "pass overwriteDiskEdits=true to confirm.").toJson(); //$NON-NLS-1$
         }
         return null;
+    }
+
+    /**
+     * The pre-model refusals of a scoped re-save: an empty list, a combination with another write
+     * mode, or a missing {@code overwriteDiskEdits} confirmation. Pure, so it is unit-testable.
+     *
+     * @param objects the requested FQNs ({@code null} when the parameter was present but unreadable)
+     * @param fullExport whether a full export was requested too
+     * @param cleanDangling whether the dangling cleanup was requested too
+     * @param cleanOrphanRights whether the orphaned role-rights cleanup was requested too
+     * @param overwriteDiskEdits whether the caller confirmed overwriting on-disk edits
+     * @return the JSON error, or {@code null} when the re-save may proceed
+     */
+    static String objectsGuardError(List<String> objects, boolean fullExport, boolean cleanDangling,
+        boolean cleanOrphanRights, boolean overwriteDiskEdits)
+    {
+        if (objects == null || objects.isEmpty())
+        {
+            return ToolResult.error("objects is empty: name at least one FQN to re-save (e.g. " //$NON-NLS-1$
+                + "['Catalog.Goods.Form.ItemForm']), or omit objects for the default resync.").toJson(); //$NON-NLS-1$
+        }
+        List<String> others = new ArrayList<>();
+        if (fullExport)
+        {
+            others.add(KEY_FULL_EXPORT);
+        }
+        if (cleanDangling)
+        {
+            others.add(KEY_CLEAN_DANGLING_REFERENCES);
+        }
+        if (cleanOrphanRights)
+        {
+            others.add(KEY_CLEAN_ORPHAN_ROLE_RIGHTS);
+        }
+        if (!others.isEmpty())
+        {
+            return ToolResult.error("objects cannot be combined with " + String.join(", ", others) //$NON-NLS-1$ //$NON-NLS-2$
+                + ": call resync_to_disk once with objects only, and separately for the other mode.").toJson(); //$NON-NLS-1$
+        }
+        if (!overwriteDiskEdits)
+        {
+            return ToolResult.error("objects re-saves " + objects //$NON-NLS-1$
+                + " from the in-memory model and overwrites their files, including on-disk edits and " //$NON-NLS-1$
+                + "values EDT dropped on load (check a form first with validate_form_model); pass " //$NON-NLS-1$
+                + "overwriteDiskEdits=true to confirm.").toJson(); //$NON-NLS-1$
+        }
+        return null;
+    }
+
+    /**
+     * The address a requested re-save FQN resolves through: the type token normalized, and a
+     * content-form FQN ({@code Catalog.X.Form.Y.Form}, {@code CommonForm.Y.Form}) reduced to its form.
+     *
+     * @param requested the FQN as the caller wrote it
+     * @return the normalized address
+     */
+    static String resaveAddress(String requested)
+    {
+        String normalized = MetadataTypeUtils.normalizeFqn(requested.trim());
+        String[] parts = normalized.split("\\.", -1); //$NON-NLS-1$
+        if ((parts.length == 3 || parts.length == 5) && FormElementWriter.isFormToken(parts[parts.length - 1]))
+        {
+            String form = normalized.substring(0, normalized.lastIndexOf('.'));
+            if (FormElementWriter.parseFormPath(form) != null)
+            {
+                return form;
+            }
+        }
+        return normalized;
+    }
+
+    /** One requested object resolved to the top object whose file a re-save rewrites. */
+    private record ResaveTarget(String requested, String fqn, String file, EClass eClass)
+    {
+    }
+
+    /**
+     * The scoped re-save: resolves every requested FQN in one read, refuses the call when any of them
+     * names no file-backed top object, then force-exports exactly the resolved ones. The model is not
+     * changed; the export barrier waits for the files and {@link #settleResaved} reports them.
+     */
+    private String resave(ProjectContext ctx, IBmModel bmModel, List<String> objects, boolean revalidate)
+    {
+        IProjectFileSystemSupportProvider provider = ServiceAccess.get(IProjectFileSystemSupportProvider.class);
+        IProjectFileSystemSupport fs = provider == null ? null : provider.getProjectFileSystemSupport(ctx.project);
+        List<String> refusals = new ArrayList<>();
+        List<ResaveTarget> targets = BmTransactions.read(bmModel, "ResolveResaveTargets", (tx, pm) -> //$NON-NLS-1$
+        {
+            MetadataScope scope = transactionScope(ctx, tx);
+            List<ResaveTarget> resolved = new ArrayList<>();
+            for (String requested : objects)
+            {
+                Object target = resolveResaveTarget(scope, tx::getTopObjectByFqn, requested);
+                if (target instanceof IBmObject top)
+                {
+                    IFile file = fs == null ? null : fs.getFile(top);
+                    resolved.add(new ResaveTarget(requested, top.bmGetFqn(),
+                        file == null ? null : file.getProjectRelativePath().toPortableString(), top.eClass()));
+                }
+                else
+                {
+                    refusals.add((String)target);
+                }
+            }
+            return resolved;
+        });
+        // Checked outside the read: the first check creates EDT's exporters.
+        for (ResaveTarget target : targets)
+        {
+            if (!MetadataTopObjects.hasExporter(target.eClass()))
+            {
+                refusals.add("'" + target.requested() + "' has no file of its own in EDT."); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+        }
+        if (!refusals.isEmpty())
+        {
+            return ToolResult.error("Nothing was re-saved. " + String.join(" ", refusals) //$NON-NLS-1$ //$NON-NLS-2$
+                + " Address a top object as 'Type.Name' and a form as 'Type.Object.Form.Name' or " //$NON-NLS-1$
+                + "'CommonForm.Name'; get_metadata_objects lists what exists.").toJson(); //$NON-NLS-1$
+        }
+
+        File root = projectRootOf(ctx.project);
+        LinkedHashSet<String> fqns = new LinkedHashSet<>();
+        List<Map<String, Object>> rows = new ArrayList<>();
+        for (ResaveTarget target : targets)
+        {
+            fqns.add(target.fqn());
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("object", target.requested()); //$NON-NLS-1$
+            row.put("fqn", target.fqn()); //$NON-NLS-1$
+            if (target.file() != null)
+            {
+                row.put("file", target.file()); //$NON-NLS-1$
+                File onDisk = root == null ? null : new File(root, target.file());
+                boolean existed = onDisk != null && onDisk.isFile();
+                row.put(PREVIOUS_MODIFIED, Long.valueOf(existed ? onDisk.lastModified() : -1L));
+                row.put(PREVIOUS_SIZE, Long.valueOf(existed ? onDisk.length() : -1L));
+            }
+            rows.add(row);
+        }
+        boolean exported = BmTransactions.forceExportToDisk(ctx.project, new ArrayList<>(fqns));
+        if (!exported)
+        {
+            return ToolResult.error("EDT did not accept the re-save of " + fqns //$NON-NLS-1$
+                + " (services unavailable or the export threw); nothing was written. Wait until the " //$NON-NLS-1$
+                + "project reports ready and retry.").toJson(); //$NON-NLS-1$
+        }
+        return ToolResult.success()
+            .put(McpKeys.PROJECT_NAME, ctx.project.getName())
+            .put("objectsExported", fqns.size()) //$NON-NLS-1$
+            .put(KEY_REVALIDATE, revalidate)
+            .put(KEY_RESAVED, rows)
+            .put(McpKeys.MESSAGE, "Queued " + fqns.size() + " object(s) for re-save from the model.") //$NON-NLS-1$ //$NON-NLS-2$
+            .toJson();
+    }
+
+    /**
+     * Resolves one requested FQN inside the caller's read: a form to its content form, a top object to
+     * itself, and any other BM top object FQN verbatim (e.g. a content-form FQN in English).
+     *
+     * @param scope the project's resolution root
+     * @param topByFqn the transaction's top-object lookup
+     * @param requested the FQN as the caller wrote it
+     * @return the {@link IBmObject} to export, or the refusal sentence naming the bad value
+     */
+    static Object resolveResaveTarget(MetadataScope scope, java.util.function.Function<String, IBmObject> topByFqn,
+        String requested)
+    {
+        if (requested == null || requested.isBlank())
+        {
+            return "An empty FQN was given."; //$NON-NLS-1$
+        }
+        String address = resaveAddress(requested);
+        MdObject object = MetadataNodeResolver.resolveAddress(scope, address, true);
+        EObject top = null;
+        if (object != null && FormElementWriter.parseFormPath(address) != null)
+        {
+            top = FormElementWriter.getEditableForm(object);
+            if (top == null)
+            {
+                return "'" + requested + "' is a form with no managed content model to re-save."; //$NON-NLS-1$ //$NON-NLS-2$
+            }
+        }
+        else if (object instanceof IBmObject bm && !bm.bmIsTop())
+        {
+            String ownerFqn = ownerFqnOf(bm);
+            return "'" + requested + "' is stored inside its owner's file; re-save the owner" //$NON-NLS-1$ //$NON-NLS-2$
+                + (ownerFqn == null ? "" : " '" + ownerFqn + "'") + " instead."; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        }
+        else if (object != null)
+        {
+            top = object;
+        }
+        else
+        {
+            top = topByFqn.apply(MetadataTypeUtils.toCanonicalEnglishFqn(requested.trim()));
+        }
+        // A content form and a top-object lookup are top objects by construction.
+        if (!(top instanceof IBmObject bmTop))
+        {
+            return "'" + requested + "' names no object in this project."; //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return bmTop;
+    }
+
+    /** The FQN of the top object holding {@code member}, or {@code null} when it cannot be named. */
+    private static String ownerFqnOf(IBmObject member)
+    {
+        try
+        {
+            IBmObject owner = member.bmGetTopObject();
+            return owner == null || owner == member ? null : owner.bmGetFqn();
+        }
+        catch (RuntimeException e)
+        {
+            return null;
+        }
+    }
+
+    /**
+     * Re-reads the re-saved files after the export barrier, replaces each row's transit fields with
+     * its {@code state} and returns the summary sentence.
+     *
+     * @param rows the {@link #KEY_RESAVED} rows, updated in place
+     * @param projectRoot the project directory, or {@code null} when unknown
+     * @return the result message
+     */
+    static String settleResaved(JsonArray rows, File projectRoot)
+    {
+        int written = 0;
+        int unchanged = 0;
+        int missing = 0;
+        int unknown = 0;
+        for (JsonElement element : rows)
+        {
+            JsonObject row = element.getAsJsonObject();
+            JsonElement file = row.get("file"); //$NON-NLS-1$
+            JsonElement modified = row.remove(PREVIOUS_MODIFIED);
+            JsonElement size = row.remove(PREVIOUS_SIZE);
+            String state;
+            if (file == null || projectRoot == null || modified == null || size == null)
+            {
+                state = "unknown"; //$NON-NLS-1$
+                unknown++;
+            }
+            else
+            {
+                state = fileState(new File(projectRoot, file.getAsString()), modified.getAsLong(), size.getAsLong());
+                switch (state)
+                {
+                    case "written" -> written++; //$NON-NLS-1$
+                    case "unchanged" -> unchanged++; //$NON-NLS-1$
+                    default -> missing++;
+                }
+            }
+            row.addProperty("state", state); //$NON-NLS-1$
+        }
+        StringBuilder sb = new StringBuilder("Re-saved ").append(rows.size()) //$NON-NLS-1$
+            .append(" object(s) from the model: ").append(written).append(" file(s) rewritten"); //$NON-NLS-1$ //$NON-NLS-2$
+        if (unchanged > 0)
+        {
+            sb.append(", ").append(unchanged) //$NON-NLS-1$
+                .append(" not proven rewritten (same time stamp and size)"); //$NON-NLS-1$
+        }
+        if (missing > 0)
+        {
+            sb.append(", ").append(missing).append(" missing after the export"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        if (unknown > 0)
+        {
+            sb.append(", ").append(unknown).append(" with no known file"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return sb.append('.').toString();
+    }
+
+    /**
+     * The on-disk outcome of a re-save for one file.
+     *
+     * @param file the file
+     * @param previousModified its modification time before the export, {@code -1} when it did not exist
+     * @param previousSize its size before the export, {@code -1} when it did not exist
+     * @return {@code written}, {@code unchanged} or {@code missing}
+     */
+    static String fileState(File file, long previousModified, long previousSize)
+    {
+        if (!file.isFile())
+        {
+            return "missing"; //$NON-NLS-1$
+        }
+        return previousModified < 0 || file.lastModified() > previousModified || file.length() != previousSize
+            ? "written" : "unchanged"; //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     /**

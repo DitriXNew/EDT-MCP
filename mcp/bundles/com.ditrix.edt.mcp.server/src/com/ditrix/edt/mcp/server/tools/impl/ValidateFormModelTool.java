@@ -20,6 +20,7 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.FormModelValidator;
+import com.ditrix.edt.mcp.server.utils.FormSourceCheck;
 import com.ditrix.edt.mcp.server.utils.FormValidationException;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
@@ -53,8 +54,9 @@ public class ValidateFormModelTool implements IMcpTool
             + "that names no attribute, a button with no command, a handler with no procedure or no " //$NON-NLS-1$
             + "event, a missing type-specific extInfo, more than one main attribute. Computed from " //$NON-NLS-1$
             + "the model NOW, so it is current right after an edit - unlike get_project_errors, " //$NON-NLS-1$
-            + "which reports what EDT validated earlier. Changes nothing. Full parameters and " //$NON-NLS-1$
-            + "examples: call get_tool_guide('validate_form_model')."; //$NON-NLS-1$
+            + "which reports what EDT validated earlier. Also re-reads its Form.form and reports what " //$NON-NLS-1$
+            + "EDT silently dropped on load, such as an unknown enum literal. Changes nothing. Full " //$NON-NLS-1$
+            + "parameters and examples: call get_tool_guide('validate_form_model')."; //$NON-NLS-1$
     }
 
     @Override
@@ -82,7 +84,8 @@ public class ValidateFormModelTool implements IMcpTool
                 "One entry per defect: 'severity' (error/warning), 'code' (a stable kebab-case " //$NON-NLS-1$
                     + "identifier), 'path' (where it is, e.g. 'Field.Description' or '(form)' - usually " //$NON-NLS-1$
                     + "an address other form tools accept, but a duplicate name and the kinds with no " //$NON-NLS-1$
-                    + "address of their own are locations only) and 'message'.") //$NON-NLS-1$
+                    + "address of their own are locations only; a source-file finding is " //$NON-NLS-1$
+                    + "'<file>:<line>:<column>') and 'message'.") //$NON-NLS-1$
             .build();
     }
 
@@ -129,10 +132,16 @@ public class ValidateFormModelTool implements IMcpTool
         try
         {
             final Version version = platformVersionOf(resolved);
-            List<FormModelValidator.Finding> findings = FormElementWriter.readEditableForm(
-                FormElementWriter.resolveForEdit(resolved.project(), resolved.scope(), formPath, notFound), "ValidateFormModel", //$NON-NLS-1$
-                (formModel, tx) -> FormModelValidator.validate(formModel,
-                    container -> FormElementWriter.availableEventNames(container, version)));
+            FormElementWriter.FormEditContext context =
+                FormElementWriter.resolveForEdit(resolved.project(), resolved.scope(), formPath, notFound);
+            ModelRead read = FormElementWriter.readEditableForm(context, "ValidateFormModel", //$NON-NLS-1$
+                (formModel, tx) -> new ModelRead(FormModelValidator.validate(formModel,
+                    container -> FormElementWriter.availableEventNames(container, version)),
+                    FormSourceCheck.sourcePathOf(context.project, formModel)));
+            List<FormModelValidator.Finding> findings = new ArrayList<>(read.findings());
+            // The file is parsed after the model read, in a read of its own, as EDT's importer does.
+            findings.addAll(FormModelValidator.sourceFindings(
+                FormSourceCheck.check(context.project, context.bmModel, read.sourceFile(), version)));
             return report(normFqn, findings);
         }
         catch (Exception e)
@@ -147,6 +156,11 @@ public class ValidateFormModelTool implements IMcpTool
             return ToolResult.error("Could not validate '" + normFqn + "': " //$NON-NLS-1$ //$NON-NLS-2$
                 + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage())).toJson();
         }
+    }
+
+    /** The model findings and the form's source file, taken in one read. */
+    private record ModelRead(List<FormModelValidator.Finding> findings, String sourceFile)
+    {
     }
 
     /** The project's platform version, or {@code null} when it cannot be resolved. */
@@ -180,8 +194,8 @@ public class ValidateFormModelTool implements IMcpTool
             .put("warnings", findings.size() - errors) //$NON-NLS-1$
             .put("findings", rows) //$NON-NLS-1$
             .put(McpKeys.MESSAGE, errors == 0
-                ? "No structural errors in " + normFqn + "." //$NON-NLS-1$ //$NON-NLS-2$
-                : errors + " structural error(s) in " + normFqn + ".") //$NON-NLS-1$ //$NON-NLS-2$
+                ? "No errors in " + normFqn + "." //$NON-NLS-1$ //$NON-NLS-2$
+                : errors + " error(s) in " + normFqn + ".") //$NON-NLS-1$ //$NON-NLS-2$
             .toJson();
     }
 }

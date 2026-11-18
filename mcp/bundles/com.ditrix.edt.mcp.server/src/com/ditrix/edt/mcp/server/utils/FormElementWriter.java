@@ -4485,7 +4485,7 @@ public final class FormElementWriter
     }
 
     /** A comma-separated list of an EEnum attribute's literals (for the unknown-literal advisory). */
-    private static String enumLiteralsOf(EObject owner, String featureName)
+    static String enumLiteralsOf(EObject owner, String featureName)
     {
         EStructuralFeature feature = owner.eClass().getEStructuralFeature(featureName);
         if (!(feature instanceof EAttribute)
