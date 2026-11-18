@@ -73,7 +73,7 @@ A completed model commit returns all operation indexes under `applied`, `committ
 
 An export-barrier refusal preserves `applied`, `committed`, `items`, `remainingState` and `safeRetry`, adds `mutationCommitted:true`, and reports `persistenceState:"unconfirmed"`. Never repeat applied operations blindly. An opaque commit/export exception carries `mutationOutcomeUnknown:true` and `possibleApplied` (or the stronger known `mutationCommitted:true` and `applied`); inspect every target and disk before retrying. External cross-references retain the existing single-member semantics: they are not rewritten; deleting a command may leave a surviving button's reference broken. Re-check form details and markers.
 
-Mixed create/modify/delete transactions, non-atomic continuation and cross-container atomicity remain future scope. Build-progress diagnostics belong to #336 and are not changed here.
+Mixed create/modify/delete transactions, non-atomic continuation and cross-container atomicity remain future scope.
 
 The 420s default uses the same evidence as rename: both operations run through the same md-refactoring/UI-thread machinery, whose worst measured legitimate completion took 301s while EDT waited out its own derived-data timeout. Lowering the bound risks reporting failure while a healthy destructive cascade continues in the background; raise it only when the workspace legitimately needs longer.
 

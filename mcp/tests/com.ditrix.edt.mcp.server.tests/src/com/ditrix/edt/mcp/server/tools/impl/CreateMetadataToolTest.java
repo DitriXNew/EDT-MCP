@@ -319,7 +319,7 @@ public class CreateMetadataToolTest
     {
         // generateContent is a form-object-create flag, defaults false -> must not be required.
         String schema = new CreateMetadataTool().getInputSchema();
-        int requiredIdx = schema.indexOf("\"required\""); //$NON-NLS-1$
+        int requiredIdx = schema.lastIndexOf("\"required\""); // top-level, after nested ones //$NON-NLS-1$
         assertTrue(requiredIdx >= 0);
         String tail = schema.substring(requiredIdx);
         assertFalse("generateContent must not be required (defaults false)", //$NON-NLS-1$
@@ -349,7 +349,7 @@ public class CreateMetadataToolTest
         String block = nextIdx > idx ? schema.substring(idx, nextIdx) : schema.substring(idx);
         assertTrue("objectFields must be an array", block.contains("\"array\"")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("objectFields items must be strings", block.contains("\"string\"")); //$NON-NLS-1$ //$NON-NLS-2$
-        int requiredIdx = schema.indexOf("\"required\""); //$NON-NLS-1$
+        int requiredIdx = schema.lastIndexOf("\"required\""); // top-level, after nested ones //$NON-NLS-1$
         assertTrue(requiredIdx >= 0);
         assertFalse("objectFields must not be required (defaults to the per-kind fields)", //$NON-NLS-1$
             schema.substring(requiredIdx).contains("\"objectFields\"")); //$NON-NLS-1$
@@ -360,7 +360,7 @@ public class CreateMetadataToolTest
     {
         // setAsDefault is a form-object-create flag, defaults false -> must not be required.
         String schema = new CreateMetadataTool().getInputSchema();
-        int requiredIdx = schema.indexOf("\"required\""); //$NON-NLS-1$
+        int requiredIdx = schema.lastIndexOf("\"required\""); // top-level, after nested ones //$NON-NLS-1$
         assertTrue(requiredIdx >= 0);
         String tail = schema.substring(requiredIdx);
         assertFalse("setAsDefault must not be required (defaults false)", //$NON-NLS-1$
@@ -393,7 +393,7 @@ public class CreateMetadataToolTest
         assertTrue("callType enum must offer Before", block.contains("\"Before\"")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("callType enum must offer After", block.contains("\"After\"")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("callType enum must offer Instead", block.contains("\"Instead\"")); //$NON-NLS-1$ //$NON-NLS-2$
-        int requiredIdx = schema.indexOf("\"required\""); //$NON-NLS-1$
+        int requiredIdx = schema.lastIndexOf("\"required\""); // top-level, after nested ones //$NON-NLS-1$
         assertTrue(requiredIdx >= 0);
         assertFalse("callType must not be required (defaults to a base handler)", //$NON-NLS-1$
             schema.substring(requiredIdx).contains("\"callType\"")); //$NON-NLS-1$
@@ -432,7 +432,7 @@ public class CreateMetadataToolTest
     public void testNormalizeYoIsOptional()
     {
         String schema = new CreateMetadataTool().getInputSchema();
-        int requiredIdx = schema.indexOf("\"required\""); //$NON-NLS-1$
+        int requiredIdx = schema.lastIndexOf("\"required\""); // top-level, after nested ones //$NON-NLS-1$
         assertTrue(requiredIdx >= 0);
         String tail = schema.substring(requiredIdx);
         assertFalse("normalizeYo must not be required (defaults true)", //$NON-NLS-1$
@@ -443,7 +443,7 @@ public class CreateMetadataToolTest
     public void testNewOptionalParametersAreNotRequired()
     {
         String schema = new CreateMetadataTool().getInputSchema();
-        int requiredIdx = schema.indexOf("\"required\""); //$NON-NLS-1$
+        int requiredIdx = schema.lastIndexOf("\"required\""); // top-level, after nested ones //$NON-NLS-1$
         assertTrue(requiredIdx >= 0);
         String tail = schema.substring(requiredIdx);
         assertFalse("commonModuleKind must not be required", tail.contains("\"commonModuleKind\"")); //$NON-NLS-1$ //$NON-NLS-2$
@@ -581,7 +581,7 @@ public class CreateMetadataToolTest
     public void testRequiredParameters()
     {
         String schema = new CreateMetadataTool().getInputSchema();
-        int requiredIdx = schema.indexOf("\"required\""); //$NON-NLS-1$
+        int requiredIdx = schema.lastIndexOf("\"required\""); // top-level, after nested ones //$NON-NLS-1$
         assertTrue("schema must declare a required array", requiredIdx >= 0); //$NON-NLS-1$
         String tail = schema.substring(requiredIdx);
         assertTrue("projectName must be required", tail.contains("\"projectName\"")); //$NON-NLS-1$ //$NON-NLS-2$
@@ -592,7 +592,7 @@ public class CreateMetadataToolTest
     public void testOptionalParametersNotRequired()
     {
         String schema = new CreateMetadataTool().getInputSchema();
-        int requiredIdx = schema.indexOf("\"required\""); //$NON-NLS-1$
+        int requiredIdx = schema.lastIndexOf("\"required\""); // top-level, after nested ones //$NON-NLS-1$
         assertTrue(requiredIdx >= 0);
         String tail = schema.substring(requiredIdx);
         assertFalse("properties must not be required", tail.contains("\"properties\"")); //$NON-NLS-1$ //$NON-NLS-2$

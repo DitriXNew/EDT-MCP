@@ -27,7 +27,7 @@ def test_required_target_is_explicit():
 @e2e_test(tool="infobase_extensions", kind="action")
 def test_action_and_write_validation_precede_platform_access():
     cases = [
-        ({"action": "replace"}, "Allowed values: list, install, update, uninstall"),
+        ({"action": "replace"}, "action must be one of 'list', 'install', 'update', 'uninstall'"),
         ({"action": "install"}, "extensionName is required"),
         ({"action": "update", "extensionName": "Runtime"}, "cfePath is required"),
         ({"action": "uninstall"}, "extensionName is required"),

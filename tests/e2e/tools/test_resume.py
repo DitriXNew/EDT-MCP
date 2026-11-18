@@ -283,33 +283,14 @@ def test_negative_threadid_falls_through_to_no_session_fallback():
 
 
 @e2e_test(tool="resume", kind="read")
-def test_non_numeric_threadid_coerced_to_default_and_falls_through():
-    """A non-numeric threadId ("abc") -> extractLongArgument can't parse it ->
-    returns the -1L default -> NOT > 0 -> the no-arg fallback sentinel.
-
-    This proves the tool degrades GRACEFULLY on a wrong-typed threadId: it returns
-    the clean no-session fallback instead of throwing a NumberFormatException /
-    leaking a stack trace (assert_error_quality also fails the test if the message
-    looks like a raw stack trace). A broken parser that propagated the exception
-    would fail here.
-    """
+def test_non_numeric_threadid_is_refused():
+    """A non-numeric threadId ("abc") is refused by the argument check, naming the value,
+    instead of being read as the default and resuming whatever single session is found."""
     r = call("resume", {"threadId": "abc"})
     err = assert_error(r, "non-numeric threadId")
-    assert_contains(
-        err, "no single active debug",
-        "a non-numeric threadId is coerced to the default and hits the fallback",
-    )
-    assert_not_contains(
-        err, "stale threadId",
-        "a non-numeric threadId must not be looked up as a real thread id",
-    )
-    assert_error_quality(
-        err,
-        names=["threadId", "applicationId"],
-        suggests=["debug_status"],
-        ctx="non-numeric threadId coerced to default and degraded cleanly to the fallback",
-    )
-    assert_no_diff("a debug action tool must not touch the project on disk")
+    assert_error_quality(err, names=["threadId", "abc"], suggests=["must be an integer", "nothing was run"],
+                         ctx="the argument check refuses the value instead of using the default")
+    assert_no_diff("a refused call must not touch the project on disk")
 
 
 @e2e_test(tool="resume", kind="read")

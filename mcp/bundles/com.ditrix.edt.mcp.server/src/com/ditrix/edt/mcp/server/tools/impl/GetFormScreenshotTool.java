@@ -98,7 +98,7 @@ public class GetFormScreenshotTool implements IMcpTool
         String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
         String formPath = JsonUtils.extractStringArgument(params, KEY_FORM_PATH);
         String showElement = JsonUtils.extractStringArgument(params, KEY_SHOW_ELEMENT);
-        boolean refresh = "true".equalsIgnoreCase(JsonUtils.extractStringArgument(params, "refresh")); //$NON-NLS-1$ //$NON-NLS-2$
+        boolean refresh = JsonUtils.extractBooleanArgument(params, "refresh", false); //$NON-NLS-1$
 
         if (formPath != null && !formPath.isEmpty()
             && (projectName == null || projectName.isEmpty()))

@@ -29,7 +29,8 @@ def test_missing_project_errors_clearly():
 def test_invalid_action_is_rejected_before_platform_access():
     r = call("infobase_sessions", {"projectName": PROJECT, "action": "disconnect"})
     e = assert_error(r, "invalid action")
-    assert_contains(e, "Allowed values: list, terminate", "closed action vocabulary")
+    assert_error_quality(e, names=["action", "disconnect"], suggests=["'list', 'terminate'"],
+                         ctx="closed action vocabulary")
     assert_no_diff("invalid session action must not touch project sources")
 
 

@@ -55,6 +55,19 @@ public class BusinessProcessRouteMapTool extends AbstractMetadataWriteTool
 {
     public static final String NAME = "business_process_route_map";
 
+    // Items stay open: RouteMapRequest refuses deferred and unknown keys with its own message; the
+    // point type and the ports keep the reader's tailored refusals, so they carry no enum or bounds.
+    private static final String POINTS_SCHEMA = "{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{"
+        + "\"name\":{\"type\":\"string\"},\"type\":{\"type\":\"string\"},\"title\":{\"type\":\"string\"},"
+        + "\"x\":{\"type\":\"integer\"},\"y\":{\"type\":\"integer\"},\"width\":{\"type\":\"integer\"},"
+        + "\"height\":{\"type\":\"integer\"},\"taskDescription\":{\"type\":\"string\"},"
+        + "\"group\":{\"type\":\"boolean\"}},\"required\":[\"name\",\"type\"]}}";
+
+    private static final String CONNECTIONS_SCHEMA = "{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{"
+        + "\"from\":{\"type\":\"string\"},\"to\":{\"type\":\"string\"},\"name\":{\"type\":\"string\"},"
+        + "\"title\":{\"type\":\"string\"},\"fromPort\":{\"type\":\"integer\"},\"toPort\":{\"type\":\"integer\"},"
+        + "\"branch\":{\"type\":\"string\",\"enum\":[\"true\",\"false\"]}},\"required\":[\"from\",\"to\"]}}";
+
     @FunctionalInterface
     interface ConsentRequester
     {
@@ -103,10 +116,10 @@ public class BusinessProcessRouteMapTool extends AbstractMetadataWriteTool
                 + "the object name is a programmatic identifier, not a synonym.", true)
             .enumProperty("action", "Operation; replace needs points and connections, even when empty.",
                 true, "get", "replace", "remove")
-            .objectArrayProperty("points", "Replacement points: {name,type,title?,x?,y?,width?,height?,"
-                + "taskDescription?,group?}; omitted sizes use platform defaults.")
-            .objectArrayProperty("connections", "Replacement connections: {from,to,name?,title?,fromPort?,"
-                + "toPort?,branch?}; Condition sources require branch='true' or 'false'.")
+            .property("points", "Replacement points: {name,type,title?,x?,y?,width?,height?,"
+                + "taskDescription?,group?}; omitted sizes use platform defaults.", POINTS_SCHEMA)
+            .property("connections", "Replacement connections: {from,to,name?,title?,fromPort?,"
+                + "toPort?,branch?}; Condition sources require branch='true' or 'false'.", CONNECTIONS_SCHEMA)
             .stringProperty("language", "Configuration language code for point and connection titles.")
             .build();
     }

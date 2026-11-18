@@ -1063,7 +1063,6 @@ public final class BackgroundJobs implements AutoCloseable
      * Publishes a failure for any Throwable raised by the work, including after commit.
      * Errors are logged and rethrown after recording the failure; existing terminal and
      * cancellation decisions remain authoritative.
-     * This rule must migrate to the MCP Tasks store when #338 lands.
      */
     private static void runWork(JobRecord record, long timeoutMs, JobWork work)
     {

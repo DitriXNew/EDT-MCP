@@ -59,7 +59,8 @@ def test_missing_project_errors_clearly():
 def test_unknown_action_lists_the_vocabulary():
     r = call(TOOL, {"projectName": PROJECT, "action": "kill"})
     e = assert_error(r, "unknown action")
-    assert_contains(e, "Allowed values: status, stop, start, restart", "closed action vocabulary")
+    assert_contains(e, "action must be one of 'status', 'stop', 'start', 'restart'; got the string 'kill'",
+                    "closed action vocabulary")
     assert_no_diff("an unknown action must not touch project sources")
 
 

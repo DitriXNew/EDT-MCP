@@ -68,11 +68,10 @@ public class GetFormLayoutSnapshotTool implements IMcpTool
     {
         String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
         String formPath = JsonUtils.extractStringArgument(params, "formPath"); //$NON-NLS-1$
-        String refreshParam = JsonUtils.extractStringArgument(params, "refresh"); //$NON-NLS-1$
         String rawMode = JsonUtils.extractStringArgument(params, "mode"); //$NON-NLS-1$
         String showElement = JsonUtils.extractStringArgument(params, KEY_SHOW_ELEMENT);
         String mode = service.normalizeMode(rawMode);
-        boolean refresh = refreshParam == null || "true".equalsIgnoreCase(refreshParam); //$NON-NLS-1$
+        boolean refresh = JsonUtils.extractBooleanArgument(params, "refresh", true); //$NON-NLS-1$
 
         if (mode == null)
         {

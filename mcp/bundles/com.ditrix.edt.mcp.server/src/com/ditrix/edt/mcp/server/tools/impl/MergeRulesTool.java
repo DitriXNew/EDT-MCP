@@ -180,6 +180,12 @@ public class MergeRulesTool implements IMcpTool
      */
     private static final List<String> REFUSED_RULES = List.of("CustomMerge", "MergeUsingExternalTool"); //$NON-NLS-1$ //$NON-NLS-2$
 
+    /** Input schema of {@link #KEY_DECISIONS}; {@code path} has no minItems because [] is the whole configuration. */
+    private static final String DECISIONS_SCHEMA = "{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{" //$NON-NLS-1$
+        + "\"path\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}," //$NON-NLS-1$
+        + "\"rule\":{\"type\":\"string\",\"enum\":[\"" + String.join("\",\"", AUTHORABLE_RULES) + "\"]}}," //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        + "\"required\":[\"path\",\"rule\"],\"additionalProperties\":false}}"; //$NON-NLS-1$
+
     /**
      * The parameters {@link #MODE_WRITE} takes and {@link #MODE_READ} does not, in the order
      * {@link #getInputSchema()} declares them - so a call carrying several of them is told about
@@ -330,7 +336,7 @@ public class MergeRulesTool implements IMcpTool
                 "write: an existing rules file to start from, so its decisions and payload are " //$NON-NLS-1$
                     + "kept and yours are merged in (optional; '.xml' or '.zip', case-" //$NON-NLS-1$
                     + "insensitive - it is only read, never handed to EDT).") //$NON-NLS-1$
-            .objectArrayProperty(KEY_DECISIONS,
+            .property(KEY_DECISIONS,
                 "write: the decisions to record, as [{path, rule}]. 'path' is the key chain below " //$NON-NLS-1$
                     + "the root - [] = the whole configuration, ['commonModules'] = a whole " //$NON-NLS-1$
                     + "collection (the EMF feature name; a metadata type token in either " //$NON-NLS-1$
@@ -338,7 +344,8 @@ public class MergeRulesTool implements IMcpTool
                     + "it), ['commonModules','Main:Main:Main'] = one " //$NON-NLS-1$
                     + "object, keyed by its name on the main, other and ancestor sides joined by " //$NON-NLS-1$
                     + "':' with 'NONE' for a side that has no such object. 'rule' is one of " //$NON-NLS-1$
-                    + "GetFromOther, DoNotMerge, MergePrioritizingMain, MergePrioritizingOther.") //$NON-NLS-1$
+                    + "GetFromOther, DoNotMerge, MergePrioritizingMain, MergePrioritizingOther.", //$NON-NLS-1$
+                DECISIONS_SCHEMA)
             .stringProperty(KEY_COMPARISON_ID,
                 "write: validate every rule against this live comparison before writing " //$NON-NLS-1$
                     + "(optional). Validation needs a FINISHED tree: naming a comparison whose " //$NON-NLS-1$

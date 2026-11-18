@@ -10,6 +10,7 @@ import java.util.Set;
 
 import com._1c.g5.v8.dt.bp.scheme.model.GraphicalSchemeItemType;
 import com._1c.g5.v8.dt.common.StringUtils;
+import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.utils.Refusals;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
@@ -23,6 +24,19 @@ public record RouteMapRequest(List<PointPlan> points, List<ConnectionPlan> conne
     public static final String DEFERRED = "Switch, SubBusinessProcess, Decoration, event handlers, "
         + "addressing-attribute values, line points/segments, colours and fonts are deferred to a follow-up. "
         + "Use the EDT route-map editor for these features.";
+
+    /** The members a points entry writes. */
+    public static final List<String> POINT_KEYS = List.of("name", "type", "title", "x", "y", "width", "height",
+        "taskDescription", "group");
+
+    /** The members a connections entry writes. */
+    public static final List<String> CONNECTION_KEYS = List.of("from", "to", "name", "title", "fromPort", "toPort",
+        "branch");
+
+    /** Read-only members of a get entry, ignored so a read entry can be sent back. */
+    private static final List<String> POINT_READ_ONLY = List.of("id", "truePort", "falsePort");
+
+    private static final List<String> CONNECTION_READ_ONLY = List.of("id", "fromId", "toId");
 
     public RouteMapRequest
     {
@@ -40,10 +54,12 @@ public record RouteMapRequest(List<PointPlan> points, List<ConnectionPlan> conne
     {
         List<PointPlan> pointPlans = new ArrayList<>();
         Map<String, PointPlan> byName = new LinkedHashMap<>();
-        for (JsonElement value : array(points, "points"))
+        JsonArray pointArray = array(points, "points");
+        for (int index = 0; index < pointArray.size(); index++)
         {
-            JsonObject point = object(value, "points entry");
+            JsonObject point = object(pointArray.get(index), "points entry");
             rejectDeferred(point);
+            rejectUnknown(point, "points[" + index + "]", POINT_KEYS, POINT_READ_ONLY);
             String name = identifier(point, "name", "point");
             String kind = text(point, "type", true);
             GraphicalSchemeItemType type = GraphicalSchemeItemType.get(kind);
@@ -71,10 +87,12 @@ public record RouteMapRequest(List<PointPlan> points, List<ConnectionPlan> conne
         List<ConnectionPlan> connectionPlans = new ArrayList<>();
         Set<String> branches = new HashSet<>();
         Set<String> names = new HashSet<>(byName.keySet());
-        for (JsonElement value : array(connections, "connections"))
+        JsonArray connectionArray = array(connections, "connections");
+        for (int index = 0; index < connectionArray.size(); index++)
         {
-            JsonObject connection = object(value, "connections entry");
+            JsonObject connection = object(connectionArray.get(index), "connections entry");
             rejectDeferred(connection);
+            rejectUnknown(connection, "connections[" + index + "]", CONNECTION_KEYS, CONNECTION_READ_ONLY);
             String from = text(connection, "from", true);
             String to = text(connection, "to", true);
             String label = "Connection '" + from + " -> " + to + "'";
@@ -142,6 +160,21 @@ public record RouteMapRequest(List<PointPlan> points, List<ConnectionPlan> conne
                 throw Refusals.argument("Cannot write '" + key + "'. "
                     + (key.equals("bounds") ? "Pass x, y, width and height directly on the point. " : "") + DEFERRED);
             }
+        }
+    }
+
+    /** Runs after {@link #rejectDeferred}, so a deferred key keeps its follow-up message. */
+    private static void rejectUnknown(JsonObject value, String where, List<String> written, List<String> readOnly)
+    {
+        List<String> accepted = new ArrayList<>(written);
+        accepted.addAll(readOnly);
+        JsonObject present = new JsonObject();
+        value.entrySet().stream().filter(member -> !member.getValue().isJsonNull())
+            .forEach(member -> present.add(member.getKey(), member.getValue()));
+        String unknown = JsonUtils.unknownMemberError(present, where, accepted.toArray(String[]::new));
+        if (unknown != null)
+        {
+            throw Refusals.argument(unknown);
         }
     }
 

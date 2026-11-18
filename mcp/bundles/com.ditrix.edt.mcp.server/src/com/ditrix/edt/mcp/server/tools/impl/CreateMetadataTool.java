@@ -229,7 +229,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 "1-based position in the destination collection (1 = first); omit to append; values " //$NON-NLS-1$
                 + "outside 1..size+1 are refused. Not for form / XDTO content, predefined data or " //$NON-NLS-1$
                 + "standalone external roots.") //$NON-NLS-1$
-            .objectArrayProperty("properties", //$NON-NLS-1$
+            .property("properties", //$NON-NLS-1$
                 "Properties to apply at creation, as [{name, value, language?}]. Most kinds: only " //$NON-NLS-1$
                 + "'synonym' (with a 'language' code) and 'comment'; other names are rejected (use " //$NON-NLS-1$
                 + "modify_metadata). A Subsystem also takes what modify_metadata sets on it, e.g. " //$NON-NLS-1$
@@ -247,7 +247,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 + "'type', {types:[...]} like an attribute's 'type') on a ChartOfCharacteristicTypes; " //$NON-NLS-1$
                 + "'accountType' / 'offBalance' / 'order' / 'accountingFlags' / 'extDimensionTypes' on a " //$NON-NLS-1$
                 + "ChartOfAccounts; 'base' / 'displaced' / 'leading' / 'actionPeriodIsBase' on a " //$NON-NLS-1$
-                + "ChartOfCalculationTypes.") //$NON-NLS-1$
+                + "ChartOfCalculationTypes.", MetadataPropertyApplier.PROPERTY_ENTRIES_SCHEMA) //$NON-NLS-1$
             .booleanProperty(KEY_EXPECTED_NOT_EXISTS,
                 "Optional stale-intent guard (default false): assert the node does not yet exist for " //$NON-NLS-1$
                 + "a sharper precondition error. A real duplicate is always rejected anyway.") //$NON-NLS-1$

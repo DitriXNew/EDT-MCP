@@ -884,6 +884,45 @@ public class SpreadsheetTemplateWriterTest
         assertTrue(r.error, r.error.contains("'autoWidthCalculation', which is a COLUMN property")); //$NON-NLS-1$
     }
 
+    @Test
+    public void testUnknownEntryKeysAreRefusedNamingTheAcceptedOnes()
+    {
+        String[][] cases = {
+            { "{\"cells\":[{\"row\":0,\"col\":0,\"text\":\"A\",\"italic\":true}]}", //$NON-NLS-1$
+                "Unknown member 'italic' in cells[0]. Accepted members: row, col, replace, text, parameter, " //$NON-NLS-1$
+                    + "bold, fontSize, hAlign, vAlign, wrap, textOrientation, autoIndent, autoMarkIncomplete." },
+            { "{\"columnWidths\":[{\"col\":0,\"widht\":40}]}", //$NON-NLS-1$
+                "Unknown member 'widht' in columnWidths[0]. Accepted members: col, width, autoWidthCalculation, " //$NON-NLS-1$
+                    + "widthWeightFactor." },
+            { "{\"rowHeights\":[{\"row\":0,\"height\":20,\"bold\":true}]}", //$NON-NLS-1$
+                "Unknown member 'bold' in rowHeights[0]. Accepted members: row, height." } }; //$NON-NLS-1$
+        for (String[] c : cases)
+        {
+            SpreadsheetDocument doc = newDocument();
+            Result r = SpreadsheetTemplateWriter.apply(doc, json(c[0]));
+            assertTrue(c[0], r.hasError());
+            assertTrue(r.error, r.error.contains(c[1]));
+        }
+    }
+
+    @Test
+    public void testAMisplacedKeyKeepsItsTailoredMessageOverTheUnknownKeyOne()
+    {
+        Result r = SpreadsheetTemplateWriter.apply(newDocument(),
+            json("{\"rowHeights\":[{\"row\":0,\"height\":20,\"autoIndent\":5}]}")); //$NON-NLS-1$
+        assertTrue(r.hasError());
+        assertTrue(r.error, r.error.contains("'autoIndent', which is a CELL format property")); //$NON-NLS-1$
+        assertFalse(r.error, r.error.contains("Unknown member")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnUnknownKeyWithANullValueCountsAsOmitted()
+    {
+        Result r = SpreadsheetTemplateWriter.apply(newDocument(),
+            json("{\"cells\":[{\"row\":0,\"col\":0,\"text\":\"A\",\"italic\":null}]}")); //$NON-NLS-1$
+        assertFalse(r.error, r.hasError());
+    }
+
     // ==================== grid extent (declared sheet bounds) ====================
 
     @Test
