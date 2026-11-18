@@ -86,8 +86,14 @@ Configure these in the Tools tab by selecting a tool that has configurable param
 For clients that work better with a small initial tool surface, the server can expose
 only a **core** toolset up front and reveal the rest on demand — shrinking the
 always-loaded `tools/list`. This is **off by default** (the full list is exposed,
-unchanged); turn it on with the **Progressive disclosure** preference (or the
-`EDT_MCP_PROGRESSIVE_DISCLOSURE=true` environment variable for headless/CI runs).
+unchanged); turn it on with the **Progressive disclosure** checkbox on the **Tools** tab.
+The `EDT_MCP_PROGRESSIVE_DISCLOSURE` environment variable, when set, overrides the checkbox
+for that EDT session. A headless EDT always lists every enabled tool.
+
+It pays off only for a client that re-reads `tools/list` on `notifications/tools/list_changed`
+and does not already load tools on demand. Codex and Claude Code already load MCP tools on demand,
+so it saves them nothing. Codex without its `mcp_tool_list_changed` feature never sees the
+revealed tools.
 
 When on, only the `core` toolset (navigation, source read, metadata discovery, and the
 two management tools) appears in `tools/list`. To use more tools:

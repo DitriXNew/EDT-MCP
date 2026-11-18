@@ -360,83 +360,52 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 + "an all-root-only batch falls back to the content root. Type / kind tokens may " //$NON-NLS-1$
                 + "be English or Russian; the Name parts are the programmatic Name.", true) //$NON-NLS-1$
             .objectArrayProperty("properties", //$NON-NLS-1$
-                "Properties to set, as [{name, value, language?}]. 'name' is " //$NON-NLS-1$
-                + "the property name (e.g. 'comment', 'synonym', 'indexing'); 'value' is the new " //$NON-NLS-1$
-                + "value; 'language' is the code for a synonym (default: config default). Required " //$NON-NLS-1$
-                + "unless the FQN is a Role and a role payload (rights / templates / roleProperties) " //$NON-NLS-1$
-                + "is given.") //$NON-NLS-1$
+                "Properties to set, as [{name, value, language?}], e.g. {name: 'synonym', value: " //$NON-NLS-1$
+                + "'Products', language: 'en'}; 'language' defaults to the configuration's default " //$NON-NLS-1$
+                + "language. Required unless a Role payload (rights / templates / roleProperties) is given.") //$NON-NLS-1$
             .objectArrayProperty(KEY_RIGHTS,
-                "ROLE only: per-object access rights to set, as [{object, right, value?, rls?, " //$NON-NLS-1$
-                + "rlsFields?}]. 'object' is a metadata FQN (e.g. 'Catalog.Products' or the Russian " //$NON-NLS-1$
-                + "'Справочник.Товары'); 'right' is a bilingual right name (e.g. 'Read'/'Чтение', " //$NON-NLS-1$
-                + "'Update'/'Изменение'); 'value' is 'set' (allowed, default) / 'unset' (denied) / " //$NON-NLS-1$
-                + "'provided' (default/inherited), or a boolean (true=set, false=unset). 'rls' is an " //$NON-NLS-1$
-                + "optional Row-Level-Security restriction condition (1C query text); 'rlsFields' is " //$NON-NLS-1$
-                + "an optional array of field names the RLS applies to (omit / empty = whole-object " //$NON-NLS-1$
-                + "restriction).") //$NON-NLS-1$
+                "ROLE only: [{object, right, value?, rls?, rlsFields?}]. object = metadata FQN; right = " //$NON-NLS-1$
+                + "right name, English or Russian ('Read' / 'Чтение'); value = 'set' (default) / 'unset' / " //$NON-NLS-1$
+                + "'provided' (inherited) or a boolean; rls = restriction condition (1C query text); " //$NON-NLS-1$
+                + "rlsFields = the fields it applies to (omit for the whole object).") //$NON-NLS-1$
             .objectArrayProperty(KEY_TEMPLATES,
-                "ROLE only: RLS restriction templates to change, as [{op?, name, condition?}]. 'op' is " //$NON-NLS-1$
-                + "'add' (default) / 'edit' / 'delete'; 'name' is the template name; 'condition' is " //$NON-NLS-1$
-                + "the RLS restriction text (required for add/edit).") //$NON-NLS-1$
+                "ROLE only: RLS templates as [{op?, name, condition?}]; op = 'add' (default) / 'edit' / " //$NON-NLS-1$
+                + "'delete'; condition is required for add and edit.") //$NON-NLS-1$
             .objectProperty(KEY_ROLE_PROPERTIES,
-                "ROLE only: the three role properties, as optional booleans {setForNewObjects, " //$NON-NLS-1$
-                + "setForAttributesByDefault, independentRightsOfChildObjects}. Only supplied flags " //$NON-NLS-1$
-                + "are changed.") //$NON-NLS-1$
+                "ROLE only: {setForNewObjects?, setForAttributesByDefault?, " //$NON-NLS-1$
+                + "independentRightsOfChildObjects?} booleans; omitted flags are unchanged.") //$NON-NLS-1$
             .objectArrayProperty(KEY_CONTENT,
-                "Members to attach / detach in a structured membership list, dispatched by the FQN's " //$NON-NLS-1$
-                + "kind (a COMMON ATTRIBUTE's owners, an EXCHANGE PLAN's content objects, a CATALOG's " //$NON-NLS-1$
-                + "owners, a DOCUMENT's register records, a SUBSYSTEM's content objects), as [{op?, " //$NON-NLS-1$
-                + "metadata, use?, autoRecord?}]. 'op' " //$NON-NLS-1$
-                + "is 'add' (default) / 'remove'; 'metadata' is the member object FQN (e.g. " //$NON-NLS-1$
-                + "'Catalog.Products' or the Russian 'Справочник.Товары' - only the type token is " //$NON-NLS-1$
-                + "bilingual). 'use' (CommonAttribute only, add only, default 'Use') is 'Use' / " //$NON-NLS-1$
-                + "'DontUse' / 'Auto'; 'autoRecord' (ExchangePlan only, add only) is 'Allow' / 'Deny' " //$NON-NLS-1$
-                + "(omit to keep the platform default). A Catalog owner, a Document register record and " //$NON-NLS-1$
-                + "a Subsystem content object are plain references (no flag). Adding is idempotent (a " //$NON-NLS-1$
-                + "re-added CommonAttribute owner " //$NON-NLS-1$
-                + "has its 'use' updated, a re-added ExchangePlan object its 'autoRecord'; a re-added " //$NON-NLS-1$
-                + "plain reference is a no-op). Valid only for a CommonAttribute / ExchangePlan / " //$NON-NLS-1$
-                + "Catalog / Document / Subsystem FQN (a Subsystem FQN may be nested); cannot be " //$NON-NLS-1$
-                + "combined with 'properties'.") //$NON-NLS-1$
+                "Membership list to change, as [{op?, metadata, use?, autoRecord?}]: the owners of a " //$NON-NLS-1$
+                + "CommonAttribute or Catalog, the content of an ExchangePlan or a (nested) Subsystem, the " //$NON-NLS-1$
+                + "register records of a Document. op = 'add' (default, idempotent) / 'remove'; metadata = " //$NON-NLS-1$
+                + "member FQN, e.g. 'Catalog.Products'; use = 'Use' (default) / 'DontUse' / 'Auto', " //$NON-NLS-1$
+                + "CommonAttribute only; autoRecord = 'Allow' / 'Deny', ExchangePlan only. Not with " //$NON-NLS-1$
+                + "'properties'.") //$NON-NLS-1$
             .objectArrayProperty(KEY_COMMANDS,
-                "COMMAND INTERFACE FQN only ('Subsystem.<Name>.CommandInterface' or " //$NON-NLS-1$
-                + "'Configuration.MainSectionCommandInterface'): section commands to change, as [{command, " //$NON-NLS-1$
-                + "visible?, roles?, group?, after? | before?}], applied in order and validated as one " //$NON-NLS-1$
-                + "batch. 'command' is the command FQN, e.g. 'Report.Sales.StandardCommand.Open' or " //$NON-NLS-1$
-                + "'CommonCommand.Print'; 'visible' the common visibility; 'roles' [{role: 'Role.<Name>', " //$NON-NLS-1$
-                + "visible: true | false | 'default' (drops the override)}]; 'group' the panel group to move it " //$NON-NLS-1$
-                + "to, e.g. 'NavigationPanelImportant', 'ActionsPanelReports' or 'CommandGroup.<Name>'; " //$NON-NLS-1$
-                + "'after' / 'before' another command of that group to order it by. get_metadata_details " //$NON-NLS-1$
-                + "on the same FQN lists the section's commands and groups. Cannot be combined with other " //$NON-NLS-1$
-                + "payloads.") //$NON-NLS-1$
+                "Only for 'Subsystem.<Name>.CommandInterface' or " //$NON-NLS-1$
+                + "'Configuration.MainSectionCommandInterface': [{command, visible?, roles?, group?, after? " //$NON-NLS-1$
+                + "| before?}], applied in order as one batch. command = command FQN, e.g. " //$NON-NLS-1$
+                + "'CommonCommand.Print'; roles = [{role: 'Role.<Name>', visible: true | false | " //$NON-NLS-1$
+                + "'default'}]; group = panel group, e.g. 'NavigationPanelImportant' or " //$NON-NLS-1$
+                + "'CommandGroup.<Name>'; after / before = a command of that group. get_metadata_details on " //$NON-NLS-1$
+                + "the same FQN lists them. Not with other payloads.") //$NON-NLS-1$
             .objectProperty(KEY_TEMPLATE,
-                "TEMPLATE FQN only: TextDocument takes {text, mode?, oldText?, expectedHash?, expectedSource?, " //$NON-NLS-1$
-                + "overwrite?}. Default searchReplace requires one literal oldText match; append adds exact text; " //$NON-NLS-1$
-                + "only replace creates a missing file. Replacing an existing file requires expectedHash or " //$NON-NLS-1$
-                + "expectedSource from get_metadata_details, or overwrite=true. SpreadsheetDocument takes the content to " //$NON-NLS-1$
-                + "author, instead of 'properties'. An object with any of: 'cells' [{row, col (both " //$NON-NLS-1$
-                + "0-based, required), replace?, text? OR parameter? (a print-time parameter name), bold?, " //$NON-NLS-1$
-                + "fontSize?, hAlign? ('Left'/'Center'/'Right'/'Auto'/'Width'), vAlign? " //$NON-NLS-1$
-                + "('Top'/'Center'/'Bottom'), wrap? (true word-wraps the cell text), textOrientation? " //$NON-NLS-1$
-                + "(rotation in the platform's own unit - TENTHS of a degree, 0..3600, so 90 degrees is " //$NON-NLS-1$
-                + "900), autoIndent? (0..100), autoMarkIncomplete?}]; 'merges' " //$NON-NLS-1$
-                + "[{fromRow, fromCol, toRow, toCol}] merged cell ranges; 'areas' [{name, fromRow, " //$NON-NLS-1$
-                + "fromCol, toRow, toCol}] named areas (for ПолучитьОбласть / Вывести output); " //$NON-NLS-1$
-                + "'columnWidths' [{col, width?, autoWidthCalculation?, widthWeightFactor? - the share " //$NON-NLS-1$
-                + "of the free width, only alongside autoWidthCalculation:true}] and 'rowHeights' " //$NON-NLS-1$
-                + "[{row, height}] column / row sizes. Cells MERGE: omitted properties keep their values; " //$NON-NLS-1$
-                + "replace:true resets omitted cell content and formatting. Non-empty text/parameter clears " //$NON-NLS-1$
-                + "the other; an empty string clears the named content. bold:false disables bold; wrap:false " //$NON-NLS-1$
-                + "unsets placement (inherit). Null counts as omitted; 0/false on numeric/boolean format " //$NON-NLS-1$
-                + "keys overrides inheritance. Other cells, merges and areas are kept. Valid " //$NON-NLS-1$
-                + "only for the matching template type; cannot be combined with 'properties' / " //$NON-NLS-1$
-                + "'content' / a Role payload.") //$NON-NLS-1$
+                "TEMPLATE FQN only, instead of 'properties'. TextDocument: {text, mode?, oldText?, " //$NON-NLS-1$
+                + "expectedHash?, expectedSource?, overwrite?}; mode = 'searchReplace' (default, needs " //$NON-NLS-1$
+                + "exactly one literal oldText match) / 'append' / 'replace' (the only mode that creates a " //$NON-NLS-1$
+                + "missing file); replacing an existing file needs expectedHash or expectedSource from " //$NON-NLS-1$
+                + "get_metadata_details, or overwrite=true. SpreadsheetDocument: {cells?, merges?, areas?, " //$NON-NLS-1$
+                + "columnWidths?, rowHeights?}. cells [{row, col (both 0-based, required), replace?, text? " //$NON-NLS-1$
+                + "| parameter?, bold?, fontSize?, hAlign? (Left/Center/Right/Auto/Width), vAlign? " //$NON-NLS-1$
+                + "(Top/Center/Bottom), wrap?, textOrientation? (TENTHS of a degree: 90 degrees = 900), " //$NON-NLS-1$
+                + "autoIndent? (0..100), autoMarkIncomplete?}]; merges [{fromRow, fromCol, toRow, toCol}]; " //$NON-NLS-1$
+                + "areas [{name, fromRow, fromCol, toRow, toCol}]; columnWidths [{col, width?, " //$NON-NLS-1$
+                + "autoWidthCalculation?, widthWeightFactor?}]; rowHeights [{row, height}]. Omitted cell " //$NON-NLS-1$
+                + "keys keep their values; replace:true resets them; other cells, merges and areas are " //$NON-NLS-1$
+                + "kept.") //$NON-NLS-1$
             .booleanProperty("normalizeYo", //$NON-NLS-1$
-                "Normalize the Russian letter 'ё'->'е' / 'Ё'->'Е' in localized-string values (synonym / " //$NON-NLS-1$
-                + "title) and in the 'comment' property (default true). Matches the 1C standard " //$NON-NLS-1$
-                + "mdo-ru-name-unallowed-letter. Other free-text strings can be identifier-like (e.g. " //$NON-NLS-1$
-                + "XDTOPackage.namespace is a URI) and always keep the supplied value. Set false to " //$NON-NLS-1$
-                + "keep 'ё' exactly as supplied everywhere.") //$NON-NLS-1$
+                "Default true: stores 'ё' / 'Ё' as 'е' / 'Е' in synonyms, titles and 'comment' (other " //$NON-NLS-1$
+                + "strings stay as supplied); false keeps 'ё'.") //$NON-NLS-1$
             .build();
     }
 

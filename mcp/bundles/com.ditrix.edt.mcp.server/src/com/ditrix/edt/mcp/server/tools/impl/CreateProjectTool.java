@@ -284,24 +284,18 @@ public class CreateProjectTool implements IMcpTool
                     + "Default: extension -> '<baseProjectName>.<name>'; " //$NON-NLS-1$
                     + "configuration/externalObjects -> 'name'.") //$NON-NLS-1$
             .stringProperty(KEY_VERSION,
-                "Platform version string, e.g. '8.3.27' (configuration and externalObjects only; " //$NON-NLS-1$
-                    + "for extension: REJECTED — version is always inherited from the base configuration). " //$NON-NLS-1$
-                    + "Default: base runtime when bound, otherwise Version.LATEST; must match the base.") //$NON-NLS-1$
+                "Platform version, e.g. '8.3.27'; default: the base runtime when bound, else the latest; " //$NON-NLS-1$
+                + "must match the base. REJECTED for an extension (inherited from the base).") //$NON-NLS-1$
             .stringProperty(KEY_EXTERNAL_OBJECT,
-                "Optional root to seed for projectKind=externalObjects: " //$NON-NLS-1$
-                    + "'ExternalDataProcessor.<Name>' or 'ExternalReport.<Name>'; the TYPE token may be " //$NON-NLS-1$
-                    + "English or Russian and is not normalized; Name is a programmatic identifier whose " //$NON-NLS-1$
-                    + "'ё'/'Ё' is normalized by default according to normalizeYo. Omit for an empty project; " //$NON-NLS-1$
-                    + "REJECTED for other project kinds.") //$NON-NLS-1$
+                "externalObjects only (REJECTED otherwise): the root to seed, " //$NON-NLS-1$
+                + "'ExternalDataProcessor.<Name>' or 'ExternalReport.<Name>' (type token English or " //$NON-NLS-1$
+                + "Russian); omit for an empty project.") //$NON-NLS-1$
             .booleanProperty(KEY_NORMALIZE_YO,
-                "Normalize the Russian letter 'ё'->'е' / 'Ё'->'Е' in the seeded externalObject root " //$NON-NLS-1$
-                    + "NAME (default true). 'ё' in a Name is flagged by the 1C standard " //$NON-NLS-1$
-                    + "mdo-ru-name-unallowed-letter, so normalizing on input stores a compliant name. " //$NON-NLS-1$
-                    + "Set false to keep 'ё' exactly as supplied. The TYPE token is never normalized.") //$NON-NLS-1$
+                "Default true: stores 'ё' / 'Ё' as 'е' / 'Е' in the seeded externalObject root Name " //$NON-NLS-1$
+                + "(never in the type token); false keeps 'ё'.") //$NON-NLS-1$
             .stringProperty("baseProjectName", //$NON-NLS-1$
-                "Name of the BASE configuration EDT project (required for extension; " //$NON-NLS-1$
-                    + "optional for externalObjects; REJECTED for configuration). " //$NON-NLS-1$
-                    + "Must be an existing, open V8 configuration project. Use list_projects to find it.") //$NON-NLS-1$
+                "The open BASE configuration project (see list_projects): required for extension, " //$NON-NLS-1$
+                + "optional for externalObjects, REJECTED for configuration.") //$NON-NLS-1$
             .stringProperty(KEY_PREFIX,
                 "NamePrefix for the extension (extension only; REJECTED for other kinds). " //$NON-NLS-1$
                     + "Default: empty string. The wizard generates a value like 'Ext1_'; " //$NON-NLS-1$
@@ -323,10 +317,8 @@ public class CreateProjectTool implements IMcpTool
                 "Optional free-text comment set on the Configuration " //$NON-NLS-1$
                     + "(configuration and extension only; REJECTED for externalObjects).") //$NON-NLS-1$
             .enumProperty(KEY_SCRIPT_VARIANT,
-                "Script variant (Russian or English). " //$NON-NLS-1$
-                    + "configuration: sets the Configuration scriptVariant and default Language code (default Russian). " //$NON-NLS-1$
-                    + "externalObjects: applied post-create via setScriptVariant (non-fatal on failure). " //$NON-NLS-1$
-                    + "extension: REJECTED — scriptVariant is always inherited from the base configuration.", //$NON-NLS-1$
+                "configuration: the script variant and default language (default Russian); " //$NON-NLS-1$
+                + "externalObjects: applied after creation; extension: REJECTED (inherited from the base).", //$NON-NLS-1$
                 SCRIPT_RUSSIAN, SCRIPT_ENGLISH)
             .booleanProperty(PREF_STANDARD_CHECKS,
                 "Enable 1C:Standards BSL checks for the new project (default true). " //$NON-NLS-1$

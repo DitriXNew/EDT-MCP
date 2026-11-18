@@ -54,6 +54,13 @@ public enum ExternalInfobaseChangesPolicy
     /** The default policy applied when a caller passes no {@code externalInfobaseChanges}. */
     public static final ExternalInfobaseChangesPolicy DEFAULT = OVERRIDE;
 
+    /** The {@code externalInfobaseChanges} parameter description, shared by every tool that updates the DB. */
+    public static final String PARAMETER_DESCRIPTION =
+        "Answer to EDT's 'Infobase configuration changes' modal when the infobase was changed " //$NON-NLS-1$
+        + "outside EDT (Designer, ibcmd): 'override' (default, also when omitted, so the call never " //$NON-NLS-1$
+        + "blocks) overwrites the infobase with the project and DISCARDS the external changes; " //$NON-NLS-1$
+        + "'import' pulls them into the PROJECT sources; 'cancel' aborts with an error."; //$NON-NLS-1$
+
     private final String wireValue;
 
     ExternalInfobaseChangesPolicy(String wireValue)

@@ -47,6 +47,7 @@ import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.preferences.ToolParameterSettings.ParameterDef;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.tools.McpToolRegistry;
+import com.ditrix.edt.mcp.server.tools.Toolsets;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
 
 /**
@@ -70,6 +71,11 @@ public class ToolsTab
 
     /** Local copy of destructive-allowed tools for editing (committed on performOk) */
     private final Set<String> destructiveAllowedTools;
+
+    /** Pending progressive-disclosure choice (committed on performOk) */
+    private boolean progressiveDisclosure;
+
+    private Button progressiveDisclosureCheck;
 
     /** Flag to avoid recursion when updating check states (SWT is single-threaded) */
     private boolean updatingChecks = false;
@@ -98,6 +104,7 @@ public class ToolsTab
         disabledTools = new HashSet<>(ToolSettingsService.getInstance().getStoredDisabledTools());
         selectedPreset = ToolPreset.fromId(ToolSettingsService.getInstance().getStoredPresetId());
         destructiveAllowedTools = new HashSet<>(ConsentSettingsService.getInstance().getAllowedTools());
+        progressiveDisclosure = ToolSettingsService.getInstance().getStoredProgressiveDisclosure();
         loadAllValues();
     }
 
@@ -126,6 +133,7 @@ public class ToolsTab
         createPresetBar(left);
         createToolTree(left);
         createCountLabel(left);
+        createProgressiveDisclosureControl(left);
 
         // Right side: detail panel (description + settings)
         createDetailPanel(sash);
@@ -404,6 +412,29 @@ public class ToolsTab
         countLabel = new Label(parent, SWT.NONE);
         countLabel.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
         updateCountLabel();
+    }
+
+    private void createProgressiveDisclosureControl(Composite parent)
+    {
+        progressiveDisclosureCheck = new Button(parent, SWT.CHECK);
+        progressiveDisclosureCheck.setText(Messages.ToolsTab_ProgressiveDisclosure);
+        progressiveDisclosureCheck.setToolTipText(Messages.ToolsTab_ProgressiveDisclosure_Tooltip);
+        progressiveDisclosureCheck.setSelection(progressiveDisclosure);
+        progressiveDisclosureCheck.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+        progressiveDisclosureCheck.addSelectionListener(new SelectionAdapter()
+        {
+            @Override
+            public void widgetSelected(SelectionEvent e)
+            {
+                progressiveDisclosure = progressiveDisclosureCheck.getSelection();
+            }
+        });
+        if (Toolsets.hasProgressiveDisclosureOverride())
+        {
+            Label note = new Label(parent, SWT.WRAP);
+            note.setText(Messages.ToolsTab_ProgressiveDisclosure_EnvOverride);
+            note.setLayoutData(new GridData(SWT.FILL, SWT.TOP, true, false));
+        }
     }
 
     private void createDetailPanel(Composite parent)
@@ -716,6 +747,7 @@ public class ToolsTab
         savePendingSpinnerValues();
         ToolSettingsService.getInstance().setDisabledTools(disabledTools, selectedPreset);
         ConsentSettingsService.getInstance().setAllowedTools(destructiveAllowedTools);
+        ToolSettingsService.getInstance().setProgressiveDisclosure(progressiveDisclosure);
         for (Map.Entry<String, Integer> entry : pendingValues.entrySet())
         {
             String key = entry.getKey();
@@ -740,6 +772,11 @@ public class ToolsTab
         disabledTools.addAll(
             ToolSettingsService.parseDisabledTools(PreferenceConstants.DEFAULT_DISABLED_TOOLS));
         destructiveAllowedTools.clear();
+        progressiveDisclosure = PreferenceConstants.DEFAULT_PROGRESSIVE_DISCLOSURE;
+        if (progressiveDisclosureCheck != null)
+        {
+            progressiveDisclosureCheck.setSelection(progressiveDisclosure);
+        }
         refreshCheckStates();
         selectSelectedPreset();
         updateCountLabel();

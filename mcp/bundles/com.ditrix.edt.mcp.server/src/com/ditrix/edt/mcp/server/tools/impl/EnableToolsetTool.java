@@ -131,7 +131,8 @@ public class EnableToolsetTool implements IMcpTool
             result.put("note", pd //$NON-NLS-1$
                 ? "Re-request tools/list to see the updated tool set." //$NON-NLS-1$
                 : "Progressive disclosure is OFF, so tools/list already exposes every tool; this change " //$NON-NLS-1$
-                    + "takes effect only once you enable it in EDT Preferences → MCP Server."); //$NON-NLS-1$
+                    + "takes effect only if the user turns it on: Window → Preferences → MCP Server → Tools " //$NON-NLS-1$
+                    + "→ Progressive disclosure."); //$NON-NLS-1$
 
             // The visible tool set changed under progressive disclosure -> push
             // notifications/tools/list_changed to any open SSE stream. Clients without

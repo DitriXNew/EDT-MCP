@@ -926,18 +926,14 @@ public class LaunchToolTest
             .getAsJsonObject().getAsJsonObject("properties") //$NON-NLS-1$
             .getAsJsonObject("updateBeforeLaunch"); //$NON-NLS-1$
         String description = update.get("description").getAsString(); //$NON-NLS-1$
-        assertEquals("Default true: silently apply the configuration->DB update before launching " //$NON-NLS-1$
-            + "so no 'Update database?' modal blocks the call (even on a Russian-locale EDT the " //$NON-NLS-1$
-            + "dialog is auto-confirmed); false skips the update and the platform may then show " //$NON-NLS-1$
-            + "that modal; call edt_dialog to inspect and explicitly answer it. Ignored for Attach. " //$NON-NLS-1$
-            + "A standalone-server configuration performs no " //$NON-NLS-1$
-            + "database update on this route even when omitted, and an explicit true is refused " //$NON-NLS-1$
-            + "- run update_database separately.", description); //$NON-NLS-1$
+        assertEquals("Default true: runs the configuration->DB update before launching and " //$NON-NLS-1$
+            + "auto-confirms its modal; false skips it, and the platform may then show that modal " //$NON-NLS-1$
+            + "(answer it with edt_dialog). Ignored for Attach. A standalone server never updates on this route and " //$NON-NLS-1$
+            + "refuses true: run update_database.", description); //$NON-NLS-1$
         // Both halves must survive: the standalone carve-out, and the modal behaviour it
         // must not displace - dropping either one silently changes what a caller is told.
-        assertTrue(description.contains("apply the configuration->DB update before launching")); //$NON-NLS-1$
-        assertTrue(description.contains(
-            "performs no database update on this route even when omitted")); //$NON-NLS-1$
+        assertTrue(description.contains("runs the configuration->DB update before launching")); //$NON-NLS-1$
+        assertTrue(description.contains("A standalone server never updates on this route")); //$NON-NLS-1$
 
         String guide = new LaunchTool().getGuide();
         String contract = "For a named standalone-server launch configuration, no database " //$NON-NLS-1$
