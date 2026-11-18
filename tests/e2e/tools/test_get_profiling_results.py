@@ -69,10 +69,10 @@ def test_profiling_fixture_summary_paging_and_compare():
 @e2e_test(tool='get_profiling_results', kind='read')
 def test_profiling_validation_and_unknown_measurement():
     for arguments, bad, hint in [
-        ({'mode': 'export'}, 'export', 'Use one of'),
-        ({'mode': 'import'}, 'import', 'Use one of'),
-        ({'mode': 'bogus'}, 'bogus', 'Use one of'),
-        ({'responseFormat': 'bogus'}, 'bogus', 'Use one of'),
+        ({'mode': 'export'}, 'export', "must be one of 'summary'"),
+        ({'mode': 'import'}, 'import', "must be one of 'summary'"),
+        ({'mode': 'bogus'}, 'bogus', "must be one of 'summary'"),
+        ({'responseFormat': 'bogus'}, 'bogus', "must be one of 'concise', 'detailed'"),
         ({'minFrequency': 'abc'}, 'abc', 'integer'),
         ({'minFrequency': 1.5}, '1.5', 'integer'),
         ({'top': 0}, 'top', '1..20'),

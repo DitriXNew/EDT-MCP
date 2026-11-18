@@ -66,9 +66,9 @@ def test_profiling_import_reimport_and_exports():
 @e2e_test(tool='manage_profiling_results', kind='action')
 def test_profiling_exchange_validation():
     for arguments, bad, hint in [
-        ({'mode': 'bogus'}, 'bogus', 'Use one of'),
-        ({'mode': 'summary'}, 'summary', 'Use one of'),
-        ({'exportFormat': 'bogus'}, 'bogus', 'Use one of'),
+        ({'mode': 'bogus'}, 'bogus', "must be one of 'export', 'import'"),
+        ({'mode': 'summary'}, 'summary', "must be one of 'export', 'import'"),
+        ({'exportFormat': 'bogus'}, 'bogus', 'must be one of'),
         ({'mode': 'export', 'exportPath': 'relative.csv'}, 'relative.csv', 'absolute'),
         ({'mode': 'import', 'importPath': 'relative'}, 'relative', 'absolute'),
         ({'mode': 'export'}, 'exportPath', 'absolute'),

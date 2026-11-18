@@ -187,13 +187,14 @@ def test_normal_error_has_one_record_with_the_delivered_response():
 
 @e2e_test(tool="get_mcp_history", kind="read")
 def test_capped_error_remains_in_error_history_and_stats():
-    """A large echoed invalid status produces a capped error without touching the model."""
+    """A large echoed unknown tool name produces a capped error without touching the model."""
+    # An enum value is refused by the argument check with a shortened echo, so a free string is used.
     marker = "history_cap_" + uuid.uuid4().hex
     bad = marker + "x" * 25000
-    delivered = call("get_mcp_history", {"status": bad})
-    err = assert_error(delivered, "large rejected history status")
-    assert_error_quality(err, names=[bad], suggests=["all", "error", "ok"])
-    result = call("get_mcp_history", {"tool": "get_mcp_history", "status": "error",
+    delivered = call("get_tool_guide", {"toolName": bad})
+    err = assert_error(delivered, "large unknown tool name")
+    assert_error_quality(err, names=[bad], suggests=["tools/list"])
+    result = call("get_mcp_history", {"tool": "get_tool_guide", "status": "error",
                                      "limit": 10, "includeBodies": True, "includeStats": True})
     assert_ok(result, "read back the capped error")
     page = result.structured or {}
@@ -213,7 +214,7 @@ def test_capped_error_remains_in_error_history_and_stats():
     summary = (page.get("stats") or {}).get("summary") or {}
     if summary.get("totalErrors") != page.get("matched") or summary.get("totalErrors", 0) < 1:
         raise AssertionError("error-filtered history and statistics must include the capped error")
-    ok_page = call("get_mcp_history", {"tool": "get_mcp_history", "status": "ok",
+    ok_page = call("get_mcp_history", {"tool": "get_tool_guide", "status": "ok",
                                       "limit": 10, "includeBodies": True})
     assert_ok(ok_page, "the capped error must not be returned as ok")
     if any(marker in (rec.get("requestJson") or "")

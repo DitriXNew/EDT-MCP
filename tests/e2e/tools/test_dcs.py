@@ -165,7 +165,7 @@ def test_insert_position_preserves_quick_setting_order_and_existing_properties_6
     assert read.text.index("first665") < read.text.index("middle665") < read.text.index("last665"), read.text
     snapshot = tree_snapshot()
     refused = _write(address, "upsert", "filter", {"insertPosition": 0, "items": [item("bad665")]}, expectedHash=_hash(read))
-    assert_error_quality(assert_error(refused), names=["insertPosition", "0"], suggests=["1-based"])
+    assert_error_quality(assert_error(refused), names=["insertPosition", "0"], suggests=["must be at least 1"])
     assert_tree_unchanged(snapshot, "invalid position must leave model and disk unchanged")
 
 

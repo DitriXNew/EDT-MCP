@@ -83,6 +83,13 @@ public class ToolArgumentValidatorRegistryTest
         assertNull(call("get_comparison_node", "nodeId", "2.")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         assertNull(call("step", "kind", " OVER ")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         assertNull(call("create_infobase", "mode", "")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        // Left to the tool, whose own refusal is more specific than a type or enum message.
+        assertNull(call("clone_metadata_object", "transfer", //$NON-NLS-1$ //$NON-NLS-2$
+            List.of(Map.of("kind", "exchangePlan", "owner", "ExchangePlan.X")))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        assertNull(call("delete_metadata", "operations", //$NON-NLS-1$ //$NON-NLS-2$
+            List.of(Map.of("action", "create", "fqn", "Command.A")))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        assertNull(call("launch", "automatedTestingPort", "abc")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertNull(call("create_launch_config", "automatedTestingPort", true)); //$NON-NLS-1$ //$NON-NLS-2$
 
         assertNotNull(call("wait_for_break", "timeout", "abc")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         assertNotNull(call("step", "kind", "sideways")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$

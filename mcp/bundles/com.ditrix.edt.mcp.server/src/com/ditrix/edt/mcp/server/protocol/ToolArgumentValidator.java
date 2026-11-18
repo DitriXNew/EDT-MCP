@@ -57,6 +57,12 @@ public final class ToolArgumentValidator
         "list_projects.format", //$NON-NLS-1$
         "rename_metadata_object.disableIndices", //$NON-NLS-1$
         "project_checks.changes", //$NON-NLS-1$
+        // Checked by the tool itself with a more specific refusal than a type or enum message:
+        // per-operation reason codes, "reported only" relation kinds, the port range.
+        "delete_metadata.operations", //$NON-NLS-1$
+        "clone_metadata_object.transfer", //$NON-NLS-1$
+        "launch.automatedTestingPort", //$NON-NLS-1$
+        "create_launch_config.automatedTestingPort", //$NON-NLS-1$
         "ask_workmate.workmateArgs"); //$NON-NLS-1$
 
     /** Aliases a tool accepts besides its declared enum, lower-cased, by {@code tool.parameter}. */
