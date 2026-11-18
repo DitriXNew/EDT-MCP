@@ -165,7 +165,6 @@ public class GetContentAssistTool implements IMcpTool
         String lineStr = JsonUtils.extractStringArgument(params, "line"); //$NON-NLS-1$
         String columnStr = JsonUtils.extractStringArgument(params, KEY_COLUMN);
         String containsFilter = JsonUtils.extractStringArgument(params, "contains"); //$NON-NLS-1$
-        String extendedDocStr = JsonUtils.extractStringArgument(params, "extendedDocumentation"); //$NON-NLS-1$
         
         String err = JsonUtils.requireArgument(params, McpKeys.PROJECT_NAME);
         if (err != null)
@@ -207,7 +206,7 @@ public class GetContentAssistTool implements IMcpTool
         // (int) Double.parseDouble path, which silently truncated "5.7" to 5 while limit rejected it.
         int offset = Math.max(0, JsonUtils.extractIntArgument(params, "offset", 0)); //$NON-NLS-1$
         
-        boolean extendedDocumentation = "true".equalsIgnoreCase(extendedDocStr); //$NON-NLS-1$
+        boolean extendedDocumentation = JsonUtils.extractBooleanArgument(params, "extendedDocumentation", false); //$NON-NLS-1$
 
         ContentAssistRequest request =
             new ContentAssistRequest(line, column, limit, offset, containsFilter, extendedDocumentation);

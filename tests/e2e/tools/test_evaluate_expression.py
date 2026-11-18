@@ -219,19 +219,11 @@ def test_negative_frameref_is_rejected():
 
 
 @e2e_test(tool="evaluate_expression", kind="read")
-def test_non_numeric_frameref_is_coerced_to_default_and_rejected():
-    """A non-numeric frameRef ("abc") -> extractLongArgument can't parse it ->
-    returns the -1L default -> `frameRef <= 0` -> "frameRef is required".
-
-    This proves the tool degrades GRACEFULLY on a wrong-typed frameRef: it returns a
-    clean required-arg error instead of throwing a NumberFormatException / leaking a
-    stack trace (assert_error_quality also fails the test if the message looks like a
-    raw stack trace). A broken parser that propagated the exception would fail here.
-    """
+def test_non_numeric_frameref_is_refused():
+    """A non-numeric frameRef ("abc") is refused by the argument check, naming the value,
+    instead of being read as the default and reported as missing."""
     r = call("evaluate_expression", {"frameRef": "abc", "expression": "Add(1, 2)"})
     err = assert_error(r, "non-numeric frameRef")
-    assert_error_quality(err, names=["frameRef"], suggests=[],
-                         ctx="non-numeric frameRef coerced to default and rejected cleanly")
-    assert_contains(err, "required",
-                    "non-numeric frameRef must surface as a clean required-arg error")
-    assert_no_diff("an invalid call must not touch the project on disk")
+    assert_error_quality(err, names=["frameRef", "abc"], suggests=["must be an integer", "nothing was run"],
+                         ctx="the argument check refuses the value instead of using the default")
+    assert_no_diff("a refused call must not touch the project on disk")

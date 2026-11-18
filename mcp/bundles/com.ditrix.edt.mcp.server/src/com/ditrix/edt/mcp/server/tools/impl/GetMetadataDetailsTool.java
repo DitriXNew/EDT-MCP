@@ -191,7 +191,6 @@ public class GetMetadataDetailsTool implements IMcpTool
     {
         String projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
         List<String> objectFqns = JsonUtils.extractArrayArgument(params, "objectFqns"); //$NON-NLS-1$
-        String fullStr = JsonUtils.extractStringArgument(params, "full"); //$NON-NLS-1$
         boolean assignable = JsonUtils.extractBooleanArgument(params, "assignable", false); //$NON-NLS-1$
         String language = JsonUtils.extractStringArgument(params, "language"); //$NON-NLS-1$
         // Role-matrix pagination offset (0-based objects). Only the ROLE branch consumes it; a negative
@@ -213,7 +212,7 @@ public class GetMetadataDetailsTool implements IMcpTool
             return ToolResult.error("objectFqns is required (array of FQNs like 'Catalog.Products')").toJson(); //$NON-NLS-1$
         }
 
-        boolean full = "true".equalsIgnoreCase(fullStr); //$NON-NLS-1$
+        boolean full = JsonUtils.extractBooleanArgument(params, "full", false); //$NON-NLS-1$
         if (controlledMismatches && (full || assignable))
         {
             return ToolResult.error("controlledMismatches:true requires full and assignable to be false or omitted.").toJson();

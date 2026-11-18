@@ -301,20 +301,14 @@ def test_missing_modulepath_errors_and_names_alias():
 
 @e2e_test(tool="get_symbol_info", kind="read")
 def test_nonnumeric_line_errors():
-    """line is present but not a number -> Double.parseDouble throws ->
-    "Invalid line or column number". A bad-type guard distinct from out-of-range.
-    """
+    """line is present but not a number -> refused by the argument check, which names the
+    parameter and the value. A bad-type guard distinct from out-of-range."""
     r = call("get_symbol_info", {
         "projectName": PROJECT, "modulePath": CALC_MODULE,
         "line": "notanumber", "column": 14,
     })
     e = assert_error(r, "non-numeric line")
-    # The message names both offending params (line, column). It does not echo the
-    # bad literal, but "Invalid line or column number" is a clear, non-bare,
-    # actionable-enough diagnostic of WHAT was wrong.
-    # AUDIT: the message does not echo the offending value ("notanumber") nor say
-    # values must be 1-based positive integers; suggests=[] -> fix-card.
-    assert_error_quality(e, names=["Invalid line or column number"], suggests=[],
+    assert_error_quality(e, names=["line", "notanumber"], suggests=["must be an integer"],
                          ctx="non-numeric line is diagnosed clearly")
     assert_no_diff("an invalid call must not touch the project on disk")
 

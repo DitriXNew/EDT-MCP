@@ -296,7 +296,8 @@ public class BuildExternalObjectsTool implements IMcpTool
      */
     static boolean parseRecordBuildTime(String raw)
     {
-        return raw == null || raw.trim().isEmpty() || "true".equalsIgnoreCase(raw.trim()); //$NON-NLS-1$
+        return raw == null || raw.trim().isEmpty()
+            || JsonUtils.extractBooleanArgument(java.util.Map.of("v", raw), "v", false); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     /**

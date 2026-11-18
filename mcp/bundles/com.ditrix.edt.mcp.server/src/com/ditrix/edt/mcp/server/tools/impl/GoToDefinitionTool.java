@@ -158,9 +158,8 @@ public class GoToDefinitionTool implements IMcpTool
         String projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
         String symbol = JsonUtils.extractStringArgument(params, KEY_SYMBOL);
         String modulePath = JsonUtils.extractStringArgument(params, "modulePath"); //$NON-NLS-1$
-        String includeSourceStr = JsonUtils.extractStringArgument(params, "includeSource"); //$NON-NLS-1$
 
-        boolean includeSource = !"false".equalsIgnoreCase(includeSourceStr); //$NON-NLS-1$
+        boolean includeSource = JsonUtils.extractBooleanArgument(params, "includeSource", true); //$NON-NLS-1$
 
         // An unqualified method name (no dot) cannot be located without a module.
         if (symbol != null && !symbol.contains(".") //$NON-NLS-1$

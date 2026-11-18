@@ -117,12 +117,11 @@ def test_unknown_server_application_id_is_refused():
 
 
 @e2e_test(tool="debug_pause", kind="read")
-def test_non_numeric_timeout_falls_back_not_crash():
-    """timeout "abc" falls back to the default instead of leaking a parse exception; the
-    unknown attach:<name> id is still refused by name."""
-    app_id = "attach:NoSuchPause_e2e"
-    r = call("debug_pause", {"applicationId": app_id, "timeout": "abc"})
-    err = _assert_plain_error(r, _unknown_id_error(app_id), "non-numeric timeout")
-    if "NumberFormatException" in err:
-        raise AssertionError("a bad timeout must not leak a parse exception: %r" % err)
-    assert_no_diff("a debug tool must not touch project source")
+def test_non_numeric_timeout_is_refused():
+    """timeout "abc" is refused by the argument check, naming the value, instead of silently
+    falling back to the default."""
+    r = call("debug_pause", {"applicationId": "attach:NoSuchPause_e2e", "timeout": "abc"})
+    err = assert_error(r, "non-numeric timeout")
+    assert_error_quality(err, names=["timeout", "abc"], suggests=["must be an integer", "nothing was run"],
+                         ctx="the argument check refuses the value instead of using the default")
+    assert_no_diff("a refused call must not touch the project on disk")
