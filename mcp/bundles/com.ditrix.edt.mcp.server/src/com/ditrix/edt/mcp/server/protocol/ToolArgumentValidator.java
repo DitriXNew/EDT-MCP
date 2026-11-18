@@ -410,8 +410,11 @@ public final class ToolArgumentValidator
         {
             for (JsonElement name : required.getAsJsonArray())
             {
+                // JSON null fills a required member only where the member declares a null type.
                 JsonElement member = value.get(name.getAsString());
-                if (member == null || member.isJsonNull())
+                JsonObject declared = properties == null ? null : object(properties, name.getAsString());
+                boolean nullable = declared != null && types(declared).contains("null"); //$NON-NLS-1$
+                if (member == null || member.isJsonNull() && !nullable)
                 {
                     problems.add(path + "." + name.getAsString() + " is required."); //$NON-NLS-1$ //$NON-NLS-2$
                 }

@@ -312,6 +312,18 @@ public class PayloadMemberSchemaTest
         assertEquals(objectSchema.toString(), closed, additional != null && !additional.getAsBoolean());
     }
 
+    /** JSON-in-a-string keeps an explicit null, which resets a role override; an absent one is still missing. */
+    @Test
+    public void anExplicitNullRoleVisibilityResetsAndAMissingOneIsRefused()
+    {
+        Map<String, Object> reset = Map.of("commands", //$NON-NLS-1$
+            "[{\"command\":\"CommonCommand.Print\",\"roles\":[{\"role\":\"Role.A\",\"visible\":null}]}]"); //$NON-NLS-1$
+        assertNull(ToolArgumentValidator.validate("modify_metadata", //$NON-NLS-1$
+            tool("modify_metadata").getInputSchema(), reset)); //$NON-NLS-1$
+        assertRefused("modify_metadata", "{\"commands\":[{\"command\":\"CommonCommand.Print\"," //$NON-NLS-1$ //$NON-NLS-2$
+            + "\"roles\":[{\"role\":\"Role.A\"}]}]}", "commands[0].roles[0].visible is required."); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
     private String validate(String toolName, String argsJson)
     {
         @SuppressWarnings("unchecked")

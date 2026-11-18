@@ -318,7 +318,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         + "\"command\":{\"type\":\"string\"},\"visible\":{\"type\":\"boolean\"}," //$NON-NLS-1$
         + "\"roles\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{" //$NON-NLS-1$
         + "\"role\":{\"type\":\"string\"}," //$NON-NLS-1$
-        + "\"visible\":{\"type\":[\"boolean\",\"string\"],\"enum\":[true,false,\"default\"]}}," //$NON-NLS-1$
+        + "\"visible\":{\"type\":[\"boolean\",\"string\",\"null\"],\"enum\":[true,false,\"default\"]}}," //$NON-NLS-1$
         + "\"required\":[\"role\",\"visible\"],\"additionalProperties\":false}}," //$NON-NLS-1$
         + "\"group\":{\"type\":\"string\"},\"after\":{\"type\":\"string\"},\"before\":{\"type\":\"string\"}}," //$NON-NLS-1$
         + "\"required\":[\"command\"],\"additionalProperties\":false}}"; //$NON-NLS-1$
