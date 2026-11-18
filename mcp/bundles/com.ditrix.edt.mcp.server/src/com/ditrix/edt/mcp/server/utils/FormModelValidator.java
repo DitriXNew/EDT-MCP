@@ -115,6 +115,10 @@ public final class FormModelValidator
     public static final String CODE_FOREIGN_EVENT_REFERENCE = "foreign-event-reference"; //$NON-NLS-1$
     public static final String CODE_INVALID_FORM_VALUE_TYPE = FormValueTypePolicy.INVALID_TYPE;
     public static final String CODE_UNAVAILABLE_FORM_VALUE_TYPES = FormValueTypePolicy.UNAVAILABLE;
+    public static final String CODE_INVALID_SOURCE_VALUE = "invalid-source-value"; //$NON-NLS-1$
+    public static final String CODE_UNREADABLE_SOURCE_CONTENT = "unreadable-source-content"; //$NON-NLS-1$
+    public static final String CODE_SOURCE_LOAD_WARNING = "source-load-warning"; //$NON-NLS-1$
+    public static final String CODE_SOURCE_NOT_CHECKED = "source-not-checked"; //$NON-NLS-1$
 
     /**
      * Every finding code this engine can emit. A code is documented as STABLE for a caller to
@@ -131,7 +135,9 @@ public final class FormModelValidator
         CODE_STALE_EXT_INFO, CODE_MISSING_PRESENTATION_FLAG, CODE_EMPTY_COMMAND_ACTION,
         CODE_EXTENSION_HANDLER_WITHOUT_CALL_TYPE, CODE_INVALID_EXTENSION_CALL_TYPE,
         CODE_DUPLICATE_HANDLER_BINDING, CODE_EMPTY_HANDLER_NAME, CODE_UNRESOLVED_EVENT_REFERENCE,
-        CODE_FOREIGN_EVENT_REFERENCE, CODE_INVALID_FORM_VALUE_TYPE, CODE_UNAVAILABLE_FORM_VALUE_TYPES);
+        CODE_FOREIGN_EVENT_REFERENCE, CODE_INVALID_FORM_VALUE_TYPE, CODE_UNAVAILABLE_FORM_VALUE_TYPES,
+        CODE_INVALID_SOURCE_VALUE, CODE_UNREADABLE_SOURCE_CONTENT, CODE_SOURCE_LOAD_WARNING,
+        CODE_SOURCE_NOT_CHECKED);
 
     private FormModelValidator()
     {
@@ -208,6 +214,33 @@ public final class FormModelValidator
         checkHandlers(formModel, items, publication, findings);
         checkCommandActions(formModel, findings);
         checkValueTypes(formModel, findings);
+        return findings;
+    }
+
+    /**
+     * The findings for what EDT's parser reported on the form's source file ({@link FormSourceCheck}).
+     * The path of each is a file location, not a form address.
+     *
+     * @param problems the source-file problems
+     * @return the findings, in the same order
+     */
+    public static List<Finding> sourceFindings(List<FormSourceCheck.Problem> problems)
+    {
+        List<Finding> findings = new ArrayList<>();
+        for (FormSourceCheck.Problem problem : problems)
+        {
+            switch (problem.kind())
+            {
+                case INVALID_VALUE -> findings.add(new Finding(SEVERITY_ERROR, CODE_INVALID_SOURCE_VALUE,
+                    problem.location(), problem.message()));
+                case UNREADABLE -> findings.add(new Finding(SEVERITY_ERROR, CODE_UNREADABLE_SOURCE_CONTENT,
+                    problem.location(), problem.message()));
+                case WARNING -> findings.add(new Finding(SEVERITY_WARNING, CODE_SOURCE_LOAD_WARNING,
+                    problem.location(), problem.message()));
+                default -> findings.add(new Finding(SEVERITY_WARNING, CODE_SOURCE_NOT_CHECKED,
+                    problem.location(), problem.message()));
+            }
+        }
         return findings;
     }
 

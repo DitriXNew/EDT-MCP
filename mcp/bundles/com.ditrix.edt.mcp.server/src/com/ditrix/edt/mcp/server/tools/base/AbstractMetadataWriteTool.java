@@ -402,7 +402,7 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
     protected String awaitDiskExport(Map<String, String> params, String result, WriteScope scope)
     {
         JsonObject success = successObject(result);
-        boolean committedError = success == null && ToolResult.isErrorPayload(result) && scope.hasRecordedWrite();
+        boolean committedError = success == null && ToolResult.isErrorPayload(result) && scope.hasRecordedWriteOrExport();
         if (success == null && !committedError)
         {
             return scope.markErrorAfterRecordedWrite(result);

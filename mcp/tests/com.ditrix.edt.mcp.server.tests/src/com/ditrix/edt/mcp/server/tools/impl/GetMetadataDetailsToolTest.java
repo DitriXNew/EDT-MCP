@@ -538,6 +538,53 @@ public class GetMetadataDetailsToolTest
         assertTrue(md.contains("| saveDataInSettings | BOOLEAN | true |")); //$NON-NLS-1$
     }
 
+    /**
+     * The properties whose Current is the model default are named below the table - not in the Current
+     * cell, which is sent back to modify_metadata as it is. A property holding a value of its own, and one
+     * with nothing to show, are not named.
+     */
+    @Test
+    public void testAssignableNamesThePropertiesAtTheModelDefaultBelowTheTable()
+    {
+        String md = GetMetadataDetailsTool.formatAssignable("Catalog.X.Form.Y", syntheticFormRoot()); //$NON-NLS-1$
+
+        String marker = "\nAt the model default (not written to the source file): "; //$NON-NLS-1$
+        int at = md.indexOf(marker);
+        assertTrue(md, at > md.lastIndexOf("| saveDataInSettings |")); //$NON-NLS-1$
+        String line = md.substring(at + marker.length(), md.indexOf('\n', at + 1));
+        assertEquals(md, "autoTitle, windowOpeningMode.", line); //$NON-NLS-1$
+        assertTrue("the Current cell keeps the bare value: " + md, //$NON-NLS-1$
+            md.contains("| autoTitle | BOOLEAN | false |")); //$NON-NLS-1$
+        assertTrue(md, md.contains("| windowOpeningMode | ENUM | LockOwner |")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAPropertyIsCalledADefaultOnlyWhenItsHolderSaysSo()
+    {
+        EObject root = syntheticFormRoot();
+        EStructuralFeature saveData = root.eClass().getEStructuralFeature("saveDataInSettings"); //$NON-NLS-1$
+        assertTrue(GetMetadataDetailsTool.isSet(root, saveData));
+        assertFalse(GetMetadataDetailsTool.isSet(root, root.eClass().getEStructuralFeature("autoTitle"))); //$NON-NLS-1$
+        assertTrue("no holder: never guessed to be a default", GetMetadataDetailsTool.isSet(null, saveData)); //$NON-NLS-1$
+        assertTrue("no feature: never guessed to be a default", GetMetadataDetailsTool.isSet(root, null)); //$NON-NLS-1$
+    }
+
+    /** From 8.5.1 the file's windowOpeningMode / showTitle live in a twin feature; a set twin is not a default. */
+    @Test
+    public void testAPropertyHeldByItsVersionTwinIsNotADefault()
+    {
+        com._1c.g5.v8.dt.form.model.Form form = com._1c.g5.v8.dt.form.model.FormFactory.eINSTANCE.createForm();
+        EStructuralFeature opening = com._1c.g5.v8.dt.form.model.FormPackage.Literals.FORM__WINDOW_OPENING_MODE;
+        EStructuralFeature title = com._1c.g5.v8.dt.form.model.FormPackage.Literals.FORM__SHOW_TITLE;
+        EStructuralFeature title851 = com._1c.g5.v8.dt.form.model.FormPackage.Literals.FORM__SHOW_TITLE851;
+        assertFalse(GetMetadataDetailsTool.isSet(form, opening));
+        assertFalse(GetMetadataDetailsTool.isSet(form, title));
+        form.setOnFormWindowOpenLockMode(com._1c.g5.v8.dt.form.model.OnFormWindowOpenLockMode.LOCK_OWNER);
+        form.eSet(title851, ((org.eclipse.emf.ecore.EEnum)title851.getEType()).getELiterals().get(1).getInstance());
+        assertTrue("the file writes the twin under windowOpeningMode", GetMetadataDetailsTool.isSet(form, opening)); //$NON-NLS-1$
+        assertTrue("the file writes the twin under showTitle", GetMetadataDetailsTool.isSet(form, title)); //$NON-NLS-1$
+    }
+
     @Test
     public void testCommonFormAssignableKeepsMdclassTableThenAddsContentRootSection()
     {

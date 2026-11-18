@@ -236,6 +236,26 @@ public class AbstractMetadataWriteToolMarkersTest
     }
 
     @Test
+    public void testAFailedExportOnlySubmissionStillWaitsAndStaysUnknown()
+    {
+        StubTool tool = new StubTool(DiskExportState.PENDING, true);
+        WriteScope scope = new WriteScope();
+        scope.exportOnly();
+        scope.submittedExport(PROJECT);
+        scope.exported(PROJECT, Arrays.asList("Catalog.X.Form.Item")); //$NON-NLS-1$
+
+        JsonObject answer = json(tool.awaitDiskExport(params("Catalog.X.Form.Item"), //$NON-NLS-1$
+            ToolResult.errorWithUnknownMutationOutcome("export threw").toJson(), scope)); //$NON-NLS-1$
+
+        assertTrue("queued exports are waited out before the error returns", //$NON-NLS-1$
+            timeline.contains("export:" + PROJECT)); //$NON-NLS-1$
+        assertTrue(answer.get("mutationOutcomeUnknown").getAsBoolean()); //$NON-NLS-1$
+        assertFalse(answer.has("mutationCommitted")); //$NON-NLS-1$
+        assertEquals("PENDING", answer.get("exportState").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(tool.markers.resolvedFor.isEmpty());
+    }
+
+    @Test
     public void testAToolThatDoesNotOptInGetsNoFields()
     {
         StubTool tool = new StubTool(DiskExportState.DRAINED, false);

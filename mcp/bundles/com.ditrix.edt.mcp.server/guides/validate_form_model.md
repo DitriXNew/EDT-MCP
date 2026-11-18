@@ -1,5 +1,6 @@
-Structural check of ONE managed form, computed from the model as it stands right now. It changes
-nothing: no repair, no export, no write transaction.
+Structural check of ONE managed form, computed from the model as it stands right now, plus a re-read
+of its `Form.form` for what EDT dropped while loading it. It changes nothing: no repair, no export,
+no write transaction.
 
 ### When to use it
 
@@ -49,6 +50,20 @@ modify_metadata … → validate_form_model → read findings → fix → valida
 | `foreign-event-reference` | error | A binding names an event published by another platform type, not by this element. |
 | `invalid-form-value-type` | error | A parameter or attribute contains a type EDT's type picker does not offer. For arrays or structures, declare the member without a type (arbitrary, `<valueType/>`). |
 | `unavailable-form-value-types` | error | EDT's type picker could not be consulted. Wait for indexing and retry; restart EDT if it persists. |
+| `invalid-source-value` | error | `Form.form` holds a value EDT's parser rejects, such as an unknown enum literal; the message names it and the allowed literals. |
+| `unreadable-source-content` | error | Another part of `Form.form` EDT could not load (an unknown element, broken XML). |
+| `source-load-warning` | warning | EDT's parser warned while loading `Form.form`. |
+| `source-not-checked` | warning | `Form.form` could not be re-read (missing or unreadable), so dropped values cannot be reported. |
+
+### The source file
+
+The four `source` codes come from re-reading `Form.form` with EDT's own `.form` parser and the
+load options its importer uses, including the project's platform version. EDT's import records these
+problems and then discards them: the form loads, and a rejected value silently becomes the default.
+The model therefore cannot show them - `get_metadata_details` reports such a property at its default,
+exactly like one the file never set. A re-save (`resync_to_disk` with `objects` or `fullExport`, or
+any form edit) writes the model back and loses the value for good, so fix the file first. Their
+`path` is a file location, `<file>:<line>:<column>`.
 
 ### What it deliberately does NOT check
 
@@ -70,7 +85,8 @@ into `get_metadata_details` or `modify_metadata`.
 
 Three kinds of finding carry a LOCATION rather than an address, and that is inherent: a table
 addition and an additional column have no address in that vocabulary at all, and a duplicate name is
-ambiguous by definition — which is exactly what the finding reports.
+ambiguous by definition — which is exactly what the finding reports. The source-file findings point
+into the file instead (see above).
 
 ### Not the same tool as `get_project_errors`
 

@@ -102,4 +102,19 @@ public class ExternalProcessTest
         order.verify(process).destroyForcibly();
     }
 
+    @Test
+    public void resultsCompareTheirOutputByContentAndPrintOnlyItsSize()
+    {
+        var first = new ExternalProcess.Result(2, "out".getBytes(), "secret".getBytes(), false);
+        var same = new ExternalProcess.Result(2, "out".getBytes(), "secret".getBytes(), false);
+        assertEquals(first, same);
+        assertEquals(first.hashCode(), same.hashCode());
+        assertNotEquals(first, new ExternalProcess.Result(2, "out".getBytes(), "other!".getBytes(), false));
+        assertNotEquals(first, new ExternalProcess.Result(2, "OUT".getBytes(), "secret".getBytes(), false));
+        assertNotEquals(first, new ExternalProcess.Result(3, "out".getBytes(), "secret".getBytes(), false));
+        assertNotEquals(first, new ExternalProcess.Result(2, "out".getBytes(), "secret".getBytes(), true));
+        assertEquals("Result[exitCode=2, stdout=3 bytes, stderr=6 bytes, timedOut=false]", first.toString());
+        assertFalse(first.toString().contains("secret"));
+    }
+
 }
