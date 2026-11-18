@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.server.tools.impl;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
@@ -57,6 +58,7 @@ import com._1c.g5.v8.dt.core.platform.IConfigurationProvider;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 import com.ditrix.edt.mcp.server.Activator;
+import com.ditrix.edt.mcp.server.protocol.ToolArgumentValidator;
 import com.ditrix.edt.mcp.server.utils.VendorSupportGuard;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -159,6 +161,32 @@ public class WriteModuleSourceMoveMethodsTest
         assertEquals("string", properties.getAsJsonObject("fromModulePath").get("type").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         assertEquals("array", properties.getAsJsonObject("methodNames").get("type").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         assertTrue(properties.getAsJsonObject("mode").get("enum").toString().contains("\"deleteMethods\"")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    /**
+     * The tools/call argument check (#976) lets every call shape of a copy and a deletion through - no source,
+     * methodNames as a JSON array, as JSON text or as a comma list, mode=deleteMethods - and refuses what the
+     * schema rules out: an unknown mode and a non-string name.
+     */
+    @Test
+    public void theArgumentCheckAcceptsTheCopyAndDeleteShapesAndRefusesTheWrongOnes()
+    {
+        String schema = new WriteModuleSourceTool().getInputSchema();
+        assertNull(ToolArgumentValidator.validate(WriteModuleSourceTool.NAME, schema, Map.of("projectName", PROJECT, //$NON-NLS-1$
+            "modulePath", TARGET, "fromModulePath", SOURCE, "methodNames", List.of("Add", "Маркер")))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+        assertNull(ToolArgumentValidator.validate(WriteModuleSourceTool.NAME, schema, Map.of("projectName", PROJECT, //$NON-NLS-1$
+            "modulePath", SOURCE, "mode", "deleteMethods", "methodNames", "[\"Add\"]", "expectedHash", "0123456789abcdef"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$ //$NON-NLS-7$
+        assertNull(ToolArgumentValidator.validate(WriteModuleSourceTool.NAME, schema, Map.of("projectName", PROJECT, //$NON-NLS-1$
+            "modulePath", TARGET, "mode", "insertAfter", "methodName", "A", "fromModulePath", SOURCE, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+            "methodNames", "Add, Test"))); //$NON-NLS-1$ //$NON-NLS-2$
+        String mode = ToolArgumentValidator.validate(WriteModuleSourceTool.NAME, schema, Map.of("projectName", PROJECT, //$NON-NLS-1$
+            "modulePath", SOURCE, "mode", "deleteMethod", "methodNames", List.of("Add"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        assertNotNull(mode);
+        assertTrue(mode, mode.contains("'deleteMethods'")); //$NON-NLS-1$
+        String item = ToolArgumentValidator.validate(WriteModuleSourceTool.NAME, schema, Map.of("projectName", PROJECT, //$NON-NLS-1$
+            "modulePath", TARGET, "fromModulePath", SOURCE, "methodNames", List.of(Map.of("name", "Add")))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+        assertNotNull(item);
+        assertTrue(item, item.contains("methodNames[0]")); //$NON-NLS-1$
     }
 
     // ==================== copy ====================
