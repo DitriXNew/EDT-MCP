@@ -31,10 +31,11 @@ public final class BslMethodTransfer
     /**
      * An annotation that binds a method to a method of ANOTHER module - the interception annotations of a
      * configuration extension, in both spellings: {@code &Before}/{@code &Перед}, {@code &After}/{@code &После},
-     * {@code &Around}/{@code &Вместо}, {@code &ChangeAndValidate}/{@code &ИзменениеИКонтроль}.
+     * {@code &Around}/{@code &Вместо}, {@code &ChangeAndValidate}/{@code &ИзменениеИКонтроль}. Found ANYWHERE on a
+     * masked preamble line: several pragmas may share one line ({@code &AtServer &Before("Base")}).
      */
     private static final Pattern INTERCEPTION_ANNOTATION = Pattern.compile(
-        "^\\s*&\\s*(?:Before|After|Around|ChangeAndValidate" //$NON-NLS-1$
+        "&\\s*(?:Before|After|Around|ChangeAndValidate" //$NON-NLS-1$
             + "|\u041F\u0435\u0440\u0435\u0434|\u041F\u043E\u0441\u043B\u0435|\u0412\u043C\u0435\u0441\u0442\u043E" //$NON-NLS-1$
             + "|\u0418\u0437\u043C\u0435\u043D\u0435\u043D\u0438\u0435\u0418\u041A\u043E\u043D\u0442\u0440\u043E\u043B\u044C)" //$NON-NLS-1$
             + "(?![\\p{L}\\p{N}_])", //$NON-NLS-1$
@@ -149,6 +150,8 @@ public final class BslMethodTransfer
             return Result.refused(lookup.error);
         }
         int[] conditionals = BslSyntaxChecker.openConditionalLines(sourceLines);
+        // Read on the MASKED lines: a keyword inside a pragma's string argument or a trailing comment is no pragma.
+        List<String> masked = BslSyntaxChecker.maskLiteralsAndComments(sourceLines);
         for (BslModuleUtils.MethodSpan span : lookup.found)
         {
             int opened = conditionals[span.startLine] != 0 ? conditionals[span.startLine] : conditionals[span.endLine];
@@ -161,7 +164,7 @@ public final class BslMethodTransfer
             }
             for (int line = span.startLine; line < span.declarationLine; line++)
             {
-                if (INTERCEPTION_ANNOTATION.matcher(sourceLines.get(line)).find())
+                if (INTERCEPTION_ANNOTATION.matcher(masked.get(line)).find())
                 {
                     return Result.refused("Method '" + span.name + "' in '" + sourceLabel //$NON-NLS-1$ //$NON-NLS-2$
                         + "' carries an interception annotation (" + sourceLines.get(line).trim() //$NON-NLS-1$
@@ -281,8 +284,10 @@ public final class BslMethodTransfer
     }
 
     /**
-     * The names of {@code methods} still called in {@code lines}: an identifier not preceded by a member dot
-     * and followed by {@code (}, read outside comments and string literals - a text check, not a resolution.
+     * The names of {@code methods} still called in {@code lines}: an identifier followed by {@code (} whose
+     * previous code token is not a member dot, read outside comments and string literals - a text check, not a
+     * resolution. The previous token is looked up across whitespace, line breaks and comments, so
+     * {@code Other. Name(} and a dot that ends the line above both make the call qualified.
      *
      * @param lines the module lines
      * @param methods the method names
@@ -294,19 +299,60 @@ public final class BslMethodTransfer
         List<String> calls = new ArrayList<>();
         for (String method : methods)
         {
-            Pattern call = Pattern.compile("(?<![\\p{L}\\p{N}_.])" + Pattern.quote(method) //$NON-NLS-1$
+            Pattern call = Pattern.compile("(?<![\\p{L}\\p{N}_])" + Pattern.quote(method) //$NON-NLS-1$
                 + "(?![\\p{L}\\p{N}_])\\s*\\(", Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE); //$NON-NLS-1$
-            for (int line = 0; line < masked.size(); line++)
+            int found = firstUnqualifiedCall(masked, call);
+            if (found >= 0)
             {
-                Matcher matcher = call.matcher(masked.get(line));
-                if (matcher.find())
-                {
-                    calls.add(method + " (line " + (line + 1) + ")"); //$NON-NLS-1$ //$NON-NLS-2$
-                    break;
-                }
+                calls.add(method + " (line " + (found + 1) + ")"); //$NON-NLS-1$ //$NON-NLS-2$
             }
         }
         return calls;
+    }
+
+    /** The 0-based line of the first match of {@code call} whose previous code token is not a dot, or -1. */
+    private static int firstUnqualifiedCall(List<String> masked, Pattern call)
+    {
+        for (int line = 0; line < masked.size(); line++)
+        {
+            Matcher matcher = call.matcher(masked.get(line));
+            while (matcher.find())
+            {
+                if (previousCodeCharacter(masked, line, matcher.start()) != '.')
+                {
+                    return line;
+                }
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * The last non-whitespace character before column {@code column} of line {@code line}, looking back across
+     * earlier lines; comments and literals are already blanked. {@code 0} at the start of the module.
+     */
+    private static char previousCodeCharacter(List<String> masked, int line, int column)
+    {
+        String text = masked.get(line);
+        for (int index = Math.min(column, text.length()) - 1; index >= 0; index--)
+        {
+            if (!Character.isWhitespace(text.charAt(index)))
+            {
+                return text.charAt(index);
+            }
+        }
+        for (int previous = line - 1; previous >= 0; previous--)
+        {
+            String earlier = masked.get(previous);
+            for (int index = earlier.length() - 1; index >= 0; index--)
+            {
+                if (!Character.isWhitespace(earlier.charAt(index)))
+                {
+                    return earlier.charAt(index);
+                }
+            }
+        }
+        return 0;
     }
 
     /** The spans of the requested names, in request order, or the refusal. */

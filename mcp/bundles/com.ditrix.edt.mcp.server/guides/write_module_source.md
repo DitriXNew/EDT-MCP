@@ -162,7 +162,7 @@ Insert a new method before an existing anchor:
 - Only `.bsl` files; `modulePath` may not contain `..`.
 - `searchReplace`/`append`, `deleteMethods` and all method-targeted modes need an EXISTING file; only `replace` creates one.
 - New BSL files are written with a UTF-8 BOM; existing files keep their BOM state.
-- `source` is `\r\n`->`\n` normalized and the file always ends with a newline.
+- `source` is `\r\n`->`\n` normalized and a module with code always ends with a newline; a module left with no lines (every method deleted) is written empty.
 - In an extension, writing the module of an ADOPTED object also switches that module's state from `None` to `Extended` and exports the object's `.mdo`; `Checked`, `Notify` and a missing extension block are left as they are (see Modules of adopted objects).
 
 ## Addressing the module

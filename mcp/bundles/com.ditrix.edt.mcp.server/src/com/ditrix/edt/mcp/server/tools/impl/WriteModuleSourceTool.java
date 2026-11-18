@@ -562,6 +562,126 @@ public class WriteModuleSourceTool implements IMcpTool
             : InvalidFileCharacters.unchanged(req.source);
         req.source = charFix.text();
 
+        // Read the module, check the guards and compute the new lines. For a guarded write this is done once
+        // more under the file's modify rule below; this first pass answers every refusal before any lock is taken.
+        WritePlan plan = planWrite(req, file, fileExists);
+        if (plan.error != null)
+        {
+            return plan.error;
+        }
+
+        // Method-targeted writes always carry a hash and build a whole replacement module in
+        // memory, so a concurrent change must not be overwritten. Re-reading the hash and then
+        // writing as two operations leaves a window between them; the two run inside ONE
+        // workspace operation holding the file's modify rule, which is what actually excludes
+        // another workspace writer (an editor save, another tool) for the whole compare-and-write.
+        // A process writing the file outside Eclipse is not covered - IFile.setContents(FORCE)
+        // has no compare-and-swap - but it IS seen by the guard's own read.
+        // A deletion (expectedHash required) and a copy into an existing module splice whole methods the same
+        // way, so they take the same compare-and-write (#978). Under the rule the module is READ AGAIN and the
+        // plan recomputed from that text: a copy without expectedHash then splices into what the file holds
+        // now - an edit saved after the first read is kept, and a name that appeared meanwhile refuses the copy -
+        // and for a hashed write it is the same compare the late hash check always made.
+        if ((isMethodTargetedMode(req.mode) || req.isDelete() || req.isCopy()) && fileExists)
+        {
+            WritePlan[] locked = new WritePlan[1];
+            Exception[] failure = new Exception[1];
+            ICoreRunnable operation = monitor -> {
+                try
+                {
+                    WritePlan current = planWrite(req, file, fileExists);
+                    locked[0] = current;
+                    if (current.error != null)
+                    {
+                        return;
+                    }
+                    mutationEntered.set(true);
+                    writtenHash.set(writeFile(file, current.newLines, current.hasBom, fileExists, current.lineDelimiter));
+                    mutationCommitted.set(true);
+                }
+                catch (Exception e)
+                {
+                    failure[0] = e;
+                }
+            };
+            // The workspace comes from the resource itself - tools/impl must not add another
+            // ResourcesPlugin.getWorkspace() copy (rule #4, enforced by ProjectContextAdoptionRatchetTest).
+            IWorkspace workspace = file.getWorkspace();
+            workspace.run(operation, workspace.getRuleFactory().modifyRule(file),
+                IWorkspace.AVOID_UPDATE, null);
+            if (failure[0] != null)
+            {
+                throw failure[0];
+            }
+            if (locked[0].error != null)
+            {
+                return locked[0].error;
+            }
+            plan = locked[0];
+        }
+        else
+        {
+            // Write file (the mutating step — kept inline under the passed guards)
+            mutationEntered.set(true);
+            writtenHash.set(writeFile(file, plan.newLines, plan.hasBom, fileExists, plan.lineDelimiter));
+            // IFile.setContents/create has returned: any later exception is response work after the
+            // workspace mutation, not a refusal that left the module untouched.
+            mutationCommitted.set(true);
+        }
+        List<String> newLines = plan.newLines;
+        int totalOriginal = plan.totalOriginal;
+        List<String> stillCalled = plan.stillCalled;
+        List<String> deletedMethods = plan.deletedMethods;
+
+        // The module of an object ADOPTED into an extension gets the state EDT's UI records in the owner's
+        // .mdo when code is added to an adopted module - Extended - recorded at once (#711): EDT's own
+        // listener sets it only in the model and never saves the .mdo. Every other module is untouched and
+        // answers as before. A dry run (#465) must skip this step - it changes the model and exports the
+        // owner's .mdo.
+        String contentHash = writtenHash.get();
+        return finishWrite(contentHash,
+            () -> AdoptedModuleState.ensureExtended(file.getProject(), scope, file.getProjectRelativePath().toString()),
+            moduleState -> buildSuccessResponse(req.projectName, req.modulePath, req.mode, req.skipSyntaxCheck,
+                newLines, fileExists, totalOriginal, contentHash, charFix.summary(), moduleState,
+                methodFacts(req, deletedMethods, stillCalled)));
+    }
+
+    /** What {@link #planWrite} found: a ready refusal, or the lines to write and how to write them. */
+    private static final class WritePlan
+    {
+        final String error;
+        final List<String> newLines;
+        final boolean hasBom;
+        final String lineDelimiter;
+        final int totalOriginal;
+        final List<String> stillCalled;
+        final List<String> deletedMethods;
+
+        WritePlan(String error, List<String> newLines, boolean hasBom, String lineDelimiter, int totalOriginal,
+            List<String> stillCalled, List<String> deletedMethods)
+        {
+            this.error = error;
+            this.newLines = newLines;
+            this.hasBom = hasBom;
+            this.lineDelimiter = lineDelimiter;
+            this.totalOriginal = totalOriginal;
+            this.stillCalled = stillCalled;
+            this.deletedMethods = deletedMethods;
+        }
+
+        static WritePlan refused(String error)
+        {
+            return new WritePlan(error, null, false, null, 0, null, null);
+        }
+    }
+
+    /**
+     * Reads the module as it is now, applies the {@code expectedHash} guard, computes the new lines for the
+     * request's mode and runs the BSL syntax check - everything a write decides before it writes, with no write.
+     * Called once before the locked write and once more under the file's modify rule (see {@link #writeModule}).
+     */
+    private WritePlan planWrite(WriteRequest req, IFile file, boolean fileExists) throws Exception
+    {
         // Read current content (if file exists)
         List<String> originalLines;
         boolean hasBom;
@@ -585,7 +705,7 @@ public class WriteModuleSourceTool implements IMcpTool
         String hashError = checkExpectedHashGuard(req, file, fileExists);
         if (hashError != null)
         {
-            return hashError;
+            return WritePlan.refused(hashError);
         }
 
         // Compute new content based on mode
@@ -593,7 +713,7 @@ public class WriteModuleSourceTool implements IMcpTool
         NewLinesResult computed = computeNewLines(req, file, fileExists, originalLines);
         if (computed.error != null)
         {
-            return computed.error;
+            return WritePlan.refused(computed.error);
         }
         List<String> newLines = computed.newLines;
         List<String> stillCalled = computed.stillCalled;
@@ -605,75 +725,10 @@ public class WriteModuleSourceTool implements IMcpTool
             String syntaxError = runSyntaxCheck(newLines);
             if (syntaxError != null)
             {
-                return syntaxError;
+                return WritePlan.refused(syntaxError);
             }
         }
-
-        // Method-targeted writes always carry a hash and build a whole replacement module in
-        // memory, so a concurrent change must not be overwritten. Re-reading the hash and then
-        // writing as two operations leaves a window between them; the two run inside ONE
-        // workspace operation holding the file's modify rule, which is what actually excludes
-        // another workspace writer (an editor save, another tool) for the whole compare-and-write.
-        // A process writing the file outside Eclipse is not covered - IFile.setContents(FORCE)
-        // has no compare-and-swap - but it IS seen by the guard's own read.
-        // A deletion (expectedHash required) and a copy into an existing module splice whole methods the same
-        // way, so they take the same compare-and-write (#978).
-        if ((isMethodTargetedMode(req.mode) || req.isDelete() || req.isCopy()) && fileExists)
-        {
-            String[] lateHashError = new String[1];
-            Exception[] failure = new Exception[1];
-            ICoreRunnable operation = monitor -> {
-                try
-                {
-                    lateHashError[0] = checkExpectedHashGuard(req, file, fileExists);
-                    if (lateHashError[0] != null)
-                    {
-                        return;
-                    }
-                    mutationEntered.set(true);
-                    writtenHash.set(writeFile(file, newLines, hasBom, fileExists, lineDelimiter));
-                    mutationCommitted.set(true);
-                }
-                catch (Exception e)
-                {
-                    failure[0] = e;
-                }
-            };
-            // The workspace comes from the resource itself - tools/impl must not add another
-            // ResourcesPlugin.getWorkspace() copy (rule #4, enforced by ProjectContextAdoptionRatchetTest).
-            IWorkspace workspace = file.getWorkspace();
-            workspace.run(operation, workspace.getRuleFactory().modifyRule(file),
-                IWorkspace.AVOID_UPDATE, null);
-            if (failure[0] != null)
-            {
-                throw failure[0];
-            }
-            if (lateHashError[0] != null)
-            {
-                return lateHashError[0];
-            }
-        }
-        else
-        {
-            // Write file (the mutating step — kept inline under the passed guards)
-            mutationEntered.set(true);
-            writtenHash.set(writeFile(file, newLines, hasBom, fileExists, lineDelimiter));
-            // IFile.setContents/create has returned: any later exception is response work after the
-            // workspace mutation, not a refusal that left the module untouched.
-            mutationCommitted.set(true);
-        }
-
-        // The module of an object ADOPTED into an extension gets the state EDT's UI records in the owner's
-        // .mdo when code is added to an adopted module - Extended - recorded at once (#711): EDT's own
-        // listener sets it only in the model and never saves the .mdo. Every other module is untouched and
-        // answers as before. A dry run (#465) must skip this step - it changes the model and exports the
-        // owner's .mdo.
-        String contentHash = writtenHash.get();
-        return finishWrite(contentHash,
-            () -> AdoptedModuleState.ensureExtended(file.getProject(), scope, file.getProjectRelativePath().toString()),
-            moduleState -> buildSuccessResponse(req.projectName, req.modulePath, req.mode, req.skipSyntaxCheck,
-                newLines, fileExists, totalOriginal, contentHash, charFix.summary(), moduleState,
-                methodFacts(req, deletedMethods, stillCalled)));
+        return new WritePlan(null, newLines, hasBom, lineDelimiter, totalOriginal, stillCalled, deletedMethods);
     }
 
     /**
@@ -1954,8 +2009,9 @@ public class WriteModuleSourceTool implements IMcpTool
     {
         String content = String.join(lineDelimiter, lines);
 
-        // Ensure file ends with a newline, in the file's own delimiter
-        if (!content.endsWith(lineDelimiter))
+        // Ensure file ends with a newline, in the file's own delimiter. A module with no lines stays empty (#978:
+        // deleting every method): a lone delimiter would be one empty line to every reader, against linesAfter=0.
+        if (!lines.isEmpty() && !content.endsWith(lineDelimiter))
         {
             content += lineDelimiter;
         }

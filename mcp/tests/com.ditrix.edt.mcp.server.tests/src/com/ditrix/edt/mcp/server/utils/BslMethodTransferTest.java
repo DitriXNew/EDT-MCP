@@ -325,6 +325,60 @@ public class BslMethodTransferTest
         assertTrue(BslMethodTransfer.remove(module, List.of("A")).stillCalled.isEmpty()); //$NON-NLS-1$
     }
 
+    /**
+     * Codex #981: a member dot separated from the name by whitespace, a line break or a comment still makes the
+     * call qualified - only the previous code token decides, not the character right before the name.
+     */
+    @Test
+    public void aQualifiedCallWithTheDotApartFromTheNameIsNotReported()
+    {
+        List<String> module = lines(
+            "Procedure A()", //$NON-NLS-1$
+            "EndProcedure", //$NON-NLS-1$
+            "", //$NON-NLS-1$
+            "Procedure B()", //$NON-NLS-1$
+            "\tX = Other. A();", //$NON-NLS-1$
+            "\tY = Other.", //$NON-NLS-1$
+            "\t\tA();", //$NON-NLS-1$
+            "\tZ = Other. // the target", //$NON-NLS-1$
+            "", //$NON-NLS-1$
+            "\t\t// still the same expression", //$NON-NLS-1$
+            "\t\tA(1);", //$NON-NLS-1$
+            "EndProcedure"); //$NON-NLS-1$
+        assertEquals(List.of(), BslMethodTransfer.remove(module, List.of("A")).stillCalled); //$NON-NLS-1$
+    }
+
+    /** ...while an unqualified call after a qualified one on the same line is still found. */
+    @Test
+    public void anUnqualifiedCallAfterAQualifiedOneOnTheSameLineIsReported()
+    {
+        List<String> module = lines("Procedure A()", "EndProcedure", "", "Procedure B()", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            "\tX = Other. A() + A();", "EndProcedure"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(List.of("A (line 2)"), BslMethodTransfer.remove(module, List.of("A")).stillCalled); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** Codex #981: an interception annotation after another pragma on the same line is still seen. */
+    @Test
+    public void anInterceptionAnnotationAfterAnotherPragmaOnTheLineIsRefused()
+    {
+        for (String annotations : List.of("&AtServer &Before(\"Base\")", "&НаСервере &Перед(\"Х\")", //$NON-NLS-1$ //$NON-NLS-2$
+            "&AtServer&After(\"Base\")")) //$NON-NLS-1$
+        {
+            List<String> source = lines(annotations, "Procedure ext_Base()", "EndProcedure"); //$NON-NLS-1$ //$NON-NLS-2$
+            String error = BslMethodTransfer.extract(source, List.of("ext_Base"), SOURCE).error; //$NON-NLS-1$
+            assertTrue(annotations + ": " + error, error != null && error.contains("interception annotation")); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+    }
+
+    /** An interception keyword inside a comment or a string of the preamble is not an annotation. */
+    @Test
+    public void anInterceptionKeywordInACommentOrStringIsNotAnAnnotation()
+    {
+        List<String> source = lines("&AtServer // was &Before(\"Base\")", "&Attr(\"&After\")", //$NON-NLS-1$ //$NON-NLS-2$
+            "Procedure P()", "EndProcedure"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNull(BslMethodTransfer.extract(source, List.of("P"), SOURCE).error); //$NON-NLS-1$
+    }
+
     @Test
     public void deletionRefusesAMissingOrAmbiguousNameAndKeepsTheModule()
     {

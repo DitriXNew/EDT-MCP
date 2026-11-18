@@ -153,3 +153,23 @@ def test_the_deletion_is_refused_once_the_source_changed_after_the_copy():
     err = assert_error(r, "delete with the copy's stale token")
     assert_error_quality(err, names=["expectedHash"], ctx="the stale token is named")
     assert_contains(read_disk("src/" + DRY), "Add(A, B)", "the refused deletion left the method in place")
+
+
+@e2e_test(tool="write_module_source", kind="write-metadata")
+def test_deleting_every_method_leaves_an_empty_module():
+    seeded = call("write_module_source", {
+        "projectName": PROJECT, "modulePath": OK, "mode": "replace", "overwrite": True,
+        "source": "Procedure E2E978Only() Export\nEndProcedure\n",
+    })
+    token = _field(seeded, "contentHash", "seed one method")
+    r = call("write_module_source", {
+        "projectName": PROJECT, "modulePath": OK, "mode": "deleteMethods",
+        "methodNames": ["E2E978Only"], "expectedHash": token,
+    })
+    assert_ok(r, "delete the only method")
+    assert_contains(r.text, "linesAfter: 0", "the response says the module has no lines")
+    disk = read_disk("src/" + OK).lstrip("\ufeff")
+    if disk != "":
+        raise E2EAssertion("the module must be empty after deleting every method, got %r" % disk[:80])
+    if _field(r, "contentHash", "the deletion") != _read_hash(OK, "read the empty module"):
+        raise E2EAssertion("the deletion's contentHash is not the read tool's for the empty module")

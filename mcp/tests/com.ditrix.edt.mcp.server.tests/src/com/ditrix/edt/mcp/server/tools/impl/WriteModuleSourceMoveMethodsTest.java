@@ -82,6 +82,8 @@ public class WriteModuleSourceMoveMethodsTest
     private com._1c.g5.v8.dt.core.platform.IBmModelManager models;
     private final AtomicBoolean modelGone = new AtomicBoolean();
     private final List<Runnable> restores = new ArrayList<>();
+    /** Another writer that changes a file after the tool read it and before its locked write runs, once. */
+    private Runnable beforeLockedWrite;
 
     @Before
     public void setUp() throws Exception
@@ -97,6 +99,12 @@ public class WriteModuleSourceMoveMethodsTest
         when(rules.modifyRule(any(IResource.class))).thenReturn(mock(ISchedulingRule.class));
         when(workspace.getRuleFactory()).thenReturn(rules);
         doAnswer(call -> {
+            Runnable foreign = beforeLockedWrite;
+            beforeLockedWrite = null;
+            if (foreign != null)
+            {
+                foreign.run();
+            }
             ((ICoreRunnable) call.getArgument(0)).run(null);
             return null;
         }).when(workspace).run(any(ICoreRunnable.class), any(ISchedulingRule.class), anyInt(),
@@ -291,6 +299,54 @@ public class WriteModuleSourceMoveMethodsTest
         String error = refused(write(TARGET, Map.of("fromModulePath", SOURCE, "methodNames", "[\"P\"]"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         assertTrue(error, error.contains("already declares it")); //$NON-NLS-1$
         assertEquals(once, tree.text(target));
+    }
+
+    /**
+     * Codex #981: a copy into an existing module without expectedHash is spliced into the text read UNDER the
+     * modify rule, so a save that lands after the first read is kept, not overwritten by a stale snapshot.
+     */
+    @Test
+    public void aCopyKeepsAnEditThatLandedBeforeItsLockedWrite() throws Exception
+    {
+        tree.module("src/" + SOURCE, "Procedure P()\nEndProcedure\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        IFile target = tree.module("src/" + TARGET, "Procedure Existing()\nEndProcedure\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        String theirs = "Procedure Existing()\nEndProcedure\n\nProcedure Theirs()\nEndProcedure\n"; //$NON-NLS-1$
+        beforeLockedWrite = () -> tree.contents.get(target).set(theirs.getBytes(StandardCharsets.UTF_8));
+        String response = write(TARGET, Map.of("fromModulePath", SOURCE, "methodNames", "[\"P\"]")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertEquals(theirs + "\nProcedure P()\nEndProcedure\n", tree.text(target)); //$NON-NLS-1$
+        assertTrue(response, response.contains("\nlinesBefore: 5\n")); //$NON-NLS-1$
+        assertEquals(readHash(TARGET), field(response, "contentHash")); //$NON-NLS-1$
+    }
+
+    /** ...and a method that appeared in the target in that window refuses the copy, leaving the save as it is. */
+    @Test
+    public void aCopyIsRefusedWhenTheNameAppearedInTheTargetBeforeItsLockedWrite() throws Exception
+    {
+        tree.module("src/" + SOURCE, "Procedure P()\nEndProcedure\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        IFile target = tree.module("src/" + TARGET, "Procedure Existing()\nEndProcedure\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        String theirs = "Procedure P()\n\tTheirs = 1;\nEndProcedure\n"; //$NON-NLS-1$
+        beforeLockedWrite = () -> tree.contents.get(target).set(theirs.getBytes(StandardCharsets.UTF_8));
+        String error = refused(write(TARGET, Map.of("fromModulePath", SOURCE, "methodNames", "[\"P\"]"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertTrue(error, error.contains("already declares it")); //$NON-NLS-1$
+        assertEquals(theirs, tree.text(target));
+    }
+
+    /**
+     * Codex #981: deleting every method leaves a module with no lines - an empty file, not one line delimiter -
+     * so linesAfter, the file and read_module_source agree, and contentHash is the read tool's.
+     */
+    @Test
+    public void deletingEveryMethodLeavesAnEmptyModule() throws Exception
+    {
+        IFile module = tree.module("src/" + SOURCE, "Procedure A()\r\nEndProcedure\r\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        String response = write(SOURCE, Map.of("mode", "deleteMethods", "methodNames", "[\"A\"]", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            "expectedHash", readHash(SOURCE))); //$NON-NLS-1$
+        assertEquals("", tree.text(module)); //$NON-NLS-1$
+        assertTrue(response, response.contains("\nlinesAfter: 0\n")); //$NON-NLS-1$
+        assertEquals(readHash(SOURCE), field(response, "contentHash")); //$NON-NLS-1$
+        IFile withBom = tree.module("src/" + TARGET, BOM + "Procedure A()\nEndProcedure\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        write(TARGET, Map.of("mode", "deleteMethods", "methodNames", "[\"A\"]", "expectedHash", readHash(TARGET))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+        assertEquals("the BOM state is kept, nothing else is written", BOM, tree.text(withBom)); //$NON-NLS-1$
     }
 
     /** A missing name refuses the whole copy: nothing is written, the others are not copied either. */
