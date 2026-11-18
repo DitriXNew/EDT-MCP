@@ -1,0 +1,160 @@
+/**
+ * MCP Server for EDT - Tests
+ * Copyright (C) 2026 DitriX (https://github.com/DitriXNew)
+ * Licensed under AGPL-3.0-or-later
+ */
+package com.ditrix.edt.mcp.server.tools.rename;
+
+import static org.junit.Assert.*;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
+
+import java.lang.reflect.Method;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.List;
+import java.util.Map;
+
+import org.eclipse.core.resources.IProject;
+import org.eclipse.core.runtime.IProgressMonitor;
+import org.eclipse.core.runtime.NullProgressMonitor;
+import org.eclipse.core.runtime.OperationCanceledException;
+import org.eclipse.ltk.core.refactoring.Change;
+import org.eclipse.ltk.core.refactoring.NullChange;
+import org.junit.Test;
+
+import com._1c.g5.v8.dt.md.refactoring.core.IMdRefactoringService;
+import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
+import com._1c.g5.v8.dt.refactoring.core.IRefactoring;
+
+/**
+ * Issue #975, review round 1. A preview's Xtext passes may hand work to EDT's UI thread, and a BM
+ * read transaction holds resource read locks a UI-thread write transaction waits for - so they must
+ * run with no BM read of ours open; only the rendering, which never dispatches, reads inside one. And
+ * a preview already stopped must not start EDT's uncancellable native pass at all.
+ */
+public class MetadataRenamePreviewReadBoundaryTest
+{
+    @Test
+    public void testTheXtextPassesRunWithNoReadOfOursOpenAndTheRenderInsideOne() throws Exception
+    {
+        MetadataRenameService service = new MetadataRenameService();
+        List<String> seen = new ArrayList<>();
+        service.xtextPasses = new MetadataRenameService.XtextPasses()
+        {
+            @Override
+            public MetadataRenameService.ExactPass exactMatches(IProject project, MdObject target, String newName)
+            {
+                seen.add("exact@" + service.readDepth());
+                return MetadataRenameService.ExactPass.NONE;
+            }
+
+            @Override
+            public Change edtBslChange(IProject project, MdObject target, String newName)
+            {
+                seen.add("edt@" + service.readDepth());
+                return new NullChange("edt change")
+                {
+                    @Override
+                    public String getName()
+                    {
+                        seen.add("render@" + service.readDepth());
+                        return super.getName();
+                    }
+                };
+            }
+        };
+        IMdRefactoringService mdService = mdService(refactorings());
+
+        String preview = service.createMdClassRename(null, "CommonModule.Old", "New", target(), false,
+            DisableRequest.parse(null), null, 0, new RenameProgress(), mdService);
+
+        assertTrue(preview, preview.contains("action: preview"));
+        assertEquals("Both Xtext passes run with no read of ours open: " + seen,
+            List.of("exact@0", "edt@0"), seen.subList(0, 2));
+        assertTrue("The render reads the passes' output: " + seen, seen.size() > 2);
+        assertTrue("The render runs inside one read of ours: " + seen,
+            seen.subList(2, seen.size()).stream().allMatch("render@1"::equals));
+        assertEquals(0, service.readDepth());
+    }
+
+    @Test
+    public void testThePreviewIsTheRenderOfThePassesOutput() throws Exception
+    {
+        MetadataRenameService service = new MetadataRenameService();
+        service.xtextPasses = new MetadataRenameService.XtextPasses()
+        {
+            @Override
+            public MetadataRenameService.ExactPass exactMatches(IProject project, MdObject target, String newName)
+            {
+                return MetadataRenameService.ExactPass.NONE;
+            }
+
+            @Override
+            public Change edtBslChange(IProject project, MdObject target, String newName)
+            {
+                return null;
+            }
+        };
+        List<IRefactoring> refactorings = refactorings();
+        String preview = service.createMdClassRename(null, "CommonModule.Old", "New", target(), false,
+            DisableRequest.parse(null), null, 0, new RenameProgress(), mdService(refactorings));
+
+        Method render = MetadataRenameService.class.getDeclaredMethod("renderPreview", String.class, String.class,
+            String.class, Collection.class, int.class, Map.class, List.class);
+        render.setAccessible(true);
+        assertEquals("The preview must be exactly the render of what the passes produced",
+            render.invoke(new MetadataRenameService(), "CommonModule.Old", "New", "Old", refactorings, 0,
+                Map.of(), List.of()), preview);
+    }
+
+    @Test
+    public void testAStoppedPreviewNeverStartsEdtsNativePass()
+    {
+        MetadataRenameService service = new MetadataRenameService();
+        service.useMonitor(cancelled());
+        IMdRefactoringService mdService = mdService(refactorings());
+
+        assertThrows(OperationCanceledException.class, () -> service.createMdClassRename(null,
+            "CommonModule.Old", "New", target(), false, DisableRequest.parse(null), null, 0,
+            new RenameProgress(), mdService));
+        verify(mdService, never()).createMdObjectRenameRefactoring(any(), any());
+    }
+
+    @Test
+    public void testAPreviewStoppedBeforeItStartsResolvesNothing()
+    {
+        assertThrows(OperationCanceledException.class, () -> new MetadataRenameService().rename(
+            "NoSuchProject975", "Catalog.Products", "Goods", false, DisableRequest.parse(null), null, 0,
+            new RenameProgress(), cancelled()));
+    }
+
+    private static IProgressMonitor cancelled()
+    {
+        IProgressMonitor monitor = new NullProgressMonitor();
+        monitor.setCanceled(true);
+        return monitor;
+    }
+
+    private static MdObject target()
+    {
+        MdObject target = mock(MdObject.class);
+        when(target.getName()).thenReturn("Old");
+        return target;
+    }
+
+    private static List<IRefactoring> refactorings()
+    {
+        IRefactoring refactoring = mock(IRefactoring.class);
+        when(refactoring.getTitle()).thenReturn("Rename");
+        when(refactoring.getItems()).thenReturn(List.of());
+        return List.of(refactoring);
+    }
+
+    private static IMdRefactoringService mdService(List<IRefactoring> refactorings)
+    {
+        IMdRefactoringService service = mock(IMdRefactoringService.class);
+        when(service.createMdObjectRenameRefactoring(any(), any())).thenReturn(refactorings);
+        return service;
+    }
+}

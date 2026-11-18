@@ -137,7 +137,7 @@ public class MetadataRenameCancellationTest
         // the catch must stop the preview instead of logging and carrying on with no matches.
         MetadataRenameService service = new MetadataRenameService();
         service.useMonitor(new CancelledAfterFirstAsk());
-        Method exactMatches = method("buildExactMatchInfo", org.eclipse.core.resources.IProject.class,
+        Method exactMatches = method("exactMatchPass", org.eclipse.core.resources.IProject.class,
             com._1c.g5.v8.dt.metadata.mdclass.MdObject.class, String.class);
         InvocationTargetException failure = assertThrows(InvocationTargetException.class,
             () -> exactMatches.invoke(service, null, null, "New"));
@@ -145,9 +145,9 @@ public class MetadataRenameCancellationTest
 
         MetadataRenameService other = new MetadataRenameService();
         other.useMonitor(new CancelledAfterFirstAsk());
-        Method edtPreview = method("buildEdtBslPreviewChanges",
-            com._1c.g5.v8.dt.metadata.mdclass.MdObject.class, String.class, Map.class);
-        failure = assertThrows(InvocationTargetException.class, () -> edtPreview.invoke(other, null, "New", Map.of()));
+        Method edtPreview = method("edtBslPass", org.eclipse.core.resources.IProject.class,
+            com._1c.g5.v8.dt.metadata.mdclass.MdObject.class, String.class);
+        failure = assertThrows(InvocationTargetException.class, () -> edtPreview.invoke(other, null, null, "New"));
         assertTrue(String.valueOf(failure.getCause()), failure.getCause() instanceof OperationCanceledException);
     }
 
@@ -155,9 +155,12 @@ public class MetadataRenameCancellationTest
     public void testANeverCancelledMonitorKeepsTheFailingPassesDegradingAsBefore() throws Exception
     {
         MetadataRenameService service = new MetadataRenameService();
-        Method exactMatches = method("buildExactMatchInfo", org.eclipse.core.resources.IProject.class,
+        Method exactMatches = method("exactMatchPass", org.eclipse.core.resources.IProject.class,
             com._1c.g5.v8.dt.metadata.mdclass.MdObject.class, String.class);
-        assertEquals(Map.of(), exactMatches.invoke(service, null, null, "New"));
+        assertSame(MetadataRenameService.ExactPass.NONE, exactMatches.invoke(service, null, null, "New"));
+        Method edtPreview = method("edtBslPass", org.eclipse.core.resources.IProject.class,
+            com._1c.g5.v8.dt.metadata.mdclass.MdObject.class, String.class);
+        assertNull(edtPreview.invoke(service, null, null, "New"));
     }
 
     /** Answers "not cancelled" to the first question and "cancelled" ever after. */
