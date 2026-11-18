@@ -124,6 +124,12 @@ public final class WriteScope
 
     private boolean queuedNothing;
 
+    // Set by a call that changes no model state, so its export submission is not a commit.
+    private volatile boolean exportOnly;
+
+    // Published after the project was added to written, for the same bounded-call race.
+    private volatile boolean exportSubmitted;
+
     private String undeterminableReason;
 
     // Published to the waiting caller for the same bounded-call race as mutationCommitted.
@@ -183,9 +189,51 @@ public final class WriteScope
         WriteScope scope = BOUND.get();
         if (scope != null && project != null)
         {
-            scope.wrote(project);
+            scope.submittedExport(project.getName());
             scope.exported(project.getName(), topObjectFqns);
         }
+    }
+
+    /**
+     * Static face of {@link #exportOnly()}; a no-op outside a write tool's call.
+     */
+    public static void recordExportOnlyCall()
+    {
+        WriteScope scope = BOUND.get();
+        if (scope != null)
+        {
+            scope.exportOnly();
+        }
+    }
+
+    /**
+     * States that this call changes no model state and only re-exports it: an export it submits is
+     * then routing for the barrier, not a commit, and an error after it has an unknown outcome
+     * (a list submission can throw after queueing part of it). A model write still counts as a commit.
+     */
+    public void exportOnly()
+    {
+        exportOnly = true;
+    }
+
+    /**
+     * Records an export submission for {@code projectName}; a commit unless the call is export-only.
+     *
+     * @param projectName the project; ignored when {@code null} or empty
+     */
+    public void submittedExport(String projectName)
+    {
+        if (projectName == null || projectName.isEmpty())
+        {
+            return;
+        }
+        if (!exportOnly)
+        {
+            wrote(projectName);
+            return;
+        }
+        written.add(projectName);
+        exportSubmitted = true;
     }
 
     /**
@@ -438,6 +486,17 @@ public final class WriteScope
     }
 
     /**
+     * Whether this call committed a write or handed an export to the platform, either of which an
+     * error answer must still wait out before the caller inspects the files.
+     *
+     * @return {@code true} after a recorded write or an export-only submission
+     */
+    public boolean hasRecordedWriteOrExport()
+    {
+        return mutationCommitted || exportSubmitted;
+    }
+
+    /**
      * Enforces the post-mutation error contract at a writer's single return point.
      *
      * @param result the result about to leave the writer
@@ -448,6 +507,10 @@ public final class WriteScope
         if (hasRecordedWrite())
         {
             return ToolResult.markErrorAfterMutation(result);
+        }
+        if (exportSubmitted)
+        {
+            return ToolResult.markErrorWithUnknownMutationOutcome(result);
         }
         // An opaque platform extension point may throw without saying whether it rolled back;
         // preserve that distinction on the wire while still forcing callers to reset before

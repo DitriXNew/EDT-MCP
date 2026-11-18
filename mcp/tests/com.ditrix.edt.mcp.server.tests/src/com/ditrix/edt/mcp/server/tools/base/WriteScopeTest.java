@@ -191,6 +191,35 @@ public class WriteScopeTest
     }
 
     @Test
+    public void testAnExportOnlyCallMarksUnknownUnlessTheModelWasWritten()
+    {
+        WriteScope scope = new WriteScope();
+        String refusal = com.ditrix.edt.mcp.server.protocol.ToolResult.error("export threw").toJson(); //$NON-NLS-1$
+        scope.exportOnly();
+        scope.submittedExport(PROJECT);
+
+        String marked = scope.markErrorAfterRecordedWrite(refusal);
+        assertTrue(marked, marked.contains("\"mutationOutcomeUnknown\":true")); //$NON-NLS-1$
+        assertFalse(marked, marked.contains("\"mutationCommitted\"")); //$NON-NLS-1$
+        assertFalse("an export-only submission is not a commit", scope.hasRecordedWrite()); //$NON-NLS-1$
+        assertEquals("the barrier still waits for the project", //$NON-NLS-1$
+            Collections.singletonList(PROJECT), scope.writtenProjects());
+
+        scope.wrote(PROJECT);
+        String committed = scope.markErrorAfterRecordedWrite(refusal);
+        assertTrue(committed, committed.contains("\"mutationCommitted\":true")); //$NON-NLS-1$
+        assertFalse(committed, committed.contains("mutationOutcomeUnknown")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnExportSubmissionIsACommitByDefault()
+    {
+        WriteScope scope = new WriteScope();
+        scope.submittedExport(PROJECT);
+        assertTrue(scope.hasRecordedWrite());
+    }
+
+    @Test
     public void testAnOpaqueWriterMarksUnknownWithoutClaimingACommit()
     {
         WriteScope scope = new WriteScope();

@@ -7,6 +7,9 @@ reproduced live before the test was written: deleting a form COMMAND leaves ever
 it pointing at `Form.Command.<Name>`, which is no longer in the model. Nothing refuses the delete
 and nothing rewrites the button.
 
+The tool also re-reads the form's Form.form with EDT's own parser: a value EDT cannot load, such as
+an unknown enum literal, is dropped silently on load, so the model alone never shows it.
+
 reset: kind="write-metadata" for the tests that mutate, "read" for the rest.
 """
 
@@ -102,6 +105,39 @@ def _findings(result):
     return (result.structured or {}).get("findings") or []
 
 
+@e2e_test(tool="validate_form_model", kind="write-metadata")
+def test_an_unknown_enum_literal_in_the_source_file_is_an_error():
+    """EDT loads the default in place of a literal it does not know and says nothing; the model then
+    looks valid. The source re-read reports it at its file, line and column, names the feature, the
+    bad value and the allowed literals."""
+    path = "src/Catalogs/Catalog/Forms/ItemForm/Form.form"
+    wait_for_project_ready()
+    xml = read_disk(path)
+    at = xml.index("<name>Decoration1ExtendedTooltip</name>")
+    good = "<horizontalAlign>Left</horizontalAlign>"
+    pos = xml.index(good, at)
+    assert pos < xml.index("</extendedTooltip>", at), "the tooltip must carry its own alignment"
+    line = xml.count("\n", 0, pos) + 1
+    with open(os.path.join(PROJECT_DIR, path), "w", encoding="utf-8", newline="") as stream:
+        stream.write(xml[:pos] + "<horizontalAlign>Leftmost</horizontalAlign>" + xml[pos + len(good):])
+    assert_ok(call("clean_project", {"projectName": PROJECT}), "reload the form from disk")
+    wait_for_project_ready()
+
+    result = call("validate_form_model", {"projectName": PROJECT, "formFqn": FORM})
+    assert_ok(result, "audit the form whose file carries an unknown literal")
+    assert result.structured.get("valid") is False, result.structured
+    findings = [f for f in _findings(result) if f.get("code") == "invalid-source-value"]
+    assert len(findings) == 1, _findings(result)
+    finding = findings[0]
+    assert finding.get("severity") == "error", finding
+    assert re.fullmatch(re.escape(path) + r":%d:\d+" % line, finding.get("path", "")), \
+        "the finding must point at the seeded line %d: %r" % (line, finding)
+    message = finding.get("message", "")
+    for part in ("'Leftmost'", "horizontalAlign", "Decoration1ExtendedTooltip", "Left", "re-save"):
+        assert part in message, "the message must name %r: %r" % (part, message)
+    assert "Leftmost" in read_disk(path), "validation must not rewrite the file"
+
+
 @e2e_test(tool="validate_form_model", kind="read")
 def test_a_clean_form_reports_no_errors():
     r = call("validate_form_model", {"projectName": PROJECT, "formFqn": FORM})
@@ -109,6 +145,9 @@ def test_a_clean_form_reports_no_errors():
     sc = r.structured or {}
     assert sc.get("valid") is True, \
         "the fixture form must be structurally valid, got: %r" % (_findings(r),)
+    source = [f for f in _findings(r) if f.get("code") in (
+        "invalid-source-value", "unreadable-source-content", "source-load-warning", "source-not-checked")]
+    assert not source, "the fixture's Form.form must load cleanly and be checked: %r" % (source,)
     assert sc.get("errors") == 0, "a valid form carries no errors: %r" % (sc.get("errors"),)
     assert sc.get("formPath") == FORM, \
         "the result must name the form it validated: %r" % (sc.get("formPath"),)

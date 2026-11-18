@@ -198,7 +198,9 @@ public final class InputSchemaCompactor
         // caught by InputSchemaCompactorRiskTest, not by review.
         keep.put("delete_infobase", //$NON-NLS-1$
             asSet("deleteRegistration", "deleteDatabaseFiles", "registrationId")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-        keep.put("resync_to_disk", asSet("overwriteDiskEdits")); //$NON-NLS-1$ //$NON-NLS-2$
+        // objects: its value shape (an FQN array, a form address) and its exclusion with the other
+        // write modes are stated nowhere else, and it too needs overwriteDiskEdits.
+        keep.put("resync_to_disk", asSet("overwriteDiskEdits", "objects")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         // The one parameter of the three-way comparison family whose prose warns about an effect
         // of THAT parameter: in write mode the named file is REPLACED at the same path, and only when
         // 'basedOn' names that same file - any other write over an existing file is refused. A
