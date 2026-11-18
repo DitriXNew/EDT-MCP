@@ -5456,7 +5456,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Write the in-memory model back out to the on-disk src/ .mdo files and report model-to-disk desync; fixes 'object file does not exist' failures and dangling Configuration.mdo references. Direction MODEL -> DISK, the opposite of clean_project. Dangling references are REPORTED by default, not removed. Two opt-in modes are DESTRUCTIVE: re-exporting every object overwrites on-disk edits, and removing dangling references rewrites Configuration.mdo. Role-rights entries whose object no longer exists are also REPORTED by default; call once to review them, then again with cleanOrphanRoleRights=true to remove the proven-absent ones. Parameters and examples: get_tool_guide('resync_to_disk').",
+    "description": "Write the in-memory model back out to the on-disk src/ files and report model-to-disk desync; fixes 'object file does not exist' failures and dangling Configuration.mdo references, and re-saves named objects or forms (objects) from the model without changing them. Direction MODEL -> DISK, the opposite of clean_project. Dangling references are REPORTED by default, not removed. Three opt-in modes are DESTRUCTIVE: re-exporting every object or re-saving named ones overwrites on-disk edits - a value the model does not hold, such as an enum literal EDT dropped on load, is lost for good - and removing dangling references rewrites Configuration.mdo. Role-rights entries whose object no longer exists are also REPORTED by default; call once to review them, then again with cleanOrphanRoleRights=true to remove the proven-absent ones. Parameters and examples: get_tool_guide('resync_to_disk').",
     "inputSchema": {
       "properties": {
         "cleanDanglingReferences": {
@@ -5468,8 +5468,15 @@
         "fullExport": {
           "type": "boolean"
         },
+        "objects": {
+          "description": "FQNs of metadata objects or forms to re-save from the model as they stand, unchanged, e.g. ['Catalog.Goods.Form.ItemForm'] (a form rewrites its Form.form) or ['Catalog.Goods']; Russian type tokens accepted. Needs overwriteDiskEdits=true; not combinable with fullExport, cleanDanglingReferences or cleanOrphanRoleRights.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "overwriteDiskEdits": {
-          "description": "Required confirmation for fullExport=true: force-exporting every .mdo from the in-memory model OVERWRITES any on-disk edits. Default: false - fullExport is rejected unless this is true. Ignored when fullExport=false.",
+          "description": "Required confirmation for fullExport=true and for objects: re-exporting from the in-memory model OVERWRITES on-disk edits, and a value EDT dropped on load (e.g. an unknown enum literal) is lost for good. Default: false - both are rejected unless this is true.",
           "type": "boolean"
         },
         "projectName": {
@@ -5561,6 +5568,12 @@
         },
         "projectName": {
           "type": "string"
+        },
+        "resaved": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
         },
         "revalidate": {
           "type": "boolean"
@@ -6859,7 +6872,7 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Check ONE managed form for structural defects: duplicate names or ids, a data path that names no attribute, a button with no command, a handler with no procedure or no event, a missing type-specific extInfo, more than one main attribute. Computed from the model NOW, so it is current right after an edit - unlike get_project_errors, which reports what EDT validated earlier. Changes nothing. Full parameters and examples: call get_tool_guide('validate_form_model').",
+    "description": "Check ONE managed form for structural defects: duplicate names or ids, a data path that names no attribute, a button with no command, a handler with no procedure or no event, a missing type-specific extInfo, more than one main attribute. Computed from the model NOW, so it is current right after an edit - unlike get_project_errors, which reports what EDT validated earlier. Also re-reads its Form.form and reports what EDT silently dropped on load, such as an unknown enum literal. Changes nothing. Full parameters and examples: call get_tool_guide('validate_form_model').",
     "inputSchema": {
       "properties": {
         "formFqn": {

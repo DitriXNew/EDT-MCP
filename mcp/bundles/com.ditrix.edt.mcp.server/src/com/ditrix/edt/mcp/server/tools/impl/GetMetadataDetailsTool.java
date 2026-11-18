@@ -1148,7 +1148,16 @@ public class GetMetadataDetailsTool implements IMcpTool
         }
         try
         {
-            return holder.eIsSet(feature);
+            if (holder.eIsSet(feature))
+            {
+                return true;
+            }
+            // From 8.5.1 EDT reads some form elements into a twin feature and writes it back
+            // under the old element name, so the old feature stays unset although the file has it.
+            EStructuralFeature twin = holder.eClass().getEStructuralFeature(
+                "windowOpeningMode".equals(feature.getName()) ? "onFormWindowOpenLockMode" //$NON-NLS-1$ //$NON-NLS-2$
+                    : feature.getName() + "851"); //$NON-NLS-1$
+            return twin != null && holder.eIsSet(twin);
         }
         catch (RuntimeException e)
         {
