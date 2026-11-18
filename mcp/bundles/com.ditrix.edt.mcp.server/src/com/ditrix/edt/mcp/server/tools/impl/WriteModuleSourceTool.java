@@ -15,6 +15,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
@@ -68,6 +69,8 @@ public class WriteModuleSourceTool implements IMcpTool
 
     private static final String PROJECT_NAME = "projectName"; //$NON-NLS-1$
     private static final String MODULE_PATH = "modulePath"; //$NON-NLS-1$
+    /** The revision token read_module_source reports; a write answers it for the text it wrote (#978). */
+    private static final String CONTENT_HASH = "contentHash"; //$NON-NLS-1$
 
     private static final String MODULE_TYPE_MODULE = "Module"; //$NON-NLS-1$
     private static final String MODULE_TYPE_OBJECT_MODULE = "ObjectModule"; //$NON-NLS-1$
@@ -201,6 +204,8 @@ public class WriteModuleSourceTool implements IMcpTool
 
         AtomicBoolean mutationEntered = new AtomicBoolean();
         AtomicBoolean mutationCommitted = new AtomicBoolean();
+        // The contentHash of the text this call wrote, set together with mutationCommitted (#978).
+        AtomicReference<String> writtenHash = new AtomicReference<>();
         try
         {
             // 5. Get file
@@ -235,7 +240,8 @@ public class WriteModuleSourceTool implements IMcpTool
                 return locked;
             }
 
-            return writeModule(req, file, fileExists, root.scope(), mutationEntered, mutationCommitted);
+            return writeModule(req, file, fileExists, root.scope(), mutationEntered, mutationCommitted,
+                writtenHash);
         }
         catch (Exception e)
         {
@@ -244,7 +250,7 @@ public class WriteModuleSourceTool implements IMcpTool
                 : (mutationEntered.get() ? "Failed to write file: " : "Failed to prepare module write: ") //$NON-NLS-1$ //$NON-NLS-2$
                     + e.getMessage();
             ToolResult error = mutationCommitted.get()
-                ? ToolResult.errorAfterMutation(message)
+                ? withWrittenHash(ToolResult.errorAfterMutation(message), writtenHash.get())
                 : mutationEntered.get()
                     ? ToolResult.errorWithUnknownMutationOutcome(message)
                     : ToolResult.error(message);
@@ -373,7 +379,8 @@ public class WriteModuleSourceTool implements IMcpTool
      *         {@link #finishWrite}
      */
     private String writeModule(WriteRequest req, IFile file, boolean fileExists, MetadataScope scope,
-        AtomicBoolean mutationEntered, AtomicBoolean mutationCommitted) throws Exception
+        AtomicBoolean mutationEntered, AtomicBoolean mutationCommitted, AtomicReference<String> writtenHash)
+        throws Exception
     {
         // Normalize source: \r\n -> \n (same point and order as the inline try block,
         // i.e. AFTER validateWriteArguments measured the raw length).
@@ -454,7 +461,7 @@ public class WriteModuleSourceTool implements IMcpTool
                         return;
                     }
                     mutationEntered.set(true);
-                    writeFile(file, newLines, hasBom, fileExists, lineDelimiter);
+                    writtenHash.set(writeFile(file, newLines, hasBom, fileExists, lineDelimiter));
                     mutationCommitted.set(true);
                 }
                 catch (Exception e)
@@ -480,7 +487,7 @@ public class WriteModuleSourceTool implements IMcpTool
         {
             // Write file (the mutating step — kept inline under the passed guards)
             mutationEntered.set(true);
-            writeFile(file, newLines, hasBom, fileExists, lineDelimiter);
+            writtenHash.set(writeFile(file, newLines, hasBom, fileExists, lineDelimiter));
             // IFile.setContents/create has returned: any later exception is response work after the
             // workspace mutation, not a refusal that left the module untouched.
             mutationCommitted.set(true);
@@ -491,10 +498,11 @@ public class WriteModuleSourceTool implements IMcpTool
         // listener sets it only in the model and never saves the .mdo. Every other module is untouched and
         // answers as before. A dry run (#465) must skip this step - it changes the model and exports the
         // owner's .mdo.
-        return finishWrite(
+        String contentHash = writtenHash.get();
+        return finishWrite(contentHash,
             () -> AdoptedModuleState.ensureExtended(file.getProject(), scope, file.getProjectRelativePath().toString()),
             moduleState -> buildSuccessResponse(req.projectName, req.modulePath, req.mode, req.skipSyntaxCheck,
-                newLines, fileExists, totalOriginal, charFix.summary(), moduleState));
+                newLines, fileExists, totalOriginal, contentHash, charFix.summary(), moduleState));
     }
 
     /**
@@ -504,19 +512,35 @@ public class WriteModuleSourceTool implements IMcpTool
      * re-sends the edit. The step is run HERE, not handed in as a result, so a write cannot run it and
      * answer past its failure: leaving this call out leaves the step out with it. Package-visible for tests.
      *
+     * @param contentHash the {@code contentHash} of the text the write produced; the error carries it too, since
+     *     the text IS on disk (#978); {@code null} leaves it out
      * @param step the adopted-module step; run exactly once
      * @param successResponse builds the success response from the step's result; not called when it failed
      * @return the response
      */
-    static String finishWrite(Supplier<AdoptedModuleState.Result> step,
+    static String finishWrite(String contentHash, Supplier<AdoptedModuleState.Result> step,
         Function<AdoptedModuleState.Result, String> successResponse)
     {
         AdoptedModuleState.Result moduleState = step.get();
         if (moduleState.failed())
         {
-            return ToolResult.errorAfterMutation(moduleState.failureMessage()).toJson();
+            return withWrittenHash(ToolResult.errorAfterMutation(moduleState.failureMessage()), contentHash).toJson();
         }
         return successResponse.apply(moduleState);
+    }
+
+    /**
+     * Adds the {@code contentHash} of the written text to an error that follows a committed write (#978): the
+     * module holds exactly that text, so the token is as true as after a success, and a caller can chain its
+     * next guarded edit on it.
+     *
+     * @param error the {@code errorAfterMutation} result
+     * @param contentHash the token of the written text, or {@code null} when it is not known
+     * @return {@code error}
+     */
+    private static ToolResult withWrittenHash(ToolResult error, String contentHash)
+    {
+        return contentHash == null ? error : error.put(CONTENT_HASH, contentHash);
     }
 
     /**
@@ -1010,13 +1034,14 @@ public class WriteModuleSourceTool implements IMcpTool
      * (pure string building — no side effects), preserving the exact keys and the
      * {@code linesBefore}/{@code newFile} branch the inline flow used. Package-visible for tests.
      *
+     * @param contentHash the {@code contentHash} of the text the write produced, see {@link #writeFile}
      * @param moduleState the adopted-module step's result: a key and, when it has one, a paragraph
      *     for the module of an adopted object; nothing for any other module
      * @return the wrapped success response
      */
     static String buildSuccessResponse(String projectName, String modulePath, String mode, // NOSONAR the response's facts; a parameter object would only rename them
         boolean skipSyntaxCheck, List<String> newLines, boolean fileExists, int totalOriginal,
-        String normalizedCharacters, AdoptedModuleState.Result moduleState)
+        String contentHash, String normalizedCharacters, AdoptedModuleState.Result moduleState)
     {
         FrontMatter fm = FrontMatter.create()
             .put("tool", NAME) //$NON-NLS-1$
@@ -1034,6 +1059,12 @@ public class WriteModuleSourceTool implements IMcpTool
         else
         {
             fm.put("newFile", true); //$NON-NLS-1$
+        }
+        // The token of the text just written - the one read_module_source reports for it - so the next guarded
+        // edit carries it as expectedHash without reading the module again (#978).
+        if (contentHash != null)
+        {
+            fm.put(CONTENT_HASH, contentHash);
         }
 
         // Only when something WAS replaced: a key that is always there would be noise on every
@@ -1504,8 +1535,13 @@ public class WriteModuleSourceTool implements IMcpTool
      * Writes lines to the file, preserving BOM if needed. {@code lineDelimiter} is the module's own
      * separator (see {@link #resolveLineDelimiter}); {@code lines} are LF-normalized (no {@code \r}),
      * so joining with it re-applies the file's convention verbatim.
+     *
+     * @return the {@code contentHash} of the text written (#978): {@link ContentHash#of} over the written
+     *     bytes decoded as read_module_source decodes the file ({@link BslModuleUtils#decodeWrittenText}). It
+     *     is computed from the bytes written, not by reading the file again: a re-read could vouch for a later
+     *     write by someone else, which the next guarded edit must refuse.
      */
-    private void writeFile(IFile file, List<String> lines, boolean withBom,
+    private String writeFile(IFile file, List<String> lines, boolean withBom,
         boolean fileExists, String lineDelimiter) throws Exception
     {
         String content = String.join(lineDelimiter, lines);
@@ -1542,6 +1578,10 @@ public class WriteModuleSourceTool implements IMcpTool
             createParentFolders(file);
             file.create(stream, true, null);
         }
+        // The written bytes decoded the way read_module_source decodes the file (a leading EF BB BF is a BOM even
+        // when the text itself began with U+FEFF; without a BOM the file's declared charset applies), so the token
+        // is the one a read reports, whatever the charset - and still not taken from a second read of the file.
+        return ContentHash.of(BslModuleUtils.decodeWrittenText(file, output));
     }
 
     /**
