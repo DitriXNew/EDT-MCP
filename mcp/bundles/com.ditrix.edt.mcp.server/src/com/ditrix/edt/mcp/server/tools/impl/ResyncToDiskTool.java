@@ -403,7 +403,7 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
                 com.ditrix.edt.mcp.server.utils.ProjectContext context =
                     com.ditrix.edt.mcp.server.utils.ProjectContext.of(projectName);
                 File root = context.exists() ? projectRootOf(context.project()) : null;
-                json.addProperty(McpKeys.MESSAGE, settleResaved(resaved.getAsJsonArray(), root));
+                json.addProperty(McpKeys.MESSAGE, settleResaved(resaved.getAsJsonArray(), root, drainEstablished));
                 return GsonProvider.get().toJson(json);
             }
             JsonElement before = json.get("missingBefore"); //$NON-NLS-1$
@@ -918,6 +918,8 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
             }
             rows.add(row);
         }
+        // A re-save writes no model state, so a failed export must reach the caller as unknown.
+        WriteScope.recordExportOnlyCall();
         boolean exported = BmTransactions.forceExportToDisk(ctx.project, new ArrayList<>(fqns));
         if (!exported)
         {
@@ -1014,7 +1016,7 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
      * @param projectRoot the project directory, or {@code null} when unknown
      * @return the result message
      */
-    static String settleResaved(JsonArray rows, File projectRoot)
+    static String settleResaved(JsonArray rows, File projectRoot, boolean drainEstablished)
     {
         int written = 0;
         int unchanged = 0;
@@ -1044,7 +1046,13 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
             }
             row.addProperty("state", state); //$NON-NLS-1$
         }
-        StringBuilder sb = new StringBuilder("Re-saved ").append(rows.size()) //$NON-NLS-1$
+        StringBuilder sb = new StringBuilder();
+        if (!drainEstablished)
+        {
+            sb.append("EDT did not confirm that the export finished, so these states are interim disk " //$NON-NLS-1$
+                + "observations and a queued export may still write: "); //$NON-NLS-1$
+        }
+        sb.append("Re-saved ").append(rows.size()) //$NON-NLS-1$
             .append(" object(s) from the model: ").append(written).append(" file(s) rewritten"); //$NON-NLS-1$ //$NON-NLS-2$
         if (unchanged > 0)
         {
@@ -1053,7 +1061,8 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
         }
         if (missing > 0)
         {
-            sb.append(", ").append(missing).append(" missing after the export"); //$NON-NLS-1$ //$NON-NLS-2$
+            sb.append(", ").append(missing).append(drainEstablished ? " missing after the export" //$NON-NLS-1$
+                : " not on disk yet"); //$NON-NLS-1$
         }
         if (unknown > 0)
         {
@@ -1076,7 +1085,7 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
         {
             return "missing"; //$NON-NLS-1$
         }
-        return previousModified < 0 || file.lastModified() > previousModified || file.length() != previousSize
+        return previousModified < 0 || file.lastModified() != previousModified || file.length() != previousSize
             ? "written" : "unchanged"; //$NON-NLS-1$ //$NON-NLS-2$
     }
 

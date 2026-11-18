@@ -246,6 +246,8 @@ public class ResyncToDiskResaveTest
             assertEquals("unchanged", ResyncToDiskTool.fileState(file, 1_000_000L, 10L)); //$NON-NLS-1$
             assertEquals("written", ResyncToDiskTool.fileState(file, 1_000_000L, 12L)); //$NON-NLS-1$
             assertEquals("written", ResyncToDiskTool.fileState(file, 999_000L, 10L)); //$NON-NLS-1$
+            assertEquals("a time stamp that moved backwards is a rewrite too", "written", //$NON-NLS-1$ //$NON-NLS-2$
+                ResyncToDiskTool.fileState(file, 2_000_000L, 10L));
         }
         finally
         {
@@ -270,7 +272,12 @@ public class ResyncToDiskResaveTest
             noFile.addProperty("object", "Role.X.Rights"); //$NON-NLS-1$ //$NON-NLS-2$
             rows.add(noFile);
 
-            String message = ResyncToDiskTool.settleResaved(rows, dir);
+            JsonArray interimRows = rows.deepCopy();
+            String message = ResyncToDiskTool.settleResaved(rows, dir, true);
+            String interim = ResyncToDiskTool.settleResaved(interimRows, dir, false);
+            assertTrue(interim, interim.startsWith("EDT did not confirm that the export finished")); //$NON-NLS-1$
+            assertTrue(interim, interim.contains("1 not on disk yet")); //$NON-NLS-1$
+            assertFalse(interim, interim.contains("missing after the export")); //$NON-NLS-1$
 
             assertEquals("written", state(rows, 0)); //$NON-NLS-1$
             assertEquals("missing", state(rows, 1)); //$NON-NLS-1$
