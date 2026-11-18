@@ -16,9 +16,9 @@ import java.util.TreeSet;
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.emf.ecore.resource.Resource;
-import org.eclipse.xtext.nodemodel.INode;
 import org.eclipse.xtext.parser.IParseResult;
 import org.eclipse.xtext.resource.XtextResource;
+import org.eclipse.xtext.resource.XtextSyntaxDiagnostic;
 
 import com._1c.g5.v8.dt.bsl.model.Module;
 import com.ditrix.edt.mcp.server.Activator;
@@ -47,23 +47,25 @@ public final class BslMethodRecovery
     {
     }
 
+    /**
+     * The first syntax diagnostic EDT keeps on the resource. Not the raw grammar's errors: EDT drops
+     * the "expected ';'" before a preprocessor end (#EndRegion, #EndIf), as the platform does.
+     */
     public static SyntaxIssue firstSyntaxIssue(Resource resource)
     {
-        IParseResult parse = parseResult(resource);
-        if (parse == null || !parse.hasSyntaxErrors())
+        if (resource == null)
         {
             return null;
         }
-        INode first = null;
-        for (INode node : parse.getSyntaxErrors())
+        Resource.Diagnostic first = null;
+        for (Resource.Diagnostic error : resource.getErrors())
         {
-            if (first == null || node.getOffset() < first.getOffset())
+            if (error instanceof XtextSyntaxDiagnostic && (first == null || error.getLine() < first.getLine()))
             {
-                first = node;
+                first = error;
             }
         }
-        return first == null ? new SyntaxIssue(0, null)
-            : new SyntaxIssue(first.getStartLine(), first.getSyntaxErrorMessage().getMessage());
+        return first == null ? null : new SyntaxIssue(first.getLine(), first.getMessage());
     }
 
     public record TextScan(List<String> lines, List<String> masked, List<MethodSpan> spans)

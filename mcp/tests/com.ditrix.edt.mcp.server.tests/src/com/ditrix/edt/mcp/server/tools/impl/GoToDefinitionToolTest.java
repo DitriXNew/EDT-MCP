@@ -100,6 +100,28 @@ public class GoToDefinitionToolTest
     }
 
     @Test
+    public void anUnloadableBaseModuleIsReadFromItsSavedTextNotFromEdtsSourceModule() throws Exception
+    {
+        String localPath = "CommonModules/Calc/Module.bsl";
+        String basePath = "CommonModules/Calc/Module.bsl";
+        String baseText = "Procedure InternalCheck()\nEndProcedure\n";
+        var parser = new BslStandaloneSetup().createInjectorAndDoEMFRegistration().getInstance(IParser.class);
+        Module localModule = parseModule(parser, "Extension", localPath, "Procedure LocalOnly()\nEndProcedure\n");
+        // EDT's source module still says Export; the saved base text no longer does.
+        Module staleBase = parseModule(parser, "Base", basePath, "Procedure InternalCheck() Export\nEndProcedure\n");
+        IProject extension = projectWithSource("Extension", localPath, "Procedure LocalOnly()\nEndProcedure\n");
+        IProject base = projectWithSource("Base", basePath, baseText);
+        var tool = new GoToDefinitionTool((project, path) -> project == base ? null : localModule,
+            (project, module, lookup) -> lookup.apply(base, staleBase));
+
+        String result = tool.resolveMethodInModule(extension, "Extension", localPath, "InternalCheck", true, null);
+        assertTrue(result, result.contains("projectName: Base\n"));
+        assertTrue(result, result.contains("export: false"));
+        assertTrue(result, result.contains("EDT could not load the base module now"));
+        assertTrue(result, result.contains("Declared in the base configuration."));
+    }
+
+    @Test
     public void findsDefinitionInSavedTextBeforeLookingInBase()
         throws Exception
     {

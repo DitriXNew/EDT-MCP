@@ -493,7 +493,8 @@ public final class PredefinedWriter
         switch (name.toLowerCase(Locale.ROOT))
         {
             case "id":
-                return "Property 'id' is a read-only predefined item identifier. Remove it from properties.";
+                return ToolResult.error("Property 'id' is a read-only predefined item identifier. " //$NON-NLS-1$
+                    + "Remove it from properties.").toJson(); //$NON-NLS-1$
             case PROP_NAME:
                 return ToolResult.error("Renaming a predefined item is not supported: its identity is " //$NON-NLS-1$
                     + "the FQN leaf ('...Predefined.<Item>'). Delete it and create a new item under " //$NON-NLS-1$

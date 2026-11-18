@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.server.tools.impl;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import java.io.StringReader;
@@ -37,21 +38,42 @@ import com.ditrix.edt.mcp.server.utils.BslMethodRecovery;
  */
 public class GetModuleStructureToolTest
 {
+    /** Loads through EDT's BSL resource, so its own syntax diagnostics (not the raw grammar's) apply. */
     private static Module parseModule(List<String> lines)
     {
-        var parser = new BslStandaloneSetup().createInjectorAndDoEMFRegistration().getInstance(IParser.class);
-        var parse = parser.parse(new StringReader(String.join("\n", lines) + "\n"));
-        Module module = (Module)parse.getRootASTElement();
-        var resource = new XtextResource()
+        new BslStandaloneSetup().createInjectorAndDoEMFRegistration();
+        var provider = org.eclipse.xtext.resource.IResourceServiceProvider.Registry.INSTANCE
+            .getResourceServiceProvider(com.ditrix.edt.mcp.server.utils.BslModuleUtils.BSL_LOOKUP_URI);
+        XtextResource resource = provider.get(XtextResource.class);
+        var set = provider.get(org.eclipse.xtext.resource.XtextResourceSet.class);
+        resource.setURI(com.ditrix.edt.mcp.server.utils.BslModuleUtils.BSL_LOOKUP_URI);
+        set.getResources().add(resource);
+        try (var input = new java.io.ByteArrayInputStream(
+            (String.join("\n", lines) + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8)))
         {
-            @Override
-            public IParseResult getParseResult()
-            {
-                return parse;
-            }
-        };
-        resource.getContents().add(module);
-        return module;
+            resource.load(input, java.util.Map.of(XtextResource.OPTION_ENCODING, "UTF-8")); //$NON-NLS-1$
+        }
+        catch (java.io.IOException e)
+        {
+            throw new AssertionError(e);
+        }
+        return (Module)resource.getContents().get(0);
+    }
+
+    @Test
+    public void aStatementWithoutSemicolonBeforeAPreprocessorEndIsNotAnIncompleteParse()
+    {
+        // EDT drops the grammar's "expected ';'" before #EndRegion/#EndIf, as the platform does.
+        List<String> source = List.of(
+            "#Область Публичный", "Процедура Запросы() Экспорт", "\t#Область Текст", "\tТекст = 1",
+            "\t#КонецОбласти", "КонецПроцедуры", "#КонецОбласти", "Procedure Tail()", "\t#If Server Then",
+            "\tValue = 2", "\t#EndIf", "EndProcedure");
+        Module module = parseModule(source);
+        assertNull(BslMethodRecovery.firstSyntaxIssue(module.eResource()));
+
+        String result = new GetModuleStructureTool().formatStructure("Module.bsl", module, source, false, false, false);
+        assertFalse(result, result.contains("Incomplete EDT parse"));
+        assertTrue(result, result.contains("**Total:** 2 procedures, 0 functions"));
     }
 
     @Test

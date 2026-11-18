@@ -335,8 +335,12 @@ public class GoToDefinitionTool implements IMcpTool
                 ? BslModuleUtils.extractModulePath(path) : relative;
             // EDT's source module can lag behind a base edit; the base project's own load is current.
             Module current = moduleLoader.apply(baseProject, baseModulePath);
+            if (current == null)
+            {
+                return lookupInSavedText(baseProject, baseModulePath, methodName, includeSource, qualifiedPrefix);
+            }
             return lookupInModule(baseProject, baseProject.getName(), baseModulePath,
-                current != null ? current : source, methodName, includeSource, qualifiedPrefix, true);
+                current, methodName, includeSource, qualifiedPrefix, true);
         });
         if (base != null && base.definition() != null)
         {
@@ -350,6 +354,21 @@ public class GoToDefinitionTool implements IMcpTool
             BslModuleUtils.appendAvailableMethods(error, base.names());
         }
         return ToolResult.error(error.toString()).toJson();
+    }
+
+    /** The base module could not be loaded now: only its saved text is current. */
+    private static MethodLookup lookupInSavedText(IProject baseProject, String baseModulePath, String methodName,
+        boolean includeSource, String qualifiedPrefix)
+    {
+        BslMethodRecovery.TextScan text = BslMethodRecovery.scanSavedModule(baseProject, baseModulePath);
+        var span = text == null ? null : text.find(methodName);
+        if (span == null)
+        {
+            return new MethodLookup(null, text == null ? List.of() : text.names());
+        }
+        return new MethodLookup(formatTextDefinition(baseProject.getName(), baseModulePath, includeSource,
+            qualifiedPrefix, text, span, true, "Span read from the base module's saved source text: EDT could not " //$NON-NLS-1$
+                + "load the base module now."), List.of()); //$NON-NLS-1$
     }
 
     private MethodLookup lookupInModule(IProject project, String projectName, String modulePath, Module module,
@@ -368,7 +387,7 @@ public class GoToDefinitionTool implements IMcpTool
         if (span != null)
         {
             return new MethodLookup(formatTextDefinition(projectName, modulePath, includeSource,
-                qualifiedPrefix, text, span, base, true), List.of());
+                qualifiedPrefix, text, span, base, BslMethodRecovery.recoveredSpanNotice(span)), List.of());
         }
         return new MethodLookup(null, text == null ? modelNames : text.availableNames(modelNames));
     }
@@ -505,7 +524,7 @@ public class GoToDefinitionTool implements IMcpTool
                     methodName, modulePath, text.names())).toJson();
             }
             return formatTextDefinition(projectName, modulePath, includeSource, qualifiedPrefix,
-                text, span, false, false);
+                text, span, false, null);
         }
         catch (Exception e)
         {
@@ -515,8 +534,9 @@ public class GoToDefinitionTool implements IMcpTool
 
     private static String formatTextDefinition(String projectName, String modulePath, boolean includeSource,
         String qualifiedPrefix, BslMethodRecovery.TextScan text, BslModuleUtils.MethodSpan span,
-        boolean base, boolean recovered)
+        boolean base, String notice)
     {
+        boolean recovered = notice != null;
         int from = span.startLine + 1;
         int to = span.endLine + 1;
         String region = recovered ? text.region(span) : BslModuleUtils.findRegionForLine(text.lines(), from);
@@ -541,7 +561,7 @@ public class GoToDefinitionTool implements IMcpTool
         }
 
         return fm.wrapContent((base ? BASE_NOTICE : "") //$NON-NLS-1$
-            + (recovered ? "> " + BslMethodRecovery.recoveredSpanNotice(span) + "\n\n" : "") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + (recovered ? "> " + notice + "\n\n" : "") //$NON-NLS-1$ //$NON-NLS-2$
             + buildMethodSource(includeSource, text.lines(), from, to, null));
     }
 
