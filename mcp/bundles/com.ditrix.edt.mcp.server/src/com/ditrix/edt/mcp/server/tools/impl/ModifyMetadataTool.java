@@ -367,7 +367,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 "ROLE only: [{object, right, value?, rls?, rlsFields?}]. object = metadata FQN; right = " //$NON-NLS-1$
                 + "right name, English or Russian ('Read' / 'Чтение'); value = 'set' (default) / 'unset' / " //$NON-NLS-1$
                 + "'provided' (inherited) or a boolean; rls = restriction condition (1C query text); " //$NON-NLS-1$
-                + "rlsFields = the fields it applies to (omit for the whole object).") //$NON-NLS-1$
+                + "rlsFields = an array of field-name strings it applies to (omit or [] for the whole " //$NON-NLS-1$
+                + "object).") //$NON-NLS-1$
             .objectArrayProperty(KEY_TEMPLATES,
                 "ROLE only: RLS templates as [{op?, name, condition?}]; op = 'add' (default) / 'edit' / " //$NON-NLS-1$
                 + "'delete'; condition is required for add and edit.") //$NON-NLS-1$
@@ -377,10 +378,11 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             .objectArrayProperty(KEY_CONTENT,
                 "Membership list to change, as [{op?, metadata, use?, autoRecord?}]: the owners of a " //$NON-NLS-1$
                 + "CommonAttribute or Catalog, the content of an ExchangePlan or a (nested) Subsystem, the " //$NON-NLS-1$
-                + "register records of a Document. op = 'add' (default, idempotent) / 'remove'; metadata = " //$NON-NLS-1$
-                + "member FQN, e.g. 'Catalog.Products'; use = 'Use' (default) / 'DontUse' / 'Auto', " //$NON-NLS-1$
-                + "CommonAttribute only; autoRecord = 'Allow' / 'Deny', ExchangePlan only. Not with " //$NON-NLS-1$
-                + "'properties'.") //$NON-NLS-1$
+                + "register records of a Document. op = 'add' (default) / 'remove'; metadata = member FQN, " //$NON-NLS-1$
+                + "e.g. 'Catalog.Products'; use = 'Use' (default) / 'DontUse' / 'Auto', CommonAttribute " //$NON-NLS-1$
+                + "only; autoRecord = 'Allow' / 'Deny', ExchangePlan only. Re-adding a listed " //$NON-NLS-1$
+                + "CommonAttribute owner SETS its use (omitted -> 'Use'), a listed ExchangePlan member its " //$NON-NLS-1$
+                + "given autoRecord; re-adding a plain reference is a no-op. Not with 'properties'.") //$NON-NLS-1$
             .objectArrayProperty(KEY_COMMANDS,
                 "Only for 'Subsystem.<Name>.CommandInterface' or " //$NON-NLS-1$
                 + "'Configuration.MainSectionCommandInterface': [{command, visible?, roles?, group?, after? " //$NON-NLS-1$
@@ -400,9 +402,11 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 + "(Top/Center/Bottom), wrap?, textOrientation? (TENTHS of a degree: 90 degrees = 900), " //$NON-NLS-1$
                 + "autoIndent? (0..100), autoMarkIncomplete?}]; merges [{fromRow, fromCol, toRow, toCol}]; " //$NON-NLS-1$
                 + "areas [{name, fromRow, fromCol, toRow, toCol}]; columnWidths [{col, width?, " //$NON-NLS-1$
-                + "autoWidthCalculation?, widthWeightFactor?}]; rowHeights [{row, height}]. Omitted cell " //$NON-NLS-1$
-                + "keys keep their values; replace:true resets them; other cells, merges and areas are " //$NON-NLS-1$
-                + "kept.") //$NON-NLS-1$
+                + "autoWidthCalculation?, widthWeightFactor? (only with autoWidthCalculation:true)}]; " //$NON-NLS-1$
+                + "rowHeights [{row, height}]. Omitted or null cell keys keep their values; replace:true " //$NON-NLS-1$
+                + "resets them. Non-empty text clears parameter and vice versa; '' clears the named one. " //$NON-NLS-1$
+                + "false / 0 on a format key overrides inheritance, but wrap:false restores inherited " //$NON-NLS-1$
+                + "placement. Other cells, merges and areas are kept.") //$NON-NLS-1$
             .booleanProperty("normalizeYo", //$NON-NLS-1$
                 "Default true: stores 'ё' / 'Ё' as 'е' / 'Е' in synonyms, titles and 'comment' (other " //$NON-NLS-1$
                 + "strings stay as supplied); false keeps 'ё'.") //$NON-NLS-1$

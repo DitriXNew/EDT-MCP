@@ -318,7 +318,8 @@ public class CreateProjectTool implements IMcpTool
                     + "(configuration and extension only; REJECTED for externalObjects).") //$NON-NLS-1$
             .enumProperty(KEY_SCRIPT_VARIANT,
                 "configuration: the script variant and default language (default Russian); " //$NON-NLS-1$
-                + "externalObjects: applied after creation; extension: REJECTED (inherited from the base).", //$NON-NLS-1$
+                + "externalObjects: applied after creation (a failure there does not fail the create); " //$NON-NLS-1$
+                + "extension: REJECTED (inherited from the base).", //$NON-NLS-1$
                 SCRIPT_RUSSIAN, SCRIPT_ENGLISH)
             .booleanProperty(PREF_STANDARD_CHECKS,
                 "Enable 1C:Standards BSL checks for the new project (default true). " //$NON-NLS-1$

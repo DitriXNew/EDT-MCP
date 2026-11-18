@@ -667,6 +667,28 @@ public class CreateMetadataToolTest
             new CreateMetadataTool().getGuide().contains("XDTOPackage.<Package>.ObjectType.<Type>.Property.<Name>")); //$NON-NLS-1$
     }
 
+    /** The common-module modifiers state the same kind rules their validators enforce. */
+    @Test
+    public void testCommonModuleModifierDescriptionsMatchTheirValidators()
+    {
+        com.google.gson.JsonObject props = com.google.gson.JsonParser.parseString(
+            new CreateMetadataTool().getInputSchema()).getAsJsonObject().getAsJsonObject("properties"); //$NON-NLS-1$
+        assertTrue(description(props, "serverCall").contains( //$NON-NLS-1$
+            "Only with the 'Server', 'ServerCall' or 'ClientServer' kind; not with privileged.")); //$NON-NLS-1$
+        assertTrue(description(props, "privileged").contains( //$NON-NLS-1$
+            "'Server' kind only, not with serverCall or returnValuesReuse.")); //$NON-NLS-1$
+        String reuse = description(props, "returnValuesReuse"); //$NON-NLS-1$
+        assertTrue(reuse, reuse.contains("'DuringSession' (a cached module) only with the 'Server', 'ServerCall', " //$NON-NLS-1$
+            + "'ClientManaged' or 'ClientOrdinary' kind; 'DuringRequest' is refused.")); //$NON-NLS-1$
+        assertFalse("DuringRequest is refused for every kind, not for some", //$NON-NLS-1$
+            reuse.contains("not every kind")); //$NON-NLS-1$
+    }
+
+    private static String description(com.google.gson.JsonObject props, String name)
+    {
+        return props.getAsJsonObject(name).get("description").getAsString(); //$NON-NLS-1$
+    }
+
     @Test
     public void testPropertiesDescriptionDocumentsXdtoVocabulary()
     {

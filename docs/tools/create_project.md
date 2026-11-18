@@ -17,7 +17,7 @@ Start a new EDT configuration, extension, or external-objects project. Parameter
 | compatibilityMode | — | string | Optional extension compatibility-mode string matching a CompatibilityMode enum literal (e.g. 'Version8_3_24'); omitted or empty = the base configuration's compatibility mode, the one EDT's new-extension wizard always uses. Unknown values are rejected, and so is 8.3.13 or lower over a base above 8.3.13. Extension only; REJECTED for other kinds. |
 | synonym | — | string | Human-readable synonym for the Configuration (configuration and extension only; REJECTED for externalObjects). Defaults to the 'name' value if omitted. |
 | comment | — | string | Optional free-text comment set on the Configuration (configuration and extension only; REJECTED for externalObjects). |
-| scriptVariant | — | string (one of: Russian, English) | configuration: the script variant and default language (default Russian); externalObjects: applied after creation; extension: REJECTED (inherited from the base). |
+| scriptVariant | — | string (one of: Russian, English) | configuration: the script variant and default language (default Russian); externalObjects: applied after creation (a failure there does not fail the create); extension: REJECTED (inherited from the base). |
 | standardChecks | — | boolean | Enable 1C:Standards BSL checks for the new project (default true). Applied to all kinds only when com.e1c.v8codestyle is installed; ignored otherwise. |
 | commonChecks | — | boolean | Enable common (project-level) BSL checks for the new project (default true). Applied to all kinds only when com.e1c.v8codestyle is installed; ignored otherwise. |
 

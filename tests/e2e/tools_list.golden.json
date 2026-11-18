@@ -1068,7 +1068,7 @@
           "type": "array"
         },
         "privileged": {
-          "description": "CommonModule only: true runs the module with full rights. 'Server' kind only, not with serverCall.",
+          "description": "CommonModule only: true runs the module with full rights. 'Server' kind only, not with serverCall or returnValuesReuse.",
           "type": "boolean"
         },
         "projectName": {
@@ -1082,7 +1082,7 @@
           "type": "array"
         },
         "returnValuesReuse": {
-          "description": "CommonModule only: default 'DontUse'; 'DuringSession' gives a cached module the common-module-type check accepts, and not every kind admits 'DuringRequest'.",
+          "description": "CommonModule only: default 'DontUse'; 'DuringSession' (a cached module) only with the 'Server', 'ServerCall', 'ClientManaged' or 'ClientOrdinary' kind; 'DuringRequest' is refused.",
           "enum": [
             "DontUse",
             "DuringRequest",
@@ -1091,7 +1091,7 @@
           "type": "string"
         },
         "serverCall": {
-          "description": "CommonModule only: true makes a server module callable from the client. Needs a server kind; not with 'Global' or privileged.",
+          "description": "CommonModule only: true makes a server module callable from the client. Only with the 'Server', 'ServerCall' or 'ClientServer' kind; not with privileged.",
           "type": "boolean"
         },
         "setAsDefault": {
@@ -1270,7 +1270,7 @@
           "type": "string"
         },
         "scriptVariant": {
-          "description": "configuration: the script variant and default language (default Russian); externalObjects: applied after creation; extension: REJECTED (inherited from the base).",
+          "description": "configuration: the script variant and default language (default Russian); externalObjects: applied after creation (a failure there does not fail the create); extension: REJECTED (inherited from the base).",
           "enum": [
             "Russian",
             "English"
@@ -4908,7 +4908,7 @@
           "type": "array"
         },
         "content": {
-          "description": "Membership list to change, as [{op?, metadata, use?, autoRecord?}]: the owners of a CommonAttribute or Catalog, the content of an ExchangePlan or a (nested) Subsystem, the register records of a Document. op = 'add' (default, idempotent) / 'remove'; metadata = member FQN, e.g. 'Catalog.Products'; use = 'Use' (default) / 'DontUse' / 'Auto', CommonAttribute only; autoRecord = 'Allow' / 'Deny', ExchangePlan only. Not with 'properties'.",
+          "description": "Membership list to change, as [{op?, metadata, use?, autoRecord?}]: the owners of a CommonAttribute or Catalog, the content of an ExchangePlan or a (nested) Subsystem, the register records of a Document. op = 'add' (default) / 'remove'; metadata = member FQN, e.g. 'Catalog.Products'; use = 'Use' (default) / 'DontUse' / 'Auto', CommonAttribute only; autoRecord = 'Allow' / 'Deny', ExchangePlan only. Re-adding a listed CommonAttribute owner SETS its use (omitted -> 'Use'), a listed ExchangePlan member its given autoRecord; re-adding a plain reference is a no-op. Not with 'properties'.",
           "items": {
             "type": "object"
           },
@@ -4932,7 +4932,7 @@
           "type": "array"
         },
         "rights": {
-          "description": "ROLE only: [{object, right, value?, rls?, rlsFields?}]. object = metadata FQN; right = right name, English or Russian ('Read' / 'Чтение'); value = 'set' (default) / 'unset' / 'provided' (inherited) or a boolean; rls = restriction condition (1C query text); rlsFields = the fields it applies to (omit for the whole object).",
+          "description": "ROLE only: [{object, right, value?, rls?, rlsFields?}]. object = metadata FQN; right = right name, English or Russian ('Read' / 'Чтение'); value = 'set' (default) / 'unset' / 'provided' (inherited) or a boolean; rls = restriction condition (1C query text); rlsFields = an array of field-name strings it applies to (omit or [] for the whole object).",
           "items": {
             "type": "object"
           },
@@ -4943,7 +4943,7 @@
           "type": "object"
         },
         "template": {
-          "description": "TEMPLATE FQN only, instead of 'properties'. TextDocument: {text, mode?, oldText?, expectedHash?, expectedSource?, overwrite?}; mode = 'searchReplace' (default, needs exactly one literal oldText match) / 'append' / 'replace' (the only mode that creates a missing file); replacing an existing file needs expectedHash or expectedSource from get_metadata_details, or overwrite=true. SpreadsheetDocument: {cells?, merges?, areas?, columnWidths?, rowHeights?}. cells [{row, col (both 0-based, required), replace?, text? | parameter?, bold?, fontSize?, hAlign? (Left/Center/Right/Auto/Width), vAlign? (Top/Center/Bottom), wrap?, textOrientation? (TENTHS of a degree: 90 degrees = 900), autoIndent? (0..100), autoMarkIncomplete?}]; merges [{fromRow, fromCol, toRow, toCol}]; areas [{name, fromRow, fromCol, toRow, toCol}]; columnWidths [{col, width?, autoWidthCalculation?, widthWeightFactor?}]; rowHeights [{row, height}]. Omitted cell keys keep their values; replace:true resets them; other cells, merges and areas are kept.",
+          "description": "TEMPLATE FQN only, instead of 'properties'. TextDocument: {text, mode?, oldText?, expectedHash?, expectedSource?, overwrite?}; mode = 'searchReplace' (default, needs exactly one literal oldText match) / 'append' / 'replace' (the only mode that creates a missing file); replacing an existing file needs expectedHash or expectedSource from get_metadata_details, or overwrite=true. SpreadsheetDocument: {cells?, merges?, areas?, columnWidths?, rowHeights?}. cells [{row, col (both 0-based, required), replace?, text? | parameter?, bold?, fontSize?, hAlign? (Left/Center/Right/Auto/Width), vAlign? (Top/Center/Bottom), wrap?, textOrientation? (TENTHS of a degree: 90 degrees = 900), autoIndent? (0..100), autoMarkIncomplete?}]; merges [{fromRow, fromCol, toRow, toCol}]; areas [{name, fromRow, fromCol, toRow, toCol}]; columnWidths [{col, width?, autoWidthCalculation?, widthWeightFactor? (only with autoWidthCalculation:true)}]; rowHeights [{row, height}]. Omitted or null cell keys keep their values; replace:true resets them. Non-empty text clears parameter and vice versa; '' clears the named one. false / 0 on a format key overrides inheritance, but wrap:false restores inherited placement. Other cells, merges and areas are kept.",
           "type": "object"
         },
         "templates": {

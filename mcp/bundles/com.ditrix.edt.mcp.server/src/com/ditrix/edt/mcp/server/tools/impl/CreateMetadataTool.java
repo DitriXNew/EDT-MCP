@@ -294,14 +294,15 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 CommonModuleKind.CLIENT_MANAGED.token(), CommonModuleKind.CLIENT_ORDINARY.token(),
                 CommonModuleKind.CLIENT_SERVER.token(), CommonModuleKind.GLOBAL.token())
             .booleanProperty("serverCall", //$NON-NLS-1$
-                "CommonModule only: true makes a server module callable from the client. Needs a server " //$NON-NLS-1$
-                + "kind; not with 'Global' or privileged.") //$NON-NLS-1$
+                "CommonModule only: true makes a server module callable from the client. Only with the " //$NON-NLS-1$
+                + "'Server', 'ServerCall' or 'ClientServer' kind; not with privileged.") //$NON-NLS-1$
             .booleanProperty("privileged", //$NON-NLS-1$
                 "CommonModule only: true runs the module with full rights. 'Server' kind only, not with " //$NON-NLS-1$
-                + "serverCall.") //$NON-NLS-1$
+                + "serverCall or returnValuesReuse.") //$NON-NLS-1$
             .enumProperty("returnValuesReuse", //$NON-NLS-1$
-                "CommonModule only: default 'DontUse'; 'DuringSession' gives a cached module the " //$NON-NLS-1$
-                + "common-module-type check accepts, and not every kind admits 'DuringRequest'.", //$NON-NLS-1$
+                "CommonModule only: default 'DontUse'; 'DuringSession' (a cached module) only with the " //$NON-NLS-1$
+                + "'Server', 'ServerCall', 'ClientManaged' or 'ClientOrdinary' kind; 'DuringRequest' is " //$NON-NLS-1$
+                + "refused.", //$NON-NLS-1$
                 "DontUse", "DuringRequest", "DuringSession") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             .stringProperty(KEY_TARGET_NAMESPACE,
                 "XDTOPackage top-object only. URI namespace for the new package; a non-empty " //$NON-NLS-1$
