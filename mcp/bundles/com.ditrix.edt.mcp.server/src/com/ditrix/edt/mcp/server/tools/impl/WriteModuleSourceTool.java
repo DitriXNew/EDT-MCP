@@ -1536,9 +1536,9 @@ public class WriteModuleSourceTool implements IMcpTool
      * separator (see {@link #resolveLineDelimiter}); {@code lines} are LF-normalized (no {@code \r}),
      * so joining with it re-applies the file's convention verbatim.
      *
-     * @return the {@code contentHash} of the text written (#978): {@link ContentHash#of} over the text as
-     *     encoded, without the BOM - what read_module_source hashes when it reads the file. It is
-     *     computed from the text written, not by reading the file again: a re-read could vouch for a later
+     * @return the {@code contentHash} of the text written (#978): {@link ContentHash#of} over the written
+     *     bytes decoded as read_module_source decodes the file ({@link BslModuleUtils#decodeWrittenText}). It
+     *     is computed from the bytes written, not by reading the file again: a re-read could vouch for a later
      *     write by someone else, which the next guarded edit must refuse.
      */
     private String writeFile(IFile file, List<String> lines, boolean withBom,
@@ -1578,9 +1578,10 @@ public class WriteModuleSourceTool implements IMcpTool
             createParentFolders(file);
             file.create(stream, true, null);
         }
-        // ContentHash encodes the text to UTF-8 exactly as contentBytes was encoded (an unpaired surrogate becomes
-        // '?' in both), so the token equals the one taken over the file's bytes read back.
-        return ContentHash.of(content);
+        // The written bytes decoded the way read_module_source decodes the file (a leading EF BB BF is a BOM even
+        // when the text itself began with U+FEFF; without a BOM the file's declared charset applies), so the token
+        // is the one a read reports, whatever the charset - and still not taken from a second read of the file.
+        return ContentHash.of(BslModuleUtils.decodeWrittenText(file, output));
     }
 
     /**

@@ -1679,7 +1679,26 @@ public final class BslModuleUtils
             }
             rawIs = new FileInputStream(fsFile);
         }
+        return decodeText(rawIs, file, strict);
+    }
 
+    /**
+     * Decodes bytes just written to {@code file} exactly as {@link #readFileText(IFile)} would decode them when it
+     * reads the file back: a leading UTF-8 BOM is dropped, and without one the file's declared charset applies. A
+     * writer hashes this to answer the token a later read reports (#978), without reading the file again.
+     *
+     * @param file the file the bytes were written to (its charset decides a BOM-less decode)
+     * @param written the exact bytes written
+     * @return the text a read of the file returns
+     * @throws Exception if decoding fails
+     */
+    public static String decodeWrittenText(IFile file, byte[] written) throws Exception
+    {
+        return decodeText(new java.io.ByteArrayInputStream(written), file, false);
+    }
+
+    private static String decodeText(InputStream rawIs, IFile file, boolean strict) throws Exception
+    {
         try (InputStream input = new BufferedInputStream(rawIs))
         {
             input.mark(3);
@@ -1707,6 +1726,10 @@ public final class BslModuleUtils
                         throw ce;
                     }
                     charset = UTF_8;
+                }
+                if (charset == null || charset.isBlank())
+                {
+                    charset = UTF_8; // no declared charset: the same default as an unreadable one
                 }
             }
             CodingErrorAction action = strict ? CodingErrorAction.REPORT : CodingErrorAction.REPLACE;

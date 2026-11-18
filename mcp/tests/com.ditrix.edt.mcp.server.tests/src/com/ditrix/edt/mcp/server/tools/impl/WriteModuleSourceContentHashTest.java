@@ -342,6 +342,37 @@ public class WriteModuleSourceContentHashTest
         return new WriteModuleSourceTool().execute(params);
     }
 
+    /**
+     * A BOM-less module whose declared charset is not UTF-8: the writer emits UTF-8 bytes, the read tool decodes them
+     * with the declared charset, and the token is the one that read reports - so the next guarded edit is accepted.
+     */
+    @Test
+    public void aBomlessModuleInANonUtf8CharsetAnswersTheTokenItsReadReports() throws Exception
+    {
+        IFile file = tree.module("src/" + MODULE, ""); //$NON-NLS-1$ //$NON-NLS-2$
+        tree.contents.get(file).set("// до\n".getBytes("windows-1251")); //$NON-NLS-1$ //$NON-NLS-2$
+        when(file.getCharset()).thenReturn("windows-1251"); //$NON-NLS-1$
+        String response = write(Map.of("mode", "replace", "overwrite", "true", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            "source", "// после\n")); //$NON-NLS-1$ //$NON-NLS-2$
+        String written = hashOf(response);
+        assertEquals(readHash(), written);
+        // The next guarded edit chains on the returned token alone and is accepted.
+        hashOf(write(Map.of("oldSource", "//", "source", "///", "expectedHash", written))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+    }
+
+    /**
+     * A BOM-less module rewritten with text that itself begins with U+FEFF: the bytes start with EF BB BF, which the
+     * read tool takes for a BOM and strips, so the token must be of the text without it.
+     */
+    @Test
+    public void aWrittenTextStartingWithAByteOrderMarkAnswersTheTokenItsReadReports() throws Exception
+    {
+        tree.module("src/" + MODULE, "// before\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        String response = write(Map.of("mode", "replace", "overwrite", "true", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            "normalizeInvalidCharacters", "false", "source", "﻿// after\n")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        assertEquals(readHash(), hashOf(response));
+    }
+
     private String readHash()
     {
         Map<String, String> params = new HashMap<>();
