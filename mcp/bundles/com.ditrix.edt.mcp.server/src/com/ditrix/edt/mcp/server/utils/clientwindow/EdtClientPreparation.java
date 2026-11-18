@@ -151,7 +151,7 @@ final class EdtClientPreparation
             return configured;
         }
         Optional<String> stored = applicationPort.get();
-        if (stored != null && stored.isPresent())
+        if (stored.isPresent())
         {
             try
             {
@@ -169,6 +169,7 @@ final class EdtClientPreparation
         return freePort.getAsInt();
     }
 
+    /** {@code IApplicationAttributeRepository.getAttribute} never returns null (its contract); a failure is empty. */
     private static Optional<String> storedApplicationPort(IApplication application)
     {
         try

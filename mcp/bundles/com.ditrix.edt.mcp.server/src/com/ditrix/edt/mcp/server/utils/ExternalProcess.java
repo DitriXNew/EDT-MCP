@@ -8,7 +8,9 @@ package com.ditrix.edt.mcp.server.utils;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.Arrays;
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
 
@@ -24,7 +26,37 @@ public final class ExternalProcess
         void write(Process process) throws IOException;
     }
 
-    public record Result(int exitCode, byte[] stdout, byte[] stderr, boolean timedOut) { }
+    /**
+     * The captured output is compared by content, and {@code toString} names only its sizes: the bytes can be
+     * megabytes and may echo command arguments such as a password.
+     */
+    public record Result(int exitCode, byte[] stdout, byte[] stderr, boolean timedOut)
+    {
+        @Override
+        public boolean equals(Object other)
+        {
+            return other instanceof Result that && exitCode == that.exitCode && timedOut == that.timedOut
+                && Arrays.equals(stdout, that.stdout) && Arrays.equals(stderr, that.stderr);
+        }
+
+        @Override
+        public int hashCode()
+        {
+            return 31 * (31 * Objects.hash(exitCode, timedOut) + Arrays.hashCode(stdout)) + Arrays.hashCode(stderr);
+        }
+
+        @Override
+        public String toString()
+        {
+            return "Result[exitCode=" + exitCode + ", stdout=" + length(stdout) + " bytes, stderr="
+                + length(stderr) + " bytes, timedOut=" + timedOut + "]";
+        }
+
+        private static int length(byte[] bytes)
+        {
+            return bytes == null ? 0 : bytes.length;
+        }
+    }
 
     public static Result await(Process process, long timeoutMs, InputWriter input) throws Exception
     {

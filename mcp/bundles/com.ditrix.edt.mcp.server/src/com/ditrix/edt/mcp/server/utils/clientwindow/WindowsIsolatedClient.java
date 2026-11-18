@@ -91,6 +91,8 @@ public final class WindowsIsolatedClient implements IsolatedClientLauncher.Owned
     private HANDLE process;
     private long pid;
     private int exitCode = 1;
+    /** Guarded by this; true while one thread runs {@link #release()}. */
+    private boolean closing;
 
     private WindowsIsolatedClient(Jobs jobs, WindowsNative.Desktops desktops, Processes kernel)
     {
@@ -244,7 +246,33 @@ public final class WindowsIsolatedClient implements IsolatedClientLauncher.Owned
         finally { worker.join(1000); }
     }
 
+    /**
+     * Waiting for the job's processes to end releases this client's monitor ({@code wait}, not a sleep), so
+     * {@link #alive()} or {@link #windows()} from another thread is not held for the whole termination. The
+     * {@code closing} flag keeps teardown exclusive: a second {@code close()} waits for the first instead of
+     * terminating the job again or closing handles the first is still polling.
+     */
     @Override public synchronized void close()
+    {
+        while (closing)
+        {
+            try { wait(); }
+            catch (InterruptedException e)
+            {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("Interrupted while another thread was closing the isolated Windows client.", e);
+            }
+        }
+        closing = true;
+        try { release(); }
+        finally
+        {
+            closing = false;
+            notifyAll();
+        }
+    }
+
+    private void release()
     {
         RuntimeException failure = null;
         if (job != null)
@@ -266,7 +294,7 @@ public final class WindowsIsolatedClient implements IsolatedClientLauncher.Owned
                         {
                             throw new IllegalStateException("The isolated Windows job still has active processes; retry terminate_launch.");
                         }
-                        try { Thread.sleep(20); }
+                        try { wait(20); }
                         catch (InterruptedException e)
                         {
                             Thread.currentThread().interrupt();
