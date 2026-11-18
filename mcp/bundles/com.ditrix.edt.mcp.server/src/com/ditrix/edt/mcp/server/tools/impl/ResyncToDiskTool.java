@@ -921,9 +921,11 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
         boolean exported = BmTransactions.forceExportToDisk(ctx.project, new ArrayList<>(fqns));
         if (!exported)
         {
-            return ToolResult.error("EDT did not accept the re-save of " + fqns //$NON-NLS-1$
-                + " (services unavailable or the export threw); nothing was written. Wait until the " //$NON-NLS-1$
-                + "project reports ready and retry.").toJson(); //$NON-NLS-1$
+            // A list submission can throw after queueing part of it, so some files may be rewritten.
+            return ToolResult.errorWithUnknownMutationOutcome("EDT did not complete the re-save of " + fqns //$NON-NLS-1$
+                + " (services unavailable or the export threw part-way); some of these files may already " //$NON-NLS-1$
+                + "have been rewritten from the model. Check them on disk (git status) and retry once the " //$NON-NLS-1$
+                + "project reports ready.").toJson(); //$NON-NLS-1$
         }
         return ToolResult.success()
             .put(McpKeys.PROJECT_NAME, ctx.project.getName())
