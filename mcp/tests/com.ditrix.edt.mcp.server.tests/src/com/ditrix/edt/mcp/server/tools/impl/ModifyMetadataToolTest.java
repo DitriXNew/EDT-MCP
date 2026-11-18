@@ -622,7 +622,7 @@ public class ModifyMetadataToolTest
     public void testNormalizeYoIsOptional()
     {
         String schema = new ModifyMetadataTool().getInputSchema();
-        int requiredIdx = schema.indexOf("\"required\""); //$NON-NLS-1$
+        int requiredIdx = schema.lastIndexOf("\"required\""); // top-level, after nested ones //$NON-NLS-1$
         assertTrue(requiredIdx >= 0);
         String tail = schema.substring(requiredIdx);
         assertFalse("normalizeYo must not be required (defaults true)", //$NON-NLS-1$
@@ -633,7 +633,7 @@ public class ModifyMetadataToolTest
     public void testRequiredParameters()
     {
         String schema = new ModifyMetadataTool().getInputSchema();
-        int requiredIdx = schema.indexOf("\"required\""); //$NON-NLS-1$
+        int requiredIdx = schema.lastIndexOf("\"required\""); // top-level, after nested ones //$NON-NLS-1$
         assertTrue("schema must declare a required array", requiredIdx >= 0); //$NON-NLS-1$
         String tail = schema.substring(requiredIdx);
         assertTrue("projectName must be required", tail.contains("\"projectName\"")); //$NON-NLS-1$ //$NON-NLS-2$
@@ -890,7 +890,7 @@ public class ModifyMetadataToolTest
         // Like the role payload, 'content' is a conditional alternative to 'properties' (enforced in
         // execute(), not the schema's required array), so it must NOT be schema-required.
         String schema = new ModifyMetadataTool().getInputSchema();
-        int requiredIdx = schema.indexOf("\"required\""); //$NON-NLS-1$
+        int requiredIdx = schema.lastIndexOf("\"required\""); // top-level, after nested ones //$NON-NLS-1$
         assertTrue(requiredIdx >= 0);
         String tail = schema.substring(requiredIdx);
         assertFalse("content must not be schema-required (properties is the alternative)", //$NON-NLS-1$

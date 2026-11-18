@@ -81,7 +81,7 @@ public class ToolArgumentValidatorTest
         assertRefused(check("flag", 2.0), "flag must be true or false; got 2"); //$NON-NLS-1$ //$NON-NLS-2$
         assertRefused(check("mode", "delete"), "mode must be one of 'read', 'write'; got the string 'delete'"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         assertRefused(check("name", map("a", "b")), "name must be a string; got an object"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-        assertRefused(check("body", "text"), "body must be an object; got the string 'text'"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertRefused(check("body", "text"), "body must be an object {at?}; got the string 'text'"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         assertRefused(check("rights", "Catalog.A"), "rights must be an array of {object, value?, rlsFields?, interactive?} objects; got the string"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         assertRefused(check("body", map("at", 0.0)), "body.at must be at least 1; got 0"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
     }

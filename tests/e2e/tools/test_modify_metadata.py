@@ -219,7 +219,8 @@ def test_template_cells_invalid_replace_flag_is_atomic():
                                {"row": 2, "col": 0, "wrap": True, "replace": "yes"}]},
     })
     error = assert_error(result, "replace must be a JSON boolean")
-    assert_error_quality(error, names=["replace", "yes"], suggests=["boolean", "replace:true"])
+    # The input-schema check refuses it before the writer runs, naming the cell and the legal values.
+    assert_error_quality(error, names=["cells[1].replace", "yes"], suggests=["true or false"])
     assert_no_diff("invalid replace flag must reject all cells before mutation")
 
 

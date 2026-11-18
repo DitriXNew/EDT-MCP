@@ -289,6 +289,77 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     /** Payload / output key: the command-interface changes array / applied-counts object. */
     static final String KEY_COMMANDS = "commands"; //$NON-NLS-1$
 
+    /** Input schema of {@link #KEY_RIGHTS}: the members {@code RoleRightsWriter} reads. */
+    private static final String RIGHTS_SCHEMA = "{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{" //$NON-NLS-1$
+        + "\"object\":{\"type\":\"string\"},\"right\":{\"type\":\"string\"}," //$NON-NLS-1$
+        + "\"value\":{\"type\":[\"boolean\",\"string\"],\"enum\":[true,false,\"set\",\"unset\",\"provided\"]}," //$NON-NLS-1$
+        + "\"rls\":{\"type\":\"string\"},\"rlsFields\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}}," //$NON-NLS-1$
+        + "\"required\":[\"object\",\"right\"],\"additionalProperties\":false}}"; //$NON-NLS-1$
+
+    /** Input schema of {@link #KEY_TEMPLATES}; a blank {@code op} means add, so the enum has no "". */
+    private static final String TEMPLATES_SCHEMA = "{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{" //$NON-NLS-1$
+        + "\"op\":{\"type\":\"string\",\"enum\":[\"add\",\"edit\",\"delete\"]},\"name\":{\"type\":\"string\"}," //$NON-NLS-1$
+        + "\"condition\":{\"type\":\"string\"}},\"required\":[\"name\"],\"additionalProperties\":false}}"; //$NON-NLS-1$
+
+    /** Input schema of {@link #KEY_ROLE_PROPERTIES}. */
+    private static final String ROLE_PROPERTIES_SCHEMA = "{\"type\":\"object\",\"properties\":{" //$NON-NLS-1$
+        + "\"setForNewObjects\":{\"type\":\"boolean\"},\"setForAttributesByDefault\":{\"type\":\"boolean\"}," //$NON-NLS-1$
+        + "\"independentRightsOfChildObjects\":{\"type\":\"boolean\"}},\"additionalProperties\":false}"; //$NON-NLS-1$
+
+    /** Input schema of {@link #KEY_CONTENT}: the members the three membership writers read. */
+    private static final String CONTENT_SCHEMA = "{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{" //$NON-NLS-1$
+        + "\"op\":{\"type\":\"string\",\"enum\":[\"add\",\"remove\"]},\"metadata\":{\"type\":\"string\"}," //$NON-NLS-1$
+        + "\"use\":{\"type\":\"string\",\"enum\":[\"Use\",\"DontUse\",\"Auto\"]}," //$NON-NLS-1$
+        + "\"autoRecord\":{\"type\":\"string\",\"enum\":[\"Allow\",\"Deny\"]}}," //$NON-NLS-1$
+        + "\"required\":[\"metadata\"],\"additionalProperties\":false}}"; //$NON-NLS-1$
+
+    /** Input schema of {@link #KEY_COMMANDS}: the entry keys {@code CommandInterfaceSection} accepts. */
+    private static final String COMMANDS_SCHEMA = "{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{" //$NON-NLS-1$
+        + "\"command\":{\"type\":\"string\"},\"visible\":{\"type\":\"boolean\"}," //$NON-NLS-1$
+        + "\"roles\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{" //$NON-NLS-1$
+        + "\"role\":{\"type\":\"string\"}," //$NON-NLS-1$
+        + "\"visible\":{\"type\":[\"boolean\",\"string\"],\"enum\":[true,false,\"default\"]}}," //$NON-NLS-1$
+        + "\"required\":[\"role\",\"visible\"],\"additionalProperties\":false}}," //$NON-NLS-1$
+        + "\"group\":{\"type\":\"string\"},\"after\":{\"type\":\"string\"},\"before\":{\"type\":\"string\"}}," //$NON-NLS-1$
+        + "\"required\":[\"command\"],\"additionalProperties\":false}}"; //$NON-NLS-1$
+
+    /** A spreadsheet row / column index: a non-negative integer. */
+    private static final String INDEX_SCHEMA = "{\"type\":\"integer\",\"minimum\":0}"; //$NON-NLS-1$
+
+    /**
+     * Input schema of {@link #KEY_TEMPLATE}: the TextDocument and SpreadsheetDocument members. Cell, column
+     * and row items stay open so {@code SpreadsheetTemplateWriter} names a misplaced key itself; bold,
+     * autoMarkIncomplete and autoWidthCalculation are untyped because the writer also reads "yes" / "1".
+     */
+    private static final String TEMPLATE_SCHEMA = "{\"type\":\"object\",\"properties\":{" //$NON-NLS-1$
+        + "\"text\":{\"type\":\"string\"},\"mode\":{\"type\":\"string\"},\"oldText\":{\"type\":\"string\"}," //$NON-NLS-1$
+        + "\"expectedHash\":{\"type\":\"string\"},\"expectedSource\":{\"type\":\"string\"}," //$NON-NLS-1$
+        + "\"overwrite\":{\"type\":\"boolean\"}," //$NON-NLS-1$
+        + "\"cells\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{" //$NON-NLS-1$
+        + "\"row\":" + INDEX_SCHEMA + ",\"col\":" + INDEX_SCHEMA + ",\"replace\":{\"type\":\"boolean\"}," //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        + "\"text\":{\"type\":\"string\"},\"parameter\":{\"type\":\"string\"},\"bold\":{}," //$NON-NLS-1$
+        + "\"fontSize\":{\"type\":\"integer\",\"minimum\":1}," //$NON-NLS-1$
+        + "\"hAlign\":{\"type\":\"string\",\"enum\":[\"Auto\",\"Left\",\"Right\",\"Center\",\"Width\"]}," //$NON-NLS-1$
+        + "\"vAlign\":{\"type\":\"string\",\"enum\":[\"Center\",\"Top\",\"Bottom\"]}," //$NON-NLS-1$
+        + "\"wrap\":{\"type\":[\"boolean\",\"string\"],\"enum\":[true,false,\"Auto\",\"Cut\",\"Block\",\"Wrap\"]}," //$NON-NLS-1$
+        + "\"textOrientation\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":3600}," //$NON-NLS-1$
+        + "\"autoIndent\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":100},\"autoMarkIncomplete\":{}}," //$NON-NLS-1$
+        + "\"required\":[\"row\",\"col\"]}}," //$NON-NLS-1$
+        + "\"merges\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{" //$NON-NLS-1$
+        + "\"fromRow\":" + INDEX_SCHEMA + ",\"fromCol\":" + INDEX_SCHEMA //$NON-NLS-1$ //$NON-NLS-2$
+        + ",\"toRow\":" + INDEX_SCHEMA + ",\"toCol\":" + INDEX_SCHEMA //$NON-NLS-1$ //$NON-NLS-2$
+        + "},\"required\":[\"fromRow\",\"fromCol\",\"toRow\",\"toCol\"],\"additionalProperties\":false}}," //$NON-NLS-1$
+        + "\"areas\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{" //$NON-NLS-1$
+        + "\"name\":{\"type\":\"string\"},\"fromRow\":" + INDEX_SCHEMA + ",\"fromCol\":" + INDEX_SCHEMA //$NON-NLS-1$ //$NON-NLS-2$
+        + ",\"toRow\":" + INDEX_SCHEMA + ",\"toCol\":" + INDEX_SCHEMA //$NON-NLS-1$ //$NON-NLS-2$
+        + "},\"required\":[\"name\",\"fromRow\",\"fromCol\",\"toRow\",\"toCol\"],\"additionalProperties\":false}}," //$NON-NLS-1$
+        + "\"columnWidths\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{" //$NON-NLS-1$
+        + "\"col\":" + INDEX_SCHEMA + ",\"width\":{\"type\":\"integer\",\"minimum\":1},\"autoWidthCalculation\":{}," //$NON-NLS-1$ //$NON-NLS-2$
+        + "\"widthWeightFactor\":" + INDEX_SCHEMA + "},\"required\":[\"col\"]}}," //$NON-NLS-1$ //$NON-NLS-2$
+        + "\"rowHeights\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{" //$NON-NLS-1$
+        + "\"row\":" + INDEX_SCHEMA + ",\"height\":{\"type\":\"integer\",\"minimum\":1}}," //$NON-NLS-1$ //$NON-NLS-2$
+        + "\"required\":[\"row\",\"height\"]}}},\"additionalProperties\":false}"; //$NON-NLS-1$
+
     /** Output key: what a command interface stores after a {@link #KEY_COMMANDS} change. */
     private static final String KEY_STORED = "stored"; //$NON-NLS-1$
 
@@ -359,39 +430,42 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 + "mdclass-assignable property keeps the whole call on the mdclass surface; only " //$NON-NLS-1$
                 + "an all-root-only batch falls back to the content root. Type / kind tokens may " //$NON-NLS-1$
                 + "be English or Russian; the Name parts are the programmatic Name.", true) //$NON-NLS-1$
-            .objectArrayProperty("properties", //$NON-NLS-1$
+            .property("properties", //$NON-NLS-1$
                 "Properties to set, as [{name, value, language?}], e.g. {name: 'synonym', value: " //$NON-NLS-1$
                 + "'Products', language: 'en'}; 'language' defaults to the configuration's default " //$NON-NLS-1$
-                + "language. Required unless a Role payload (rights / templates / roleProperties) is given.") //$NON-NLS-1$
-            .objectArrayProperty(KEY_RIGHTS,
+                + "language. Required unless a Role payload (rights / templates / roleProperties) is given.", //$NON-NLS-1$
+                PROPERTY_ENTRIES_SCHEMA)
+            .property(KEY_RIGHTS,
                 "ROLE only: [{object, right, value?, rls?, rlsFields?}]. object = metadata FQN; right = " //$NON-NLS-1$
                 + "right name, English or Russian ('Read' / 'Чтение'); value = 'set' (default) / 'unset' / " //$NON-NLS-1$
                 + "'provided' (inherited) or a boolean; rls = restriction condition (1C query text); " //$NON-NLS-1$
                 + "rlsFields = an array of field-name strings it applies to (omit or [] for the whole " //$NON-NLS-1$
-                + "object).") //$NON-NLS-1$
-            .objectArrayProperty(KEY_TEMPLATES,
+                + "object).", RIGHTS_SCHEMA) //$NON-NLS-1$
+            .property(KEY_TEMPLATES,
                 "ROLE only: RLS templates as [{op?, name, condition?}]; op = 'add' (default) / 'edit' / " //$NON-NLS-1$
-                + "'delete'; condition is required for add and edit.") //$NON-NLS-1$
-            .objectProperty(KEY_ROLE_PROPERTIES,
+                + "'delete'; condition is required for add and edit.", TEMPLATES_SCHEMA) //$NON-NLS-1$
+            .property(KEY_ROLE_PROPERTIES,
                 "ROLE only: {setForNewObjects?, setForAttributesByDefault?, " //$NON-NLS-1$
-                + "independentRightsOfChildObjects?} booleans; omitted flags are unchanged.") //$NON-NLS-1$
-            .objectArrayProperty(KEY_CONTENT,
+                + "independentRightsOfChildObjects?} booleans; omitted flags are unchanged.", //$NON-NLS-1$
+                ROLE_PROPERTIES_SCHEMA)
+            .property(KEY_CONTENT,
                 "Membership list to change, as [{op?, metadata, use?, autoRecord?}]: the owners of a " //$NON-NLS-1$
                 + "CommonAttribute or Catalog, the content of an ExchangePlan or a (nested) Subsystem, the " //$NON-NLS-1$
                 + "register records of a Document. op = 'add' (default) / 'remove'; metadata = member FQN, " //$NON-NLS-1$
                 + "e.g. 'Catalog.Products'; use = 'Use' (default) / 'DontUse' / 'Auto', CommonAttribute " //$NON-NLS-1$
                 + "only; autoRecord = 'Allow' / 'Deny', ExchangePlan only. Re-adding a listed " //$NON-NLS-1$
                 + "CommonAttribute owner SETS its use (omitted -> 'Use'), a listed ExchangePlan member its " //$NON-NLS-1$
-                + "given autoRecord; re-adding a plain reference is a no-op. Not with 'properties'.") //$NON-NLS-1$
-            .objectArrayProperty(KEY_COMMANDS,
+                + "given autoRecord; re-adding a plain reference is a no-op. Not with 'properties'.", //$NON-NLS-1$
+                CONTENT_SCHEMA)
+            .property(KEY_COMMANDS,
                 "Only for 'Subsystem.<Name>.CommandInterface' or " //$NON-NLS-1$
                 + "'Configuration.MainSectionCommandInterface': [{command, visible?, roles?, group?, after? " //$NON-NLS-1$
                 + "| before?}], applied in order as one batch. command = command FQN, e.g. " //$NON-NLS-1$
                 + "'CommonCommand.Print'; roles = [{role: 'Role.<Name>', visible: true | false | " //$NON-NLS-1$
                 + "'default'}]; group = panel group, e.g. 'NavigationPanelImportant' or " //$NON-NLS-1$
                 + "'CommandGroup.<Name>'; after / before = a command of that group. get_metadata_details on " //$NON-NLS-1$
-                + "the same FQN lists them. Not with other payloads.") //$NON-NLS-1$
-            .objectProperty(KEY_TEMPLATE,
+                + "the same FQN lists them. Not with other payloads.", COMMANDS_SCHEMA) //$NON-NLS-1$
+            .property(KEY_TEMPLATE,
                 "TEMPLATE FQN only, instead of 'properties'. TextDocument: {text, mode?, oldText?, " //$NON-NLS-1$
                 + "expectedHash?, expectedSource?, overwrite?}; mode = 'searchReplace' (default, needs " //$NON-NLS-1$
                 + "exactly one literal oldText match) / 'append' / 'replace' (the only mode that creates a " //$NON-NLS-1$
@@ -406,7 +480,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 + "rowHeights [{row, height}]. Omitted or null cell keys keep their values; replace:true " //$NON-NLS-1$
                 + "resets them. Non-empty text clears parameter and vice versa; '' clears the named one. " //$NON-NLS-1$
                 + "false / 0 on a format key overrides inheritance, but wrap:false restores inherited " //$NON-NLS-1$
-                + "placement. Other cells, merges and areas are kept.") //$NON-NLS-1$
+                + "placement. Other cells, merges and areas are kept.", TEMPLATE_SCHEMA) //$NON-NLS-1$
             .booleanProperty("normalizeYo", //$NON-NLS-1$
                 "Default true: stores 'ё' / 'Ё' as 'е' / 'Е' in synonyms, titles and 'comment' (other " //$NON-NLS-1$
                 + "strings stay as supplied); false keeps 'ё'.") //$NON-NLS-1$
