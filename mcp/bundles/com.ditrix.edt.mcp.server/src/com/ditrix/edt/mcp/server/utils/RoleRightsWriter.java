@@ -1396,6 +1396,44 @@ public final class RoleRightsWriter
             return ToolResult.error("The right 'value' must be 'set' / 'unset' / 'provided' or a " //$NON-NLS-1$
                 + "boolean (true = set, false = unset); default is 'set'.").toJson(); //$NON-NLS-1$
         }
+        return validateRls(entry);
+    }
+
+    /**
+     * The plan reads 'rls' and 'rlsFields' leniently (a non-string or non-array is dropped), which would
+     * silently widen a field-scoped restriction to the whole object; refuse such shapes up front.
+     */
+    private static String validateRls(JsonObject entry)
+    {
+        JsonElement rls = entry.get("rls"); //$NON-NLS-1$
+        if (rls != null && !rls.isJsonNull() && !(rls.isJsonPrimitive() && rls.getAsJsonPrimitive().isString()))
+        {
+            return ToolResult.error("'rls' must be the restriction condition as a string (1C query text); got " //$NON-NLS-1$
+                + rls + ".").toJson(); //$NON-NLS-1$
+        }
+        JsonElement fields = entry.get("rlsFields"); //$NON-NLS-1$
+        if (fields == null || fields.isJsonNull())
+        {
+            return null;
+        }
+        if (!fields.isJsonArray())
+        {
+            return ToolResult.error("'rlsFields' must be an array of field-name strings, e.g. [\"Owner\"]; got " //$NON-NLS-1$
+                + fields + ". Omit it, or pass [], to restrict the whole object.").toJson(); //$NON-NLS-1$
+        }
+        for (JsonElement field : fields.getAsJsonArray())
+        {
+            if (!field.isJsonPrimitive() || !field.getAsJsonPrimitive().isString() || field.getAsString().isBlank())
+            {
+                return ToolResult.error("Each 'rlsFields' item must be a non-empty field-name string; got " //$NON-NLS-1$
+                    + field + ".").toJson(); //$NON-NLS-1$
+            }
+        }
+        if (!fields.getAsJsonArray().isEmpty() && emptyToNull(str(rls)) == null)
+        {
+            return ToolResult.error("'rlsFields' applies only together with a non-empty 'rls' condition; add " //$NON-NLS-1$
+                + "the condition or drop 'rlsFields'.").toJson(); //$NON-NLS-1$
+        }
         return null;
     }
 

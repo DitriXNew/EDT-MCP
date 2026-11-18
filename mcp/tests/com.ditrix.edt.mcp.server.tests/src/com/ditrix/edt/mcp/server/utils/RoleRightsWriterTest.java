@@ -211,6 +211,50 @@ public class RoleRightsWriterTest
         assertErrorMentions(RoleRightsWriter.validateRightsEntry(entry), "value"); //$NON-NLS-1$
     }
 
+    /** A wrong rls / rlsFields shape is refused, never read as a whole-object restriction. */
+    @Test
+    public void testValidateRightsEntryRefusesAWrongRlsShape()
+    {
+        JsonObject single = rlsEntry("Owner = &Owner"); //$NON-NLS-1$
+        single.addProperty("rlsFields", "Owner"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertErrorMentions(RoleRightsWriter.validateRightsEntry(single), "'rlsFields' must be an array"); //$NON-NLS-1$
+
+        JsonObject badItem = rlsEntry("Owner = &Owner"); //$NON-NLS-1$
+        com.google.gson.JsonArray items = new com.google.gson.JsonArray();
+        items.add(1);
+        badItem.add("rlsFields", items); //$NON-NLS-1$
+        assertErrorMentions(RoleRightsWriter.validateRightsEntry(badItem), "non-empty field-name string"); //$NON-NLS-1$
+
+        JsonObject noCondition = rlsEntry(null);
+        com.google.gson.JsonArray owner = new com.google.gson.JsonArray();
+        owner.add("Owner"); //$NON-NLS-1$
+        noCondition.add("rlsFields", owner); //$NON-NLS-1$
+        assertErrorMentions(RoleRightsWriter.validateRightsEntry(noCondition), "only together with a non-empty 'rls'"); //$NON-NLS-1$
+
+        JsonObject objectCondition = rlsEntry(null);
+        objectCondition.add("rls", new JsonObject()); //$NON-NLS-1$
+        assertErrorMentions(RoleRightsWriter.validateRightsEntry(objectCondition), "'rls' must be the restriction"); //$NON-NLS-1$
+
+        JsonObject fieldScoped = rlsEntry("Owner = &Owner"); //$NON-NLS-1$
+        fieldScoped.add("rlsFields", owner); //$NON-NLS-1$
+        assertNull(RoleRightsWriter.validateRightsEntry(fieldScoped));
+        JsonObject wholeObject = rlsEntry("Owner = &Owner"); //$NON-NLS-1$
+        wholeObject.add("rlsFields", new com.google.gson.JsonArray()); //$NON-NLS-1$
+        assertNull(RoleRightsWriter.validateRightsEntry(wholeObject));
+    }
+
+    private static JsonObject rlsEntry(String rls)
+    {
+        JsonObject entry = new JsonObject();
+        entry.addProperty("object", "Catalog.Products"); //$NON-NLS-1$ //$NON-NLS-2$
+        entry.addProperty("right", "Read"); //$NON-NLS-1$ //$NON-NLS-2$
+        if (rls != null)
+        {
+            entry.addProperty("rls", rls); //$NON-NLS-1$
+        }
+        return entry;
+    }
+
     @Test
     public void testValidateRightsEntryAcceptsValid()
     {

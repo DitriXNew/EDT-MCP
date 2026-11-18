@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.server.tools.impl;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 import java.util.Collections;
@@ -68,5 +69,9 @@ public class ListToolsetsToolTest
         assertTrue(json.contains("enable_toolset")); //$NON-NLS-1$
         // Headless: disclosure is off, so the note states so.
         assertTrue(json.contains("\"progressiveDisclosure\":false")); //$NON-NLS-1$
+        // The note names the real control, as the user's setting.
+        assertTrue(json, json.contains("user's setting: Window → Preferences → MCP Server → Tools " //$NON-NLS-1$
+            + "→ Progressive disclosure")); //$NON-NLS-1$
+        assertFalse(json, json.contains("Turn it on in EDT Preferences")); //$NON-NLS-1$
     }
 }

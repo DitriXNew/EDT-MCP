@@ -122,6 +122,20 @@ public class ToolsTabProvenanceTest
     }
 
     @Test
+    public void testProgressiveDisclosureIsSavedOnOkAndRestoredToOffByDefaults() throws Exception
+    {
+        setField("progressiveDisclosure", true);
+        assertFalse("the pending choice must not write preferences", //$NON-NLS-1$
+            store.getBoolean(PreferenceConstants.PREF_PROGRESSIVE_DISCLOSURE));
+        tab.performOk();
+        assertTrue(store.getBoolean(PreferenceConstants.PREF_PROGRESSIVE_DISCLOSURE));
+
+        tab.performDefaults();
+        tab.performOk();
+        assertFalse(store.getBoolean(PreferenceConstants.PREF_PROGRESSIVE_DISCLOSURE));
+    }
+
+    @Test
     public void testEnableAllButtonRecordsAllTools() throws Exception
     {
         tab.enableAllTools();

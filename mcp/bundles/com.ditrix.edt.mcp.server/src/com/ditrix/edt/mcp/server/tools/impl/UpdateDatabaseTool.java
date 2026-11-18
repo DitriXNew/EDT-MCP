@@ -146,12 +146,11 @@ public class UpdateDatabaseTool implements IMcpTool
             .stringProperty("standaloneServerPortConflict", //$NON-NLS-1$
                 StandaloneServerPortConflictPolicy.PARAMETER_DESCRIPTION)
             .booleanProperty("terminateRunningClients", //$NON-NLS-1$
-                "Before applying, terminate any 1C client THIS EDT launched on the target infobase " //$NON-NLS-1$
-                + "to free the exclusive lock (default true). false keeps a running client — the " //$NON-NLS-1$
-                + "update then fails if that client holds the infobase exclusively.") //$NON-NLS-1$
+                "Default true: first terminates 1C clients THIS EDT launched on the infobase; false keeps " //$NON-NLS-1$
+                + "them, and the update fails if one holds the infobase exclusively.") //$NON-NLS-1$
             .booleanProperty("checkInfobaseSessions", //$NON-NLS-1$
-                "Before applying, refuse when infobase_sessions finds a non-agent standalone-server " //$NON-NLS-1$
-                + "session (default true). false skips this safety pre-flight.") //$NON-NLS-1$
+                "Default true: refuse while infobase_sessions finds a non-agent standalone-server " //$NON-NLS-1$
+                + "session; false skips this check.") //$NON-NLS-1$
             .booleanProperty(KEY_IGNORE_BRANCH_BINDING,
                 "true skips the refusal of a target whose infobase is not bound to the project's " //$NON-NLS-1$
                 + "current Git branch (default false).") //$NON-NLS-1$

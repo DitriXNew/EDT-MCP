@@ -301,6 +301,17 @@ public final class Toolsets
     static final String ENV_PROGRESSIVE_DISCLOSURE = "EDT_MCP_PROGRESSIVE_DISCLOSURE"; //$NON-NLS-1$
 
     /**
+     * Whether {@link #ENV_PROGRESSIVE_DISCLOSURE} is set, so it wins over the stored preference.
+     *
+     * @return {@code true} if the environment variable decides disclosure for this session
+     */
+    public static boolean hasProgressiveDisclosureOverride()
+    {
+        String env = System.getenv(ENV_PROGRESSIVE_DISCLOSURE);
+        return env != null && !env.isBlank();
+    }
+
+    /**
      * Whether progressive tool disclosure is enabled. The {@link #ENV_PROGRESSIVE_DISCLOSURE}
      * environment variable wins when set; otherwise the
      * {@link PreferenceConstants#PREF_PROGRESSIVE_DISCLOSURE} preference is read.
@@ -311,10 +322,9 @@ public final class Toolsets
      */
     public static boolean isProgressiveDisclosureEnabled()
     {
-        String env = System.getenv(ENV_PROGRESSIVE_DISCLOSURE);
-        if (env != null && !env.isBlank())
+        if (hasProgressiveDisclosureOverride())
         {
-            String v = env.trim();
+            String v = System.getenv(ENV_PROGRESSIVE_DISCLOSURE).trim();
             return "true".equalsIgnoreCase(v) || "1".equals(v) || "yes".equalsIgnoreCase(v); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         }
         Activator activator = Activator.getDefault();
