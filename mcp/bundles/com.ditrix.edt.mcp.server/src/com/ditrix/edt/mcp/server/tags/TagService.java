@@ -33,7 +33,8 @@ import com.ditrix.edt.mcp.server.tags.model.TagStorage;
  */
 public class TagService implements IResourceChangeListener {
 
-    private static volatile TagService instance;
+    /** Guarded by {@link #INSTANCE_LOCK}; read and written only under it. */
+    private static TagService instance;
     private static final Object INSTANCE_LOCK = new Object();
 
     private final TagYamlStore store = new TagYamlStore();
@@ -55,16 +56,12 @@ public class TagService implements IResourceChangeListener {
      * @return the tag service instance
      */
     public static TagService getInstance() {
-        TagService localInstance = instance;
-        if (localInstance == null) {
-            synchronized (INSTANCE_LOCK) {
-                localInstance = instance;
-                if (localInstance == null) {
-                    instance = localInstance = new TagService();
-                }
+        synchronized (INSTANCE_LOCK) {
+            if (instance == null) {
+                instance = new TagService();
             }
+            return instance;
         }
-        return localInstance;
     }
 
     /** Returns the service, or null when the plugin is not running (get_tags runs headless too). */
