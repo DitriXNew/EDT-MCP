@@ -72,6 +72,11 @@ public final class MetadataPropertyApplier
     /** Property/JSON key: the value of a property entry. */
     public static final String KEY_VALUE = "value";
 
+    /** Input schema of a {@code properties} argument: {@code value} is untyped, its form depends on the property. */
+    public static final String PROPERTY_ENTRIES_SCHEMA = "{\"type\":\"array\",\"items\":{\"type\":\"object\"," //$NON-NLS-1$
+        + "\"properties\":{\"name\":{\"type\":\"string\"},\"value\":{},\"language\":{\"type\":\"string\"}}," //$NON-NLS-1$
+        + "\"required\":[\"name\"],\"additionalProperties\":false}}"; //$NON-NLS-1$
+
     public static final String KEY_COMMON = "common";
 
     public static final String KEY_ROLES = "roles";

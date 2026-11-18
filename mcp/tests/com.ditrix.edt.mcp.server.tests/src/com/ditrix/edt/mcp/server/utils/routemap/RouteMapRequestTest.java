@@ -179,4 +179,30 @@ public class RouteMapRequestTest
             assertThrows(IllegalArgumentException.class, () -> RouteMapRequest.parse(
                 "[{\"name\":\"Begin\",\"type\":\"Start\",\"group\":true}]", "[]")).getMessage());
     }
+
+    @Test
+    public void testAnUnknownKeyIsRefusedNamingTheEntryAndTheAcceptedMembers()
+    {
+        assertEquals("Unknown member 'kind' in points[1]. Accepted members: name, type, title, x, y, width, height, "
+            + "taskDescription, group, id, truePort, falsePort. Remove 'kind' or use one of them.",
+            assertThrows(IllegalArgumentException.class, () -> RouteMapRequest.parse(
+                "[{\"name\":\"Check\",\"type\":\"Condition\"},{\"name\":\"Done\",\"type\":\"Completion\","
+                    + "\"kind\":\"End\"}]", "[]")).getMessage());
+        assertEquals("Unknown member 'label' in connections[0]. Accepted members: from, to, name, title, fromPort, "
+            + "toPort, branch, id, fromId, toId. Remove 'label' or use one of them.",
+            assertThrows(IllegalArgumentException.class, () -> RouteMapRequest.parse(POINTS,
+                "[{\"from\":\"Check\",\"to\":\"Done\",\"branch\":\"true\",\"label\":\"Yes\"}]")).getMessage());
+    }
+
+    @Test
+    public void testADeferredKeyKeepsItsFollowUpMessageAndReadOnlyKeysOfAGetAreIgnored()
+    {
+        String message = assertThrows(IllegalArgumentException.class, () -> RouteMapRequest.parse(
+            "[{\"name\":\"Point\",\"type\":\"Start\",\"bounds\":{\"x\":1}}]", "[]")).getMessage();
+        assertTrue(message, message.startsWith("Cannot write 'bounds'. Pass x, y, width and height directly"));
+        var request = RouteMapRequest.parse("[{\"name\":\"Check\",\"type\":\"Condition\",\"id\":3,\"truePort\":3,"
+            + "\"falsePort\":1},{\"name\":\"Done\",\"type\":\"Completion\",\"id\":4,\"title\":null}]",
+            "[{\"from\":\"Check\",\"to\":\"Done\",\"branch\":\"true\",\"id\":5,\"fromId\":3,\"toId\":4,\"note\":null}]");
+        assertEquals(1, request.connections().size());
+    }
 }

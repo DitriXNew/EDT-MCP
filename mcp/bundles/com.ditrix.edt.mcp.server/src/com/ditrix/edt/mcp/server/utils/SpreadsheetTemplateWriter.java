@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.server.utils;
 import java.util.Locale;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 import org.eclipse.emf.common.util.EList;
@@ -40,6 +41,7 @@ import com._1c.g5.v8.dt.moxel.content.LocalString;
 import com._1c.g5.v8.dt.moxel.content.TextPlacement;
 import com._1c.g5.v8.dt.moxel.content.VerticalAlignment;
 import com._1c.g5.v8.dt.platform.version.Version;
+import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
@@ -140,6 +142,18 @@ public final class SpreadsheetTemplateWriter
 
     /** Column-only format keys (a cell / row entry carries neither). */
     private static final String[] COLUMN_ONLY_KEYS = { KEY_AUTO_WIDTH_CALCULATION, KEY_WIDTH_WEIGHT_FACTOR };
+
+    /** Every key a cells entry may carry. */
+    private static final String[] CELL_KEYS = { KEY_ROW, KEY_COL, KEY_REPLACE, KEY_TEXT, KEY_PARAMETER, KEY_BOLD,
+        KEY_FONT_SIZE, KEY_H_ALIGN, KEY_V_ALIGN, KEY_WRAP, KEY_TEXT_ORIENTATION, KEY_AUTO_INDENT,
+        KEY_AUTO_MARK_INCOMPLETE };
+
+    /** Every key a columnWidths entry may carry. */
+    private static final String[] COLUMN_KEYS = { KEY_COL, KEY_WIDTH, KEY_AUTO_WIDTH_CALCULATION,
+        KEY_WIDTH_WEIGHT_FACTOR };
+
+    /** Every key a rowHeights entry may carry. */
+    private static final String[] ROW_KEYS = { KEY_ROW, KEY_HEIGHT };
 
     /**
      * Upper bound of {@link Format#setTextOrientation(int)}. The platform stores the rotation in TENTHS of
@@ -819,6 +833,10 @@ public final class SpreadsheetTemplateWriter
     {
         String where = KEY_CELLS + "[" + index + "]"; //$NON-NLS-1$ //$NON-NLS-2$
         String misplaced = misplacedColumnKeyError(entry, where);
+        if (misplaced == null)
+        {
+            misplaced = unknownKeyError(entry, where, CELL_KEYS);
+        }
         if (misplaced != null)
         {
             return misplaced;
@@ -1027,6 +1045,10 @@ public final class SpreadsheetTemplateWriter
     {
         String where = KEY_COLUMN_WIDTHS + "[" + index + "]"; //$NON-NLS-1$ //$NON-NLS-2$
         String misplaced = misplacedCellKeyError(entry, where);
+        if (misplaced == null)
+        {
+            misplaced = unknownKeyError(entry, where, COLUMN_KEYS);
+        }
         if (misplaced != null)
         {
             return misplaced;
@@ -1116,6 +1138,10 @@ public final class SpreadsheetTemplateWriter
             if (misplaced == null)
             {
                 misplaced = misplacedColumnKeyError(entry, where);
+            }
+            if (misplaced == null)
+            {
+                misplaced = unknownKeyError(entry, where, ROW_KEYS);
             }
             if (misplaced != null)
             {
@@ -1297,6 +1323,20 @@ public final class SpreadsheetTemplateWriter
     private static boolean has(JsonObject obj, String key)
     {
         return obj != null && obj.has(key) && !obj.get(key).isJsonNull();
+    }
+
+    /** Refuses a key outside {@code accepted}; like {@link #has}, an explicit {@code null} counts as absent. */
+    private static String unknownKeyError(JsonObject entry, String where, String... accepted)
+    {
+        JsonObject present = new JsonObject();
+        for (Map.Entry<String, JsonElement> member : entry.entrySet())
+        {
+            if (!member.getValue().isJsonNull())
+            {
+                present.add(member.getKey(), member.getValue());
+            }
+        }
+        return JsonUtils.unknownMemberError(present, where, accepted);
     }
 
     /**

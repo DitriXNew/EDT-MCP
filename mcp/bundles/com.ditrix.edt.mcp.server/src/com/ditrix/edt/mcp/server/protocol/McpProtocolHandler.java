@@ -525,8 +525,18 @@ public class McpProtocolHandler
             return GsonProvider.toJson(JsonRpcResponse.success(requestId, ToolCallResult.refusal(msg)));
         }
         
+        // A value a tool's reader would silently drop or replace is refused before anything runs.
+        String invalid = ToolArgumentValidator.validate(tool.getName(), tool.getInputSchema(),
+            request.getArguments());
+        if (invalid != null)
+        {
+            Activator.logInfo("Refused tools/call " + tool.getName() + ": invalid arguments"); //$NON-NLS-1$ //$NON-NLS-2$
+            return buildToolCallResponse(tool, ToolResult.error(invalid).toJson(), null,
+                capabilities.plainTextModeOr(isPlainTextMode()), requestId, extractToolParams(request), capabilities);
+        }
+
         Activator.logInfo("Processing tools/call: " + tool.getName()); //$NON-NLS-1$
-        
+
         // Extract parameters from request arguments
         Map<String, String> params = extractToolParams(request);
         

@@ -6,8 +6,10 @@ WHAT THE TOOL DOES (ResyncToDiskTool.java)
 resync_to_disk walks EVERY metadata top object of a project's BM model (read
 transaction, getTopObjectIterator, keep only MdObject), computes which of them have
 no .mdo on disk (missingBefore — the real desync) and force-exports ONLY that
-missing subset under src/ (fullExport=true re-exports every object instead — the
-export runs on the UI thread, so the subset is the default). It integrity-checks
+missing subset under src/ (fullExport=true rewrites every .mdo and every Form.form
+instead — other content files such as templates are never rewritten — the export runs on
+the UI thread, so the subset is the default). objects=[fqn, ...] re-saves just the
+named objects or forms from the model, unchanged. It integrity-checks
 src/<TypeDir>/<Name>/<Name>.mdo before AND after the export, and then scans the
 Configuration's many-valued MdObject reference collections for UNRESOLVED PROXIES
 ("dangling"/"orphaned" entries with no .mdo and no BM body — the source of
@@ -42,6 +44,13 @@ The fixture (TestConfiguration) is committed in-sync: every metadata object has 
 therefore exports NOTHING (objectsExported == 0) and removes NOTHING — the committed
 tree must stay byte-for-byte unchanged (assert_no_diff). A fullExport=true resync
 re-exports the SAME bytes (idempotent), so the tree stays clean there too.
+
+SCOPED RE-SAVE (kind: write-metadata)
+-------------------------------------
+test_resave_of_a_form_drops_a_value_edt_could_not_load seeds an unknown enum literal
+into the fixture form's Form.form, reloads the project, and re-saves the form through
+its Russian address: EDT loaded the default instead of the literal, so the rewritten
+file no longer carries it. That loss is the documented price of a re-save.
 
 REPAIR PATH (kind: write-metadata)
 ----------------------------------
@@ -85,8 +94,10 @@ from harness import (
     assert_error_quality,
     assert_no_diff,
     e2e_test,
+    read_disk,
     reset_model,
     settle_or_fail,
+    wait_for_project_ready,
     PROJECT,
     PROJECT_DIR,
 )
@@ -186,18 +197,21 @@ def test_resync_in_sync_fixture_is_a_noop_and_does_not_mutate():
 
 @e2e_test(tool="resync_to_disk", kind="action")
 def test_full_export_reexports_every_top_object():
-    """fullExport=true opts back in to the export-everything refresh: every walked top
-    object is force-exported (objectsExported == totalTopObjects > 0), the flag is
-    echoed back, and — because the fixture is in-sync — the re-export rewrites the SAME
-    bytes, so the committed tree still must not change.
+    """fullExport=true opts back in to the export-everything refresh: every top object EDT
+    rewrites is force-exported - the metadata objects walked for totalTopObjects AND the
+    content forms, so objectsExported > totalTopObjects - while template content and rights
+    are left alone (a forced template export can write a truncated Template.mxlx) -
+    the flag is echoed back, and — because the fixture is in-sync — the re-export rewrites
+    the SAME bytes, so the committed tree still must not change.
 
     fullExport=true would overwrite on-disk edits, so it is gated behind the
     overwriteDiskEdits confirm (see test_full_export_without_confirm_is_rejected); this
     happy path passes overwriteDiskEdits=true to clear the guard.
 
     Mutation thinking: a fullExport that silently stayed on the subset path would
-    report objectsExported==0 here; an export that produced different bytes for an
-    unchanged model would fail assert_no_diff."""
+    report objectsExported==0 here; one that exported only the metadata objects (and so
+    never rewrote a Form.form) would report objectsExported == totalTopObjects; an export
+    that produced different bytes for an unchanged model would fail assert_no_diff."""
     settle_or_fail("this resync")
     r = call("resync_to_disk", {"projectName": PROJECT, "fullExport": True, "overwriteDiskEdits": True})
     assert_ok(r, "resync_to_disk fullExport=true overwriteDiskEdits=true")
@@ -209,9 +223,10 @@ def test_full_export_reexports_every_top_object():
     total = sc.get("totalTopObjects")
     if not isinstance(exported, int) or exported <= 0:
         raise AssertionError("fullExport must export a positive count: %r" % exported)
-    if exported != total:
+    if not isinstance(total, int) or exported <= total:
         raise AssertionError(
-            "fullExport must export EVERY walked object: objectsExported(%r) != totalTopObjects(%r)"
+            "fullExport must export every file-backed top object, content forms included, so "
+            "more than the metadata objects: objectsExported(%r) <= totalTopObjects(%r)"
             % (exported, total))
     _assert_clean_dangling_scan(sc, "full-export resync")
 
@@ -424,6 +439,114 @@ def test_full_export_without_confirm_is_rejected():
                          ctx="the fullExport guard names overwriteDiskEdits and tells the caller to confirm")
     # The guard early-returns before the export, so a rejected fullExport must write nothing.
     assert_no_diff("a fullExport rejected by the confirm guard must not touch the project tree")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# SCOPED RE-SAVE (objects)
+# ──────────────────────────────────────────────────────────────────────────────
+FORM_FILE = "src/Catalogs/Catalog/Forms/ItemForm/Form.form"
+# The fixture catalog's item form, addressed with Russian type and form tokens.
+FORM_RU = "\u0421\u043f\u0440\u0430\u0432\u043e\u0447\u043d\u0438\u043a.Catalog.\u0424\u043e\u0440\u043c\u0430.ItemForm"
+
+
+def _seed_unknown_alignment():
+    """Replace the extended tooltip's horizontalAlign with a literal EDT does not know, then
+    reload the project: EDT loads the default in its place."""
+    xml = read_disk(FORM_FILE)
+    at = xml.index("<name>Decoration1ExtendedTooltip</name>")
+    good = "<horizontalAlign>Left</horizontalAlign>"
+    pos = xml.index(good, at)
+    if pos > xml.index("</extendedTooltip>", at):
+        raise AssertionError("setup failed: the tooltip carries no alignment of its own")
+    with open(os.path.join(PROJECT_DIR, FORM_FILE), "w", encoding="utf-8", newline="") as f:
+        f.write(xml[:pos] + "<horizontalAlign>Leftmost</horizontalAlign>" + xml[pos + len(good):])
+    assert_ok(call("clean_project", {"projectName": PROJECT}), "reload the form from disk")
+    wait_for_project_ready()
+
+
+@e2e_test(tool="resync_to_disk", kind="write-metadata")
+def test_resave_of_a_form_drops_a_value_edt_could_not_load():
+    """objects=[<form>] rewrites the form's Form.form from the model as it stands. The seeded
+    'Leftmost' never reached the model, so the re-save drops it - the loss the description
+    warns about - while the rest of the form survives. The Russian address resolves to the
+    same form, and the result reports the content-form file as written.
+
+    Mutation thinking: a re-save that exported the catalog's .mdo instead of the content form
+    would leave Form.form untouched ('Leftmost' still there, state not 'written'); a resolver
+    that read 'Форма' as a member token would refuse the address."""
+    settle_or_fail("this re-save")
+    _seed_unknown_alignment()
+    if "Leftmost" not in read_disk(FORM_FILE):
+        raise AssertionError("setup failed: the seeded literal is not on disk")
+
+    r = call("resync_to_disk", {"projectName": PROJECT, "objects": [FORM_RU], "overwriteDiskEdits": True})
+    assert_ok(r, "re-save the form by its Russian address")
+    sc = _success_envelope(r, "form re-save")
+    rows = sc.get("resaved") or []
+    if len(rows) != 1:
+        raise AssertionError("exactly the requested form must be re-saved: %r" % rows)
+    row = rows[0]
+    if row.get("object") != FORM_RU or row.get("file") != FORM_FILE:
+        raise AssertionError("the row must echo the request and name the form's own file: %r" % row)
+    if row.get("state") != "written":
+        raise AssertionError("the form's file must be reported rewritten: %r" % row)
+    if sc.get("objectsExported") != 1:
+        raise AssertionError("one form, one export: objectsExported=%r" % sc.get("objectsExported"))
+
+    text = read_disk(FORM_FILE)
+    if "Leftmost" in text:
+        raise AssertionError("the re-save must write the model, which never held 'Leftmost'")
+    for kept in ("<name>Decoration1ExtendedTooltip</name>", "<name>Description</name>",
+                 "<windowOpeningMode>LockOwner</windowOpeningMode>"):
+        if kept not in text:
+            raise AssertionError("the re-save must keep what the model holds; %s is gone" % kept)
+
+
+@e2e_test(tool="resync_to_disk", kind="action")
+def test_resave_without_confirm_is_rejected():
+    """objects re-writes files from the model, so it needs the same overwriteDiskEdits confirm as
+    fullExport; the guard runs before any model read and writes nothing."""
+    r = call("resync_to_disk", {"projectName": PROJECT, "objects": ["Catalog.Catalog.Form.ItemForm"]})
+    e = assert_error(r, "objects without overwriteDiskEdits")
+    assert_error_quality(e, names=["Catalog.Catalog.Form.ItemForm"], suggests=["overwriteDiskEdits"],
+                         ctx="the re-save guard names the objects and the confirm flag")
+    assert_no_diff("a re-save rejected by the confirm guard must not touch the project tree")
+
+
+@e2e_test(tool="resync_to_disk", kind="action")
+def test_resave_cannot_be_combined_with_full_export():
+    """objects and fullExport are two answers to 'what to write'; a call naming both is refused
+    instead of silently picking one."""
+    r = call("resync_to_disk", {"projectName": PROJECT, "objects": ["Catalog.Catalog"],
+                                "fullExport": True, "overwriteDiskEdits": True})
+    e = assert_error(r, "objects with fullExport")
+    assert_error_quality(e, names=["objects", "fullExport"], suggests=[],
+                         ctx="the refusal names both parameters")
+    assert_no_diff("a refused combination must not touch the project tree")
+
+
+@e2e_test(tool="resync_to_disk", kind="action")
+def test_resave_of_an_unknown_object_is_refused():
+    """An FQN that names nothing is refused as a whole - nothing is re-saved - with the bad value
+    and the tool that lists what exists."""
+    bad = "Catalog.NoSuchCatalog_ZZZ_e2e"
+    r = call("resync_to_disk", {"projectName": PROJECT, "objects": ["Catalog.Catalog", bad],
+                                "overwriteDiskEdits": True})
+    e = assert_error(r, "unknown object")
+    assert_error_quality(e, names=[bad, "Nothing was re-saved"], suggests=["get_metadata_objects"],
+                         ctx="the refusal names the unknown FQN and get_metadata_objects")
+    assert_no_diff("a refused re-save must not touch the project tree, not even the known object")
+
+
+@e2e_test(tool="resync_to_disk", kind="action")
+def test_resave_of_a_member_points_at_its_owner():
+    """An attribute lives inside its owner's .mdo; the refusal says which object to re-save."""
+    member = "Catalog.Catalog.Attribute.Attribute"
+    r = call("resync_to_disk", {"projectName": PROJECT, "objects": [member], "overwriteDiskEdits": True})
+    e = assert_error(r, "member FQN")
+    assert_error_quality(e, names=[member], suggests=["re-save the owner 'Catalog.Catalog'"],
+                         ctx="the refusal points at the owner")
+    assert_no_diff("a refused re-save must not touch the project tree")
 
 
 # ──────────────────────────────────────────────────────────────────────────────

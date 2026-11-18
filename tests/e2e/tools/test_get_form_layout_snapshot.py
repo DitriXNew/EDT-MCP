@@ -58,6 +58,7 @@ from harness import (
     native_form_layout_render_mode,
     call,
     assert_ok,
+    assert_error,
     assert_error_quality,
     assert_contains,
     assert_no_diff,
@@ -292,17 +293,15 @@ def test_full_mode_is_honoured_and_echoed():
 # ──────────────────────────────────────────────────────────────────────────────
 @e2e_test(tool="get_form_layout_snapshot", kind="read")
 def test_invalid_mode_enum_errors_actionably():
-    """mode is an enum {compact, full}; normalizeMode returns null for anything
-    else -> execute() returns errorYaml("Invalid mode: <v>. Expected 'compact' or
-    'full'."). This is the tool's BEST error: it names the bad value AND lists the
-    valid alternatives. (No projectName/formPath needed: the mode check runs first.)"""
+    """mode is an enum {compact, full}: a value outside it is refused by the argument check
+    before the tool runs, as an isError result naming the bad value and the valid ones."""
     bad = "wide_e2e"
     r = call("get_form_layout_snapshot", {
         "projectName": PROJECT,
         "formPath": "CommonForm.Form",
         "mode": bad,
     })
-    msg = _assert_is_failure(r, "invalid mode enum")
+    msg = assert_error(r, "invalid mode enum")
     # Names the bad value and points at the valid alternatives ('compact'/'full').
     assert_error_quality(msg, names=[bad], suggests=["compact", "full"],
                          ctx="invalid mode names value and lists valid ones")

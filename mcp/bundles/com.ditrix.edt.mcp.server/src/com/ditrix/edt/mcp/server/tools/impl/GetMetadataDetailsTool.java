@@ -19,6 +19,7 @@ import java.util.function.Function;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.emf.ecore.EClass;
 import org.eclipse.emf.ecore.EObject;
+import org.eclipse.emf.ecore.EStructuralFeature;
 
 import com._1c.g5.v8.bm.core.IBmObject;
 import com._1c.g5.v8.bm.integration.IBmModel;
@@ -191,7 +192,6 @@ public class GetMetadataDetailsTool implements IMcpTool
     {
         String projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
         List<String> objectFqns = JsonUtils.extractArrayArgument(params, "objectFqns"); //$NON-NLS-1$
-        String fullStr = JsonUtils.extractStringArgument(params, "full"); //$NON-NLS-1$
         boolean assignable = JsonUtils.extractBooleanArgument(params, "assignable", false); //$NON-NLS-1$
         String language = JsonUtils.extractStringArgument(params, "language"); //$NON-NLS-1$
         // Role-matrix pagination offset (0-based objects). Only the ROLE branch consumes it; a negative
@@ -213,7 +213,7 @@ public class GetMetadataDetailsTool implements IMcpTool
             return ToolResult.error("objectFqns is required (array of FQNs like 'Catalog.Products')").toJson(); //$NON-NLS-1$
         }
 
-        boolean full = "true".equalsIgnoreCase(fullStr); //$NON-NLS-1$
+        boolean full = JsonUtils.extractBooleanArgument(params, "full", false); //$NON-NLS-1$
         if (controlledMismatches && (full || assignable))
         {
             return ToolResult.error("controlledMismatches:true requires full and assignable to be false or omitted.").toJson();
@@ -1106,8 +1106,14 @@ public class GetMetadataDetailsTool implements IMcpTool
         {
             props = MetadataPropertyIntrospector.introspect(obj);
         }
+        List<String> atDefault = new ArrayList<>();
         for (MetadataPropertyIntrospector.PropertyInfo p : props)
         {
+            if (p.currentValue != null && !p.currentValue.isBlank()
+                && !isSet(p.onExtInfo ? (liveMatches ? liveExtInfo : null) : obj, p.feature))
+            {
+                atDefault.add(p.name);
+            }
             // A field list offers every lockable field of the object for data locking - several KB on an
             // ERP-size document - so its Allowed cell is bounded (issue #740), as are form commands.
             String allowed = p.allowedValues.isEmpty() ? null
@@ -1120,7 +1126,42 @@ public class GetMetadataDetailsTool implements IMcpTool
                 ? AdoptedTypeCell.render(obj, p.feature, p.currentValue, project) : p.currentValue;
             sb.append(MarkdownUtils.tableRow(p.name, p.valueKind.toString(), current, allowed));
         }
+        if (!atDefault.isEmpty())
+        {
+            // Kept out of the Current cell: Current is sent back to modify_metadata as it is.
+            sb.append("\nAt the model default (not written to the source file): ") //$NON-NLS-1$
+                .append(String.join(", ", atDefault)).append(".\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
         return sb.toString();
+    }
+
+    /**
+     * Whether {@code holder} holds a value of its own for a single-valued {@code feature}; a list, an
+     * unknown holder or a check that throws counts as set, so nothing is called a default by guess.
+     */
+    static boolean isSet(EObject holder, EStructuralFeature feature)
+    {
+        if (holder == null || feature == null || feature.isMany())
+        {
+            return true;
+        }
+        try
+        {
+            if (holder.eIsSet(feature))
+            {
+                return true;
+            }
+            // From 8.5.1 EDT reads some form elements into a twin feature and writes it back
+            // under the old element name, so the old feature stays unset although the file has it.
+            EStructuralFeature twin = holder.eClass().getEStructuralFeature(
+                "windowOpeningMode".equals(feature.getName()) ? "onFormWindowOpenLockMode" //$NON-NLS-1$ //$NON-NLS-2$
+                    : feature.getName() + "851"); //$NON-NLS-1$
+            return twin != null && holder.eIsSet(twin);
+        }
+        catch (RuntimeException e)
+        {
+            return true;
+        }
     }
 
     /**

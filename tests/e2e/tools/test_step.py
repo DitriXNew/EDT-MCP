@@ -247,54 +247,25 @@ def test_negative_threadid_is_rejected():
 
 
 @e2e_test(tool="step", kind="read")
-def test_non_numeric_threadid_is_coerced_to_default_and_rejected():
-    """A non-numeric threadId ("abc") -> extractLongArgument can't parse it ->
-    returns the -1L default -> `threadId <= 0` -> "threadId is required".
-
-    This proves the tool degrades GRACEFULLY on a wrong-typed threadId: it returns a
-    clean required-arg error instead of throwing a NumberFormatException / leaking a
-    stack trace (assert_error_quality also fails the test if the message looks like a
-    raw stack trace). A broken parser that propagated the exception would fail here.
-    """
+def test_non_numeric_threadid_is_refused():
+    """A non-numeric threadId ("abc") is refused by the argument check, naming the value,
+    instead of being read as the default and reported as missing."""
     r = call("step", {"threadId": "abc", "kind": "over"})
     err = assert_error(r, "non-numeric threadId")
-    assert_error_quality(err, names=["threadId"], suggests=[],
-                         ctx="non-numeric threadId coerced to default and rejected cleanly")
-    assert_contains(err, "required",
-                    "non-numeric threadId must surface as a clean required-arg error")
-    assert_no_diff("an invalid call must not touch the project on disk")
+    assert_error_quality(err, names=["threadId", "abc"], suggests=["must be an integer", "nothing was run"],
+                         ctx="the argument check refuses the value instead of using the default")
+    assert_no_diff("a refused call must not touch the project on disk")
 
 
 @e2e_test(tool="step", kind="read")
-def test_unknown_kind_with_stale_threadid_short_circuits_to_stale_sentinel():
-    """Bogus enum value ("sideways") with a stale threadId -> stale-threadId sentinel.
-
-    The schema declares kind as an enum {over, into, out}, but the SERVER does not
-    reject an out-of-enum value up front: execute() only rejects null/blank kind,
-    then resolves the thread, and the unknown-kind DEFAULT branch ("unknown kind:
-    <kind>") sits AFTER getThread(). So with a stale threadId the bogus kind never
-    reaches the switch — the missing-thread precondition short-circuits first. This
-    pins the ordering threadId-check -> kind-blank-check -> thread-lookup -> switch.
-
-    # AUDIT: the dedicated "unknown kind: <kind>" sentinel for a non-{over,into,out}
-    # value is UNREACHABLE without a live suspended thread (the switch runs only
-    # after getThread() returns non-null). It also means a non-enum kind is NOT
-    # validated against the schema enum at the wire boundary — a richly-shaped but
-    # invalid kind is only diagnosable once a real thread exists. Reaching/asserting
-    # that branch needs a real launch + wait_for_break against a running
-    # infobase, which this fixture does not provide. Deferred to a live-session run;
-    # flagged here so the gap is explicit rather than silently skipped.
-    """
+def test_unknown_kind_is_refused_before_the_thread_lookup():
+    """A kind outside {over, into, out} is refused by the argument check before any thread
+    lookup, so even a stale threadId gets the enum refusal, not the stale-thread sentinel."""
     r = call("step", {"threadId": 555555, "kind": "sideways"})
-    err = assert_error(r, "bogus kind gated by the missing thread")
-    # With no live thread, the bogus kind must NOT surface as an enum/unknown-kind
-    # error — the missing-thread precondition wins.
-    assert_contains(err, "stale threadId",
-                    "a stale threadId must short-circuit before the kind switch")
-    assert_not_contains(err, "unknown kind",
-                        "no live thread must not reach the unknown-kind switch default")
-    assert_error_quality(err, names=["stale threadId"], suggests=["wait_for_break"],
-                         ctx="bogus kind still yields the stale-thread sentinel, not an enum error")
+    err = assert_error(r, "bogus kind")
+    assert_error_quality(err, names=["kind", "sideways"], suggests=["'over'", "'into'", "'out'"],
+                         ctx="an out-of-enum kind names the allowed values")
+    assert_not_contains(err, "stale threadId", "the enum check runs before the thread lookup")
     assert_no_diff("an invalid call must not touch the project on disk")
 
 

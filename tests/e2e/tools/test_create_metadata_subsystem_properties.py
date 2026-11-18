@@ -130,14 +130,14 @@ def test_subsys_930_properties_of_another_shape_are_refused_not_dropped():
     })
     e = assert_error(r, "an object instead of an array of properties")
     assert_error_quality(e, names=["properties"],
-                         suggests=["must be an array of {name, value} objects", "Nothing was created"],
+                         suggests=["must be an array of {name, value", "nothing was run"],
                          ctx="the refusal says what shape is expected")
     r = call("modify_metadata", {
         "projectName": PROJECT, "fqn": "Subsystem." + PARENT,
         "properties": {"includeInCommandInterface": False},
     })
     e = assert_error(r, "modify: an object instead of an array of properties")
-    assert_contains(e, "must be an array of {name, value} objects", "not the misleading 'properties is required'")
+    assert_contains(e, "must be an array of {name, value", "not the misleading 'properties is required'")
     assert_not_contains(e, "properties is required", "the argument WAS given")
     assert_no_diff("a refused argument must not touch the project")
 

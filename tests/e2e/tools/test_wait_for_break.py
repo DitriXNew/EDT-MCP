@@ -202,36 +202,11 @@ def test_zero_timeout_is_clamped_to_floor_and_returns_promptly():
 
 
 @e2e_test(tool="wait_for_break", kind="read")
-def test_invalid_timeout_value_falls_back_not_crash():
-    """Robustness: a NON-NUMERIC timeout ("abc"). JsonUtils.extractIntArgument is
-    TOLERANT — it cannot parse "abc" and silently falls back to the default. The tool
-    must therefore NOT crash / leak a NumberFormatException; combined with a
-    non-existent appId it still ends in the clean benign timeout (hit:false).
-
-    NOTE we deliberately give an explicit appId so the auto-resolution sentinel is NOT
-    what we observe here — the point is that a garbage timeout is coerced to a valid
-    wait, not surfaced as an error. (We accept the ~60s default-window wait window may
-    apply since the bad value -> default(60); harness call timeout is 180s, so the
-    request still completes with the timeout status.)
-
-    Mutation-sensitive: a broken parser that threw on "abc" would surface an error
-    payload (is_error) or a stack-trace message, failing assert_ok + the shape check.
-
-    AUDIT: extractIntArgument silently swallows an unparseable timeout. An
-    out-of-domain timeout is not reported back to the caller at all (no warning that
-    "abc" was ignored and 60 was used). Non-blocking, but worth a fix-card: echo the
-    effective timeout in the response so a caller can detect the coercion. We cannot
-    assert a clearer contract than the current silent fallback, so we assert the
-    (correct) no-crash behavior.
-    """
+def test_invalid_timeout_value_is_refused():
+    """timeout "abc" is refused by the argument check, naming the value, instead of silently
+    waiting for the default 60 seconds."""
     r = call("wait_for_break", {"applicationId": NO_SUCH_APP, "timeout": "abc"})
-    assert_ok(r, "non-numeric timeout must coerce to default, not crash")
-    sc = r.structured or {}
-    if sc.get("hit") is not False or sc.get("reason") != "timeout":
-        raise AssertionError(
-            "garbage timeout must still produce a clean timeout status (hit:false, "
-            "reason:timeout); got structured=%r" % (sc,))
-    # Must not be a leaked exception masquerading as a result.
-    assert_not_contains(r.error_text() or "", "NumberFormatException",
-                        "a coerced timeout must not leak a parse exception")
-    assert_no_diff("a debug read tool must not touch project source")
+    err = assert_error(r, "non-numeric timeout")
+    assert_error_quality(err, names=["timeout", "abc"], suggests=["must be an integer", "nothing was run"],
+                         ctx="the argument check refuses the value instead of using the default")
+    assert_no_diff("a refused call must not touch the project on disk")

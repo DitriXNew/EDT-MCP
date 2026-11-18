@@ -82,6 +82,19 @@ public final class InputSchemaCompactor
     private static final Map<String, Set<String>> KEEP = buildKeepList();
 
     /**
+     * Payload parameters whose member schemas are enforced by the server's argument check but not
+     * published: on the wire they stay {@code object} / array of {@code object}, and their kept prose
+     * states the members. Publishing the members would add about 4 KB to every tools/list for a
+     * shape the prose already gives; the check refuses a wrong shape either way.
+     */
+    static final Map<String, Set<String>> MEMBERS_CHECKED_ON_SERVER = Map.of(
+        "modify_metadata", asSet("properties", "rights", "templates", "roleProperties", "content", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+            "commands", "template"), //$NON-NLS-1$ //$NON-NLS-2$
+        "create_metadata", asSet("properties"), //$NON-NLS-1$ //$NON-NLS-2$
+        "merge_rules", asSet("decisions"), //$NON-NLS-1$ //$NON-NLS-2$
+        "business_process_route_map", asSet("points", "connections")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+    /**
      * Parameter names whose description survives in EVERY tool that declares them, because
      * the description carries the VALUE SHAPE and the schema has no way to express it.
      * <p>
@@ -180,8 +193,9 @@ public final class InputSchemaCompactor
         // body models insertPosition only; retain its action requirements and 1-based insertion contract.
         keep.put("dcs", asSet("format", "body")); //$NON-NLS-1$ //$NON-NLS-2$
         // Cross-field requirements are absent from the shape: replace needs both arrays,
-        // even when empty, and a Condition source requires an explicit branch.
-        keep.put("business_process_route_map", asSet("action", "connections")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        // even when empty, and a Condition source requires an explicit branch. points declares its
+        // members, so it is no longer an opaque payload; its prose carries the size defaults.
+        keep.put("business_process_route_map", asSet("action", "points", "connections")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
         // MUTATING DEFAULTS. Each of these defaults to true and, left out, performs a WRITE
         // the caller never asked for - the build stamps every object's Comment and flushes
         // the .mdo; the launch tools silently run a configuration->DB update; update_database
@@ -200,7 +214,9 @@ public final class InputSchemaCompactor
         // caught by InputSchemaCompactorRiskTest, not by review.
         keep.put("delete_infobase", //$NON-NLS-1$
             asSet("deleteRegistration", "deleteDatabaseFiles", "registrationId")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-        keep.put("resync_to_disk", asSet("overwriteDiskEdits")); //$NON-NLS-1$ //$NON-NLS-2$
+        // objects: its value shape (an FQN array, a form address) and its exclusion with the other
+        // write modes are stated nowhere else, and it too needs overwriteDiskEdits.
+        keep.put("resync_to_disk", asSet("overwriteDiskEdits", "objects")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         // The one parameter of the three-way comparison family whose prose warns about an effect
         // of THAT parameter: in write mode the named file is REPLACED at the same path, and only when
         // 'basedOn' names that same file - any other write over an existing file is refused. A
@@ -210,10 +226,10 @@ public final class InputSchemaCompactor
         // get_comparison_node state their load-bearing facts in the TOOL description (the single
         // comparison slot, that a FINISHED comparison is freed only by releaseComparisonId and not
         // by cancel_job, that omitting scope compares everything, that an unfinished subtree is
-        // reported as unfinished), so a KEEP entry would pay twice for the same sentence; and
-        // merge_rules.decisions needs no entry because it is an opaque payload, kept structurally
-        // by isOpaquePayload with its {path, rule} shape and rule vocabulary intact.
-        keep.put("merge_rules", asSet("filePath")); //$NON-NLS-1$ //$NON-NLS-2$
+        // reported as unfinished), so a KEEP entry would pay twice for the same sentence.
+        // decisions declares {path, rule}, so it is no longer an opaque payload; its prose carries
+        // what a path addresses ([] = the whole configuration) and how an object key is spelled.
+        keep.put("merge_rules", asSet("filePath", "decisions")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         // debug=true also changes the return contract (a wait_for_break follow-up).
         // launchConfigurationName OR projectName+applicationId - the same target-selector
         // contract the grader models, and the arms produced project-only calls without it.
@@ -350,9 +366,13 @@ public final class InputSchemaCompactor
         // combinations the compacted enums advertise as valid. Cross-field constraints are
         // the one thing a flat schema cannot state at all.
         // insertPosition carries its 1-based convention, bounds refusal and external-content scope.
+        // The payload parameters below declare their members, so they are no longer opaque payloads;
+        // their prose carries the conditional requirements and state-changing rules the schema cannot
+        // express (which names a kind takes, defaults, re-add semantics, the hash guard).
         keep.put("create_metadata", asSet("insertPosition", "normalizeYo", "commonModuleKind", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            "serverCall", "privileged", "returnValuesReuse")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-        keep.put("modify_metadata", asSet("normalizeYo")); //$NON-NLS-1$ //$NON-NLS-2$
+            "serverCall", "privileged", "returnValuesReuse", "properties")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        keep.put("modify_metadata", asSet("normalizeYo", "properties", "rights", "templates", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+            "roleProperties", "content", "commands", "template")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
         // A CONDITIONAL protocol the schema cannot express: expectedHash carries the
         // preview's contentHash and becomes REQUIRED once confirm=true is paired with a
         // non-empty disableIndices. Without it the selective confirm is simply rejected.
@@ -399,7 +419,36 @@ public final class InputSchemaCompactor
         keep.addAll(KEEP_IN_EVERY_TOOL);
         JsonElement copy = inputSchema.deepCopy();
         stripSchema(copy, keep);
+        hideServerCheckedMembers(copy, MEMBERS_CHECKED_ON_SERVER.getOrDefault(toolName, Collections.emptySet()));
         return copy;
+    }
+
+    /** Reduces each named parameter to its opaque form: {@code object}, or array of {@code object}. */
+    private static void hideServerCheckedMembers(JsonElement schema, Set<String> names)
+    {
+        JsonElement properties = schema.isJsonObject() ? schema.getAsJsonObject().get(KEY_PROPERTIES) : null;
+        if (names.isEmpty() || properties == null || !properties.isJsonObject())
+        {
+            return;
+        }
+        for (String name : names)
+        {
+            JsonElement param = properties.getAsJsonObject().get(name);
+            if (param == null || !param.isJsonObject())
+            {
+                continue;
+            }
+            JsonObject target = param.getAsJsonObject();
+            JsonElement items = target.get(KEY_ITEMS);
+            if (items != null && items.isJsonObject())
+            {
+                target = items.getAsJsonObject();
+            }
+            for (String keyword : Arrays.asList(KEY_PROPERTIES, "required", "additionalProperties")) //$NON-NLS-1$ //$NON-NLS-2$
+            {
+                target.remove(keyword);
+            }
+        }
     }
 
     /**
@@ -408,15 +457,13 @@ public final class InputSchemaCompactor
      * <p>
      * For such a parameter the description is not prose about the value — it IS the only
      * declaration of the value's shape, so stripping it leaves a caller with
-     * {@code {"type":"array","items":{"type":"object"}}} and no way to build the call.
-     * {@code create_metadata.properties} (members are {@code {name, value, language?}}) and
-     * {@code modify_metadata.rights} ({@code {object, right, value?, rls?, rlsFields?}}) are
-     * the measured cases: #395 saw exactly this failure on Haiku, where the model invented a
-     * {@code metadata} key for the role-rights {@code object} key.
+     * {@code {"type":"array","items":{"type":"object"}}} and no way to build the call: a model
+     * then invents member names, e.g. a {@code metadata} key for the role-rights {@code object} key.
      * <p>
      * This is a structural rule rather than another allowlist entry on purpose: it holds for
      * a tool added later, and it stops holding by itself the moment someone models the
-     * members in JSON Schema, which is the better fix and makes the prose redundant.
+     * members in JSON Schema. Prose that still carries rules the members cannot state then
+     * needs a {@link #KEEP} entry.
      *
      * @param param the top-level parameter subschema; never {@code null}
      * @return {@code true} when the schema cannot express what the value must contain

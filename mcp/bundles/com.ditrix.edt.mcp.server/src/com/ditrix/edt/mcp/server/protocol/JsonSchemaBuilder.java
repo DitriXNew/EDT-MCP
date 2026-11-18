@@ -401,6 +401,23 @@ public class JsonSchemaBuilder
     }
 
     /**
+     * Adds a property whose schema is given as compact JSON text, e.g. an array whose item members
+     * are declared. Numbers keep their written form ({@code 0}, not {@code 0.0}).
+     *
+     * @param name property name
+     * @param description property description
+     * @param schemaJson the property's schema as a JSON object text
+     * @return this builder
+     */
+    public JsonSchemaBuilder property(String name, String description, String schemaJson)
+    {
+        com.google.gson.JsonObject prop = com.google.gson.JsonParser.parseString(schemaJson).getAsJsonObject();
+        prop.addProperty(KEY_DESCRIPTION, description);
+        properties.put(name, prop);
+        return this;
+    }
+
+    /**
      * Builds the schema as a JSON string.
      *
      * @return JSON schema string

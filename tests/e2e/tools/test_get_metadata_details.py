@@ -436,6 +436,30 @@ def test_assignable_on_form_root_lists_root_properties():
 
 
 @e2e_test(tool="get_metadata_details", kind="read")
+def test_assignable_names_the_form_root_properties_at_the_model_default():
+    """Below the table, the properties whose Current is only the model default are named: they are
+    not written to Form.form. A property the file does write is never named, and the Current cell
+    keeps the bare value, since it is sent back to modify_metadata as it is."""
+    fqn = "Catalog.Catalog.Form.ItemForm"
+    r = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [fqn], "assignable": True})
+    assert_ok(r, "assignable schema for the managed-form model root")
+    marker = "At the model default (not written to the source file): "
+    lines = [l for l in r.text.splitlines() if l.startswith(marker)]
+    assert len(lines) == 1, "the form root must name its defaulted properties once: %s" % r.text[:1500]
+    named = [n.strip() for n in lines[0][len(marker):].rstrip(".").split(",") if n.strip()]
+    assert named, "the fixture form leaves properties at their default: %r" % lines[0]
+    written = {child.tag for child in ET.fromstring(read_disk(
+        "src/Catalogs/Catalog/Forms/ItemForm/Form.form"))}
+    assert "autoTitle" in written and "windowOpeningMode" in written, written
+    # On 8.5.1+ EDT reads the <showTitle> element into showTitle851, leaving the boolean unset.
+    written.discard("showTitle")
+    wrongly = [n for n in named if n in written]
+    assert not wrongly, "a property written to Form.form is not a default: %r" % (wrongly,)
+    assert_not_contains(r.text, "(default)", "the Current cell must keep the bare value")
+    assert_no_diff("reading a form root's assignable schema must not touch Form.form")
+
+
+@e2e_test(tool="get_metadata_details", kind="read")
 def test_assignable_on_form_field_lists_color_and_font_kinds():
     # Issue #660: a form item's Color / Font properties - direct and on its extInfo - are listed
     # with kinds COLOR / FONT and the value shape in the Allowed column - each shape as inline
