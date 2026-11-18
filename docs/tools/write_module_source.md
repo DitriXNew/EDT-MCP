@@ -82,10 +82,12 @@ The method parser recognizes `Procedure`/`Function` and `Процедура`/`Ф
 ## Lost-update guards
 
 Concurrent edits between your read and write are caught by:
-- `expectedHash` (ANY mode; REQUIRED for method-targeted modes): pass the opaque `contentHash` from your last `read_module_source` / `read_method_source`. If the module changed, the write is rejected. Cheapest (a fixed-size token, not the whole file). Omit it when creating a new module, because there is no existing content to match.
+- `expectedHash` (ANY mode; REQUIRED for method-targeted modes): pass the opaque `contentHash` from your last `read_module_source` / `read_method_source` / `write_module_source`. If the module changed, the write is rejected. Cheapest (a fixed-size token, not the whole file). Omit it when creating a new module, because there is no existing content to match.
 - `expectedSource` (mode=replace): pass the exact content you last read. Mismatch is rejected.
 - `overwrite=true` (mode=replace): force the overwrite with no content check.
 A bare `replace` over an existing module with none of these is rejected and steers you toward expectedSource / overwrite / searchReplace. A matching `expectedHash` already satisfies the replace precondition. All comparisons are `\n`-normalized, so a CRLF/LF-only difference is not a spurious mismatch.
+
+Every successful write answers `contentHash` in its frontmatter: the token of the text it just wrote, equal to what `read_module_source` reports for the module right after. Chain the next guarded edit on it (`expectedHash`) without reading the module again; it goes stale as soon as anything else changes the module. An error with `mutationCommitted:true` carries it too, since that text is written.
 
 ## BSL syntax check
 

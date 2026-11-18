@@ -2510,15 +2510,15 @@ public class WriteModuleSourceToolTest
     public void testANotApplicableModuleStateLeavesTheResponseAsItWas()
     {
         assertEquals("---\ntool: write_module_source\nprojectName: P\nmodulePath: CommonModules/OK/Module.bsl\n" //$NON-NLS-1$
-            + "mode: append\nstatus: success\nlinesAfter: 2\nsyntaxCheck: passed\nlinesBefore: 1\n---\n" //$NON-NLS-1$
+            + "mode: append\nstatus: success\nlinesAfter: 2\nsyntaxCheck: passed\nlinesBefore: 1\ncontentHash: 0123456789abcdef\n---\n" //$NON-NLS-1$
             + "File written successfully", //$NON-NLS-1$
             WriteModuleSourceTool.buildSuccessResponse("P", "CommonModules/OK/Module.bsl", "append", false, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                twoLines(), true, 1, null, AdoptedModuleState.Result.notApplicable()));
+                twoLines(), true, 1, "0123456789abcdef", null, AdoptedModuleState.Result.notApplicable()));
         assertEquals("---\ntool: write_module_source\nprojectName: P\nmodulePath: CommonModules/OK/Module.bsl\n" //$NON-NLS-1$
-            + "mode: replace\nstatus: success\nlinesAfter: 2\nsyntaxCheck: skipped\nnewFile: true\n---\n" //$NON-NLS-1$
+            + "mode: replace\nstatus: success\nlinesAfter: 2\nsyntaxCheck: skipped\nnewFile: true\ncontentHash: 0123456789abcdef\n---\n" //$NON-NLS-1$
             + "File written successfully", //$NON-NLS-1$
             WriteModuleSourceTool.buildSuccessResponse("P", "CommonModules/OK/Module.bsl", "replace", true, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                twoLines(), false, 0, null, AdoptedModuleState.Result.notApplicable()));
+                twoLines(), false, 0, "0123456789abcdef", null, AdoptedModuleState.Result.notApplicable()));
     }
 
     @Test
@@ -2526,7 +2526,7 @@ public class WriteModuleSourceToolTest
     {
         AdoptedModuleState.Result switched = AdoptedModuleStateTestFixtures.switched();
         String response = WriteModuleSourceTool.buildSuccessResponse("tests", //$NON-NLS-1$
-            "CommonModules/DrySignal/Module.bsl", "replace", false, twoLines(), false, 0, null, switched); //$NON-NLS-1$ //$NON-NLS-2$
+            "CommonModules/DrySignal/Module.bsl", "replace", false, twoLines(), false, 0, null, null, switched); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue(response, response.contains("\nmoduleExtensionState: switchedToExtended\n")); //$NON-NLS-1$
         assertTrue("the key belongs to the frontmatter", //$NON-NLS-1$
             response.indexOf("moduleExtensionState") < response.indexOf("\n---\n", 4)); //$NON-NLS-1$ //$NON-NLS-2$
@@ -2539,7 +2539,7 @@ public class WriteModuleSourceToolTest
     public void testTheModuleStateKeyFollowsNormalizedCharacters()
     {
         String response = WriteModuleSourceTool.buildSuccessResponse("tests", //$NON-NLS-1$
-            "CommonModules/DrySignal/Module.bsl", "append", false, twoLines(), true, 1, "EM DASH x1", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "CommonModules/DrySignal/Module.bsl", "append", false, twoLines(), true, 1, null, "EM DASH x1", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             AdoptedModuleStateTestFixtures.switched());
         assertTrue(response, response.indexOf("normalizedCharacters") >= 0); //$NON-NLS-1$
         assertTrue(response,
@@ -2551,7 +2551,7 @@ public class WriteModuleSourceToolTest
     public void testAnAlreadyExtendedModuleCarriesOnlyTheKeyWhenItsExportDrained()
     {
         String response = WriteModuleSourceTool.buildSuccessResponse("tests", //$NON-NLS-1$
-            "CommonModules/DrySignal/Module.bsl", "append", false, twoLines(), true, 1, null, //$NON-NLS-1$ //$NON-NLS-2$
+            "CommonModules/DrySignal/Module.bsl", "append", false, twoLines(), true, 1, null, null, //$NON-NLS-1$ //$NON-NLS-2$
             AdoptedModuleStateTestFixtures.alreadyExtended(BuildUtils.DiskExportState.DRAINED));
         assertTrue(response, response.contains("\nmoduleExtensionState: alreadyExtended\n")); //$NON-NLS-1$
         assertTrue(response, response.endsWith("\n---\nFile written successfully")); //$NON-NLS-1$
@@ -2569,7 +2569,7 @@ public class WriteModuleSourceToolTest
             AdoptedModuleStateTestFixtures.alreadyExtended(BuildUtils.DiskExportState.PENDING);
         assertTrue(pending.failed());
         boolean[] built = new boolean[1];
-        JsonObject error = JsonParser.parseString(WriteModuleSourceTool.finishWrite(() -> pending, state -> {
+        JsonObject error = JsonParser.parseString(WriteModuleSourceTool.finishWrite(null, () -> pending, state -> {
             built[0] = true;
             return "success"; //$NON-NLS-1$
         })).getAsJsonObject();
@@ -2593,7 +2593,7 @@ public class WriteModuleSourceToolTest
         AdoptedModuleState.Result failed = AdoptedModuleStateTestFixtures.failedForWantOfAModel();
         assertTrue(failed.failed());
         boolean[] built = new boolean[1];
-        String json = WriteModuleSourceTool.finishWrite(() -> failed, state -> {
+        String json = WriteModuleSourceTool.finishWrite(null, () -> failed, state -> {
             built[0] = true;
             return "success"; //$NON-NLS-1$
         });
@@ -2610,7 +2610,7 @@ public class WriteModuleSourceToolTest
     {
         AdoptedModuleState.Result unconfirmed = AdoptedModuleStateTestFixtures.exportNotConfirmed();
         JsonObject error = JsonParser.parseString(
-            WriteModuleSourceTool.finishWrite(() -> unconfirmed, state -> "success")).getAsJsonObject(); //$NON-NLS-1$
+            WriteModuleSourceTool.finishWrite(null, () -> unconfirmed, state -> "success")).getAsJsonObject(); //$NON-NLS-1$
         assertTrue(error.get("mutationCommitted").getAsBoolean()); //$NON-NLS-1$
         assertTrue(error.get("error").getAsString(), //$NON-NLS-1$
             error.get("error").getAsString().contains("not confirmed")); //$NON-NLS-1$ //$NON-NLS-2$
@@ -2627,7 +2627,7 @@ public class WriteModuleSourceToolTest
         AdoptedModuleState.Result notOnDisk = AdoptedModuleStateTestFixtures.switchedButNotOnDisk();
         assertTrue(notOnDisk.failed());
         boolean[] built = new boolean[1];
-        JsonObject error = JsonParser.parseString(WriteModuleSourceTool.finishWrite(() -> notOnDisk, state -> {
+        JsonObject error = JsonParser.parseString(WriteModuleSourceTool.finishWrite(null, () -> notOnDisk, state -> {
             built[0] = true;
             return "success"; //$NON-NLS-1$
         })).getAsJsonObject();
@@ -2651,7 +2651,7 @@ public class WriteModuleSourceToolTest
         for (AdoptedModuleState.Result notOnDisk : Arrays.asList(AdoptedModuleStateTestFixtures.switchedButNotOnDisk(),
             AdoptedModuleStateTestFixtures.alreadyExtendedButNotOnDisk()))
         {
-            String json = WriteModuleSourceTool.finishWrite(() -> notOnDisk, state -> "success"); //$NON-NLS-1$
+            String json = WriteModuleSourceTool.finishWrite(null, () -> notOnDisk, state -> "success"); //$NON-NLS-1$
             assertNotEquals("a .mdo without the line is no success, whichever way the race went", "success", json); //$NON-NLS-1$ //$NON-NLS-2$
             JsonObject error = JsonParser.parseString(json).getAsJsonObject();
             assertFalse(error.get("success").getAsBoolean()); //$NON-NLS-1$
@@ -2665,7 +2665,7 @@ public class WriteModuleSourceToolTest
         for (AdoptedModuleState.Result onDisk : Arrays.asList(AdoptedModuleStateTestFixtures.switched(),
             AdoptedModuleStateTestFixtures.alreadyExtended(BuildUtils.DiskExportState.DRAINED)))
         {
-            assertEquals("success", WriteModuleSourceTool.finishWrite(() -> onDisk, state -> "success")); //$NON-NLS-1$ //$NON-NLS-2$
+            assertEquals("success", WriteModuleSourceTool.finishWrite(null, () -> onDisk, state -> "success")); //$NON-NLS-1$ //$NON-NLS-2$
         }
     }
 
@@ -2691,16 +2691,16 @@ public class WriteModuleSourceToolTest
             AdoptedModuleState.Result missing = shape[2];
             assertFalse("a refused export whose .mdo already carries the line is a success: " //$NON-NLS-1$
                 + onDisk.failureMessage(), onDisk.failed());
-            String response = WriteModuleSourceTool.finishWrite(() -> onDisk,
+            String response = WriteModuleSourceTool.finishWrite(null, () -> onDisk,
                 state -> WriteModuleSourceTool.buildSuccessResponse("tests", "CommonModules/DrySignal/Module.bsl", //$NON-NLS-1$ //$NON-NLS-2$
-                    "append", false, twoLines(), true, 1, null, state)); //$NON-NLS-1$
+                    "append", false, twoLines(), true, 1, null, null, state)); //$NON-NLS-1$
             assertEquals("the same success response as a confirmed export", //$NON-NLS-1$
                 WriteModuleSourceTool.buildSuccessResponse("tests", "CommonModules/DrySignal/Module.bsl", "append", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                    false, twoLines(), true, 1, null, confirmed),
+                    false, twoLines(), true, 1, null, null, confirmed),
                 response);
 
             JsonObject error = JsonParser.parseString(
-                WriteModuleSourceTool.finishWrite(() -> missing, state -> "success")).getAsJsonObject(); //$NON-NLS-1$
+                WriteModuleSourceTool.finishWrite(null, () -> missing, state -> "success")).getAsJsonObject(); //$NON-NLS-1$
             assertFalse(error.get("success").getAsBoolean()); //$NON-NLS-1$
             assertTrue(error.get("mutationCommitted").getAsBoolean()); //$NON-NLS-1$
             String message = error.get("error").getAsString(); //$NON-NLS-1$
@@ -2713,18 +2713,18 @@ public class WriteModuleSourceToolTest
     @Test
     public void testASucceededStepReturnsTheSuccessResponse()
     {
-        assertEquals("success", WriteModuleSourceTool.finishWrite( //$NON-NLS-1$
+        assertEquals("success", WriteModuleSourceTool.finishWrite(null,  //$NON-NLS-1$
             AdoptedModuleState.Result::notApplicable, state -> "success")); //$NON-NLS-1$
-        assertEquals("success", WriteModuleSourceTool.finishWrite( //$NON-NLS-1$
+        assertEquals("success", WriteModuleSourceTool.finishWrite(null,  //$NON-NLS-1$
             AdoptedModuleStateTestFixtures::switched, state -> "success")); //$NON-NLS-1$
         // A module that already was Extended, its line read back from the .mdo, is a success as well.
-        assertEquals("success", WriteModuleSourceTool.finishWrite( //$NON-NLS-1$
+        assertEquals("success", WriteModuleSourceTool.finishWrite(null,  //$NON-NLS-1$
             () -> AdoptedModuleStateTestFixtures.alreadyExtended(BuildUtils.DiskExportState.DRAINED),
             state -> "success")); //$NON-NLS-1$
         // A state left as it is and a missing extension block are successes too: the text is written.
-        assertEquals("success", WriteModuleSourceTool.finishWrite( //$NON-NLS-1$
+        assertEquals("success", WriteModuleSourceTool.finishWrite(null,  //$NON-NLS-1$
             AdoptedModuleStateTestFixtures::keptChecked, state -> "success")); //$NON-NLS-1$
-        assertEquals("success", WriteModuleSourceTool.finishWrite( //$NON-NLS-1$
+        assertEquals("success", WriteModuleSourceTool.finishWrite(null,  //$NON-NLS-1$
             AdoptedModuleStateTestFixtures::noExtensionBlock, state -> "success")); //$NON-NLS-1$
     }
 
@@ -2737,9 +2737,9 @@ public class WriteModuleSourceToolTest
     public void testAKeptStateAndAMissingBlockAnswerASuccessWithTheKeyAndTheNote()
     {
         AdoptedModuleState.Result kept = AdoptedModuleStateTestFixtures.keptChecked();
-        String keptResponse = WriteModuleSourceTool.finishWrite(() -> kept,
+        String keptResponse = WriteModuleSourceTool.finishWrite(null, () -> kept,
             state -> WriteModuleSourceTool.buildSuccessResponse("tests", "CommonModules/DrySignal/Module.bsl", //$NON-NLS-1$ //$NON-NLS-2$
-                "append", false, twoLines(), true, 1, null, state)); //$NON-NLS-1$
+                "append", false, twoLines(), true, 1, null, null, state)); //$NON-NLS-1$
         assertTrue(keptResponse, keptResponse.contains("\nstatus: success\n")); //$NON-NLS-1$
         assertTrue(keptResponse, keptResponse.contains("\nmoduleExtensionState: keptChecked\n")); //$NON-NLS-1$
         assertNotNull(kept.bodySentence());
@@ -2747,9 +2747,9 @@ public class WriteModuleSourceToolTest
         assertTrue(keptResponse, keptResponse.contains("is Checked")); //$NON-NLS-1$
 
         AdoptedModuleState.Result noBlock = AdoptedModuleStateTestFixtures.noExtensionBlock();
-        String noBlockResponse = WriteModuleSourceTool.finishWrite(() -> noBlock,
+        String noBlockResponse = WriteModuleSourceTool.finishWrite(null, () -> noBlock,
             state -> WriteModuleSourceTool.buildSuccessResponse("tests", "CommonModules/DrySignal/Module.bsl", //$NON-NLS-1$ //$NON-NLS-2$
-                "replace", false, twoLines(), false, 0, null, state)); //$NON-NLS-1$
+                "replace", false, twoLines(), false, 0, null, null, state)); //$NON-NLS-1$
         assertTrue(noBlockResponse, noBlockResponse.contains("\nstatus: success\n")); //$NON-NLS-1$
         assertTrue(noBlockResponse, noBlockResponse.contains("\nmoduleExtensionState: noExtensionBlock\n")); //$NON-NLS-1$
         assertNotNull(noBlock.bodySentence());
@@ -2767,7 +2767,7 @@ public class WriteModuleSourceToolTest
     {
         AdoptedModuleState.Result switched = AdoptedModuleStateTestFixtures.switched();
         int[] runs = new int[1];
-        String response = WriteModuleSourceTool.finishWrite(() -> {
+        String response = WriteModuleSourceTool.finishWrite(null, () -> {
             runs[0]++;
             return switched;
         }, state -> state == switched ? "rendered from the step's result" : "rendered from another result"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -2984,7 +2984,7 @@ public class WriteModuleSourceToolTest
     public void testAnOverlappingRegionAndIfIsWrittenWithAWarning()
     {
         String response = WriteModuleSourceTool.buildSuccessResponse("P", "CommonModules/OK/Module.bsl", "replace", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            false, Arrays.asList("#\u041E\u0431\u043B\u0430\u0441\u0442\u044C \u0410", "#\u0415\u0441\u043B\u0438 \u0421\u0435\u0440\u0432\u0435\u0440 \u0422\u043E\u0433\u0434\u0430", "\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430 \u041F1() \u042D\u043A\u0441\u043F\u043E\u0440\u0442", "\u041A\u043E\u043D\u0435\u0446\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u044B", "#\u041A\u043E\u043D\u0435\u0446\u041E\u0431\u043B\u0430\u0441\u0442\u0438", "\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430 \u041F2() \u042D\u043A\u0441\u043F\u043E\u0440\u0442", "\u041A\u043E\u043D\u0435\u0446\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u044B", "#\u041A\u043E\u043D\u0435\u0446\u0415\u0441\u043B\u0438"), true, 1, null, AdoptedModuleState.Result.notApplicable());
+            false, Arrays.asList("#\u041E\u0431\u043B\u0430\u0441\u0442\u044C \u0410", "#\u0415\u0441\u043B\u0438 \u0421\u0435\u0440\u0432\u0435\u0440 \u0422\u043E\u0433\u0434\u0430", "\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430 \u041F1() \u042D\u043A\u0441\u043F\u043E\u0440\u0442", "\u041A\u043E\u043D\u0435\u0446\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u044B", "#\u041A\u043E\u043D\u0435\u0446\u041E\u0431\u043B\u0430\u0441\u0442\u0438", "\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430 \u041F2() \u042D\u043A\u0441\u043F\u043E\u0440\u0442", "\u041A\u043E\u043D\u0435\u0446\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u044B", "#\u041A\u043E\u043D\u0435\u0446\u0415\u0441\u043B\u0438"), true, 1, null, null, AdoptedModuleState.Result.notApplicable());
         assertTrue(response, response.contains("status: success")); //$NON-NLS-1$
         assertTrue(response, response.contains("warning: ") && response.contains("EDT cannot parse")); //$NON-NLS-1$ //$NON-NLS-2$
     }
