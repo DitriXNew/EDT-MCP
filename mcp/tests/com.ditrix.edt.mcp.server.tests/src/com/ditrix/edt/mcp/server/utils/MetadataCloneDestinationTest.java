@@ -84,6 +84,22 @@ public class MetadataCloneDestinationTest
     }
 
     @Test
+    public void exchangePlanContentRequiresTheReferencedObjectInTheDestination()
+    {
+        var source = MdClassFactory.eINSTANCE.createExchangePlan();
+        source.setName("Queue");
+        var item = MdClassFactory.eINSTANCE.createExchangePlanContentItem();
+        item.setMdObject(proxy(MdClassPackage.Literals.CATALOG, top(SRC, "Catalog.Products")));
+        source.getContent().add(item);
+        assertSame(item, MetadataClonePlan.graph(source).get("/content/0"));
+        Set<String> resolvable = new HashSet<>(Set.of(top(SRC, "Catalog.Products").toString()));
+        assertEquals(List.of("Catalog.Products"),
+            MetadataCloneDestination.missingReferences(source, SRC, DST, resolver(resolvable)));
+        resolvable.add(top(DST, "Catalog.Products").toString());
+        assertEquals(List.of(), MetadataCloneDestination.missingReferences(source, SRC, DST, resolver(resolvable)));
+    }
+
+    @Test
     public void aDestinationNameAndAnUnadoptedBaseNameAreRefused()
     {
         Configuration target = MdClassFactory.eINSTANCE.createConfiguration();

@@ -33,7 +33,6 @@ import org.eclipse.emf.ecore.resource.ResourceSet;
 import org.eclipse.emf.ecore.util.EcoreUtil;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.xtext.nodemodel.INode;
-import org.eclipse.xtext.resource.XtextResource;
 import org.eclipse.xtext.nodemodel.util.NodeModelUtils;
 
 import com._1c.g5.v8.dt.bsl.model.DynamicFeatureAccess;
@@ -53,6 +52,7 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.CallGraphTraversal;
 import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
+import com.ditrix.edt.mcp.server.utils.BslMethodRecovery;
 import com.ditrix.edt.mcp.server.utils.Pagination;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.Refusals;
@@ -477,7 +477,7 @@ public class GetMethodCallHierarchyTool implements IMcpTool
         Method method = BslModuleUtils.findMethod(module, methodName);
         if (method == null)
         {
-            return ToolResult.error(BslModuleUtils.buildMethodNotFoundResponse(module, modulePath, methodName)).toJson();
+            return ToolResult.error(BslMethodRecovery.missingMethodForAnalysis(module, project, modulePath, methodName)).toJson();
         }
 
         final URI methodUri = EcoreUtil.getURI(method);
@@ -873,7 +873,7 @@ public class GetMethodCallHierarchyTool implements IMcpTool
         Method method = BslModuleUtils.findMethod(module, methodName);
         if (method == null)
         {
-            return ToolResult.error(BslModuleUtils.buildMethodNotFoundResponse(module, modulePath, methodName)).toJson();
+            return ToolResult.error(BslMethodRecovery.missingMethodForAnalysis(module, project, modulePath, methodName)).toJson();
         }
 
         // Traverse AST of this method to find invocations
@@ -1043,7 +1043,7 @@ public class GetMethodCallHierarchyTool implements IMcpTool
             Method method = BslModuleUtils.findMethod(module, methodName);
             if (method == null)
             {
-                out.error = ToolResult.error(BslModuleUtils.buildMethodNotFoundResponse(module, modulePath, methodName)).toJson();
+                out.error = ToolResult.error(BslMethodRecovery.missingMethodForAnalysis(module, project, modulePath, methodName)).toJson();
                 return;
             }
             if (method.eResource() == null || method.eResource().getResourceSet() == null)
@@ -1492,7 +1492,7 @@ public class GetMethodCallHierarchyTool implements IMcpTool
                 }
                 return null;
             }
-            if (isParseUnverified(res) && ctx.unverified.add(relToSrc))
+            if (BslMethodRecovery.isParseUnverified(res) && ctx.unverified.add(relToSrc))
             {
                 // Xtext recovers from a syntax error and still hands back a Module - a PARTIAL one.
                 // An invocation swallowed by that recovery is invisible to any AST walk, so this
@@ -1516,34 +1516,6 @@ public class GetMethodCallHierarchyTool implements IMcpTool
             }
             return null;
         }
-    }
-
-    /**
-     * Whether this resource's syntax tree can NOT be vouched for as a faithful reading of its
-     * source - either because the parser recovered from a syntax error, or because there is no
-     * parse result to ask.
-     * <p>
-     * Deliberately narrower than {@code Resource.getErrors()}: that list also carries linking and
-     * validation diagnostics, and a project with ordinary semantic errors would then report every
-     * single walk as incomplete - a flag that fires always is a flag nobody reads. The parse result
-     * answers the one question an AST search depends on: did some source text fail to become syntax
-     * tree.
-     * <p>
-     * Absence of evidence is NOT evidence of a clean parse. A resource that is not an
-     * {@link XtextResource}, or that has no parse result, is counted too: the walk still searches
-     * whatever tree is there, but it cannot claim that tree represents the file.
-     *
-     * @param resource the loaded resource
-     * @return {@code true} when the tree may not represent the source
-     */
-    private static boolean isParseUnverified(Resource resource)
-    {
-        if (!(resource instanceof XtextResource))
-        {
-            return true;
-        }
-        org.eclipse.xtext.parser.IParseResult parseResult = ((XtextResource)resource).getParseResult();
-        return parseResult == null || parseResult.hasSyntaxErrors();
     }
 
     /**
@@ -1997,7 +1969,7 @@ public class GetMethodCallHierarchyTool implements IMcpTool
             Method method = BslModuleUtils.findMethod(module, methodName);
             if (method == null)
             {
-                return ToolResult.error(BslModuleUtils.buildMethodNotFoundResponse(module, modulePath, methodName)).toJson();
+                return ToolResult.error(BslMethodRecovery.missingMethodForAnalysis(module, project, modulePath, methodName)).toJson();
             }
             scope = method;
         }

@@ -492,6 +492,9 @@ public final class PredefinedWriter
         // would silently stop matching ISFOLDER/DESCRIPTION/the Predefined token.
         switch (name.toLowerCase(Locale.ROOT))
         {
+            case "id":
+                return ToolResult.error("Property 'id' is a read-only predefined item identifier. " //$NON-NLS-1$
+                    + "Remove it from properties.").toJson(); //$NON-NLS-1$
             case PROP_NAME:
                 return ToolResult.error("Renaming a predefined item is not supported: its identity is " //$NON-NLS-1$
                     + "the FQN leaf ('...Predefined.<Item>'). Delete it and create a new item under " //$NON-NLS-1$

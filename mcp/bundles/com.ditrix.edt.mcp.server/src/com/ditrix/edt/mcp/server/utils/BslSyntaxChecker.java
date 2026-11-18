@@ -303,6 +303,82 @@ public final class BslSyntaxChecker
         }
     }
 
+    /** Directive word (lower case) -> "open:", "mid:" or "close:" plus the block: R(egion) or I(f). */
+    private static final Map<String, String> DIRECTIVE_KINDS = Map.ofEntries( //$NON-NLS-1$
+        Map.entry("region", "open:R"),
+        Map.entry("\u043E\u0431\u043B\u0430\u0441\u0442\u044C", "open:R"),
+        Map.entry("endregion", "close:R"),
+        Map.entry("\u043A\u043E\u043D\u0435\u0446\u043E\u0431\u043B\u0430\u0441\u0442\u0438", "close:R"),
+        Map.entry("if", "open:I"),
+        Map.entry("\u0435\u0441\u043B\u0438", "open:I"),
+        Map.entry("elsif", "mid:I"),
+        Map.entry("\u0438\u043D\u0430\u0447\u0435\u0435\u0441\u043B\u0438", "mid:I"),
+        Map.entry("else", "mid:I"),
+        Map.entry("\u0438\u043D\u0430\u0447\u0435", "mid:I"),
+        Map.entry("endif", "close:I"),
+        Map.entry("\u043A\u043E\u043D\u0435\u0446\u0435\u0441\u043B\u0438", "close:I")); //$NON-NLS-1$
+
+    /**
+     * Finds the first #Region / #If pair that overlaps instead of nesting. The platform's
+     * line-based preprocessor accepts it; EDT's grammar does not, and its model loses every
+     * method after that point.
+     *
+     * @param lines raw module lines
+     * @return a description naming both lines, or {@code null} when the directives nest
+     */
+    public static String directiveOverlap(List<String> lines)
+    {
+        List<String> masked = maskLiteralsAndComments(lines);
+        Deque<String[]> open = new ArrayDeque<>();
+        for (int i = 0; i < masked.size(); i++)
+        {
+            String code = masked.get(i);
+            if (!isPreprocessorDirective(code))
+            {
+                continue;
+            }
+            String word = directiveWord(code);
+            String kind = DIRECTIVE_KINDS.get(word.toLowerCase(Locale.ROOT));
+            if (kind == null)
+            {
+                continue;
+            }
+            String block = kind.substring(kind.indexOf(':') + 1);
+            String line = String.valueOf(i + 1);
+            if (kind.startsWith("open:")) //$NON-NLS-1$
+            {
+                open.push(new String[] {block, "#" + word, line}); //$NON-NLS-1$
+                continue;
+            }
+            String[] top = open.peek();
+            if (top != null && !top[0].equals(block))
+            {
+                return "#" + word + " at line " + line + " is not in the innermost block: " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    + top[1] + " opened at line " + top[2] + " is still open"; //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            if (top != null && kind.startsWith("close:")) //$NON-NLS-1$
+            {
+                open.pop();
+            }
+        }
+        return null;
+    }
+
+    private static String directiveWord(String code)
+    {
+        int start = code.indexOf('#') + 1;
+        while (start < code.length() && Character.isWhitespace(code.charAt(start)))
+        {
+            start++;
+        }
+        int end = start;
+        while (end < code.length() && Character.isLetter(code.charAt(end)))
+        {
+            end++;
+        }
+        return code.substring(start, end);
+    }
+
     /**
      * Tells whether a whole line is a preprocessor directive, which is skipped.
      * <p>

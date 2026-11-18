@@ -3047,17 +3047,26 @@
         "assignable": {
           "type": "boolean"
         },
+        "controlledMismatches": {
+          "type": "boolean"
+        },
         "full": {
           "type": "boolean"
         },
         "language": {
           "type": "string"
         },
+        "limit": {
+          "type": "integer"
+        },
         "objectFqns": {
           "items": {
             "type": "string"
           },
           "type": "array"
+        },
+        "offset": {
+          "type": "integer"
         },
         "projectName": {
           "type": "string"

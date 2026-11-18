@@ -28,6 +28,7 @@ import com._1c.g5.v8.dt.core.naming.ITopObjectFqnGenerator;
 import com._1c.g5.v8.dt.core.platform.IExtensionProject;
 import com._1c.g5.v8.dt.md.copy.IModelObjectCopySupport;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
+import com._1c.g5.v8.dt.metadata.mdclass.ExchangePlan;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.wiring.ServiceAccess;
 import com.ditrix.edt.mcp.server.Activator;
@@ -92,7 +93,8 @@ public class CloneMetadataObjectTool extends AbstractMetadataWriteTool
             .stringProperty(TARGET_PROJECT_NAME, "Another configuration or extension project to clone into; omit to "
                 + "clone inside projectName. No transfer; references missing there are refused")
             .stringProperty("fqn", "Top Catalog, Document, Report, DataProcessor, Constant, Enum, InformationRegister, "
-                + "ScheduledJob, non-global CommonModule or Role FQN. Only the TYPE token may be Russian/English; "
+                + "ScheduledJob, non-global CommonModule, Role, CommonForm or ExchangePlan FQN. "
+                + "Only the TYPE token may be Russian/English; "
                 + "Name is a programmatic identifier, not a synonym", true)
             .stringProperty("newName", "Unused 1C identifier; omit for EDT's automatic free name")
             .booleanProperty("confirm", "Default false: preview only. True requires expectedHash from the same preview scope")
@@ -282,8 +284,6 @@ public class CloneMetadataObjectTool extends AbstractMetadataWriteTool
                 Configuration config = (Configuration)tx.getTopObjectByFqn("Configuration");
                 MdObject source = MetadataClonePlan.source(config, fqn);
                 checkDestination(config, source, newName);
-                MetadataCloneDiskVerifier.verifyOwned(ctx.project, MetadataClonePlan.graph(source), fs);
-                MetadataCloneDiskVerifier.verifyOwned(ctx.project, java.util.Collections.singletonMap("", config), fs);
                 return MetadataClonePlan.capture(ctx.project, model, config, source, newName, transfer, fs, true,
                     extensionProject);
             });
@@ -505,9 +505,6 @@ public class CloneMetadataObjectTool extends AbstractMetadataWriteTool
                 MetadataCloneDestination destination = state.destination();
                 MdObject object = state.object();
                 vendorCheck(destination.configuration, object, MetadataCloneDestination.effectiveName(object, newName));
-                MetadataCloneDiskVerifier.verifyOwned(source.project, MetadataClonePlan.graph(object), sourceFs);
-                MetadataCloneDiskVerifier.verifyOwned(destinationHandle,
-                    java.util.Collections.singletonMap("", destination.configuration), targetFs);
                 return MetadataClonePlan.captureInto(destination, source.project, sourceModel, state.sourceConfig(),
                     object, newName, sourceFs, true);
             });
@@ -665,6 +662,12 @@ public class CloneMetadataObjectTool extends AbstractMetadataWriteTool
         {
             throw new IllegalStateException("EDT did not create a new identity under the requested name. "
                 + "Inspect get_metadata_objects and do not repeat confirm.");
+        }
+        if (source instanceof ExchangePlan original && clone instanceof ExchangePlan copy
+            && (copy.getThisNode() == null || copy.getThisNode().equals(original.getThisNode())))
+        {
+            throw new IllegalStateException("ExchangePlan." + copy.getName() + " has no fresh thisNode UUID. "
+                + "Inspect the clone in EDT before retrying.");
         }
         Map<String, EObject> originals = MetadataClonePlan.graph(source);
         Map<String, EObject> copies = MetadataClonePlan.graph(clone);
@@ -980,16 +983,6 @@ public class CloneMetadataObjectTool extends AbstractMetadataWriteTool
             {
                 return partial(fqn, "the clone model changed while export was finishing", warning);
             }
-            com._1c.g5.v8.dt.core.platform.IDtProject dtProject =
-                Activator.getDefault().getDtProjectManager().getDtProject(project);
-            com._1c.g5.v8.dt.core.naming.ISymbolicNameService names =
-                ServiceAccess.get(com._1c.g5.v8.dt.core.naming.ISymbolicNameService.class);
-            com._1c.g5.v8.dt.platform.version.IRuntimeVersionSupport versions =
-                ServiceAccess.get(com._1c.g5.v8.dt.platform.version.IRuntimeVersionSupport.class);
-            if (dtProject == null || names == null || versions == null)
-            {
-                return partial(fqn, "EDT's exported-model verification services became unavailable", warning);
-            }
             BmTransactions.read(model.getModel(), NAME + ": verify exported models", (tx, monitor) -> {
                 for (JsonElement element : response.getAsJsonArray("resources"))
                 {
@@ -1003,8 +996,6 @@ public class CloneMetadataObjectTool extends AbstractMetadataWriteTool
                             throw new IllegalStateException("A written model changed during export: "
                                 + resource.get("modelFqn").getAsString());
                         }
-                        MetadataCloneDiskVerifier.verify(project.getFile(resource.get("file").getAsString()),
-                            object, dtProject, versions.getRuntimeVersion(project), names);
                     }
                 }
                 return null;

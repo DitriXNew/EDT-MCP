@@ -13,10 +13,65 @@ the tool's REAL error paths: non-existent module, non-existent project, and
 each missing required parameter (projectName, modulePath).
 """
 
+from contextlib import contextmanager
+import re
+
 from harness import (
     call, assert_ok, assert_error, assert_error_quality,
-    assert_contains, assert_not_contains, assert_no_diff, e2e_test, PROJECT,
+    assert_contains, assert_not_contains, assert_no_diff, e2e_test, read_disk, PROJECT,
 )
+
+OVERLAP_PATH = "CommonModules/Calc/Module.bsl"
+OVERLAP_SOURCE = """Procedure Head()
+EndProcedure
+#Если Сервер Тогда
+Процедура П1()
+КонецПроцедуры
+#Область Несовместимый
+Процедура П2()
+КонецПроцедуры
+#КонецЕсли
+Процедура П3()
+КонецПроцедуры
+#КонецОбласти
+#Область Хвост
+Функция Остаток() Экспорт
+Возврат 42;
+КонецФункции
+Procedure Tail()
+EndProcedure
+#КонецОбласти
+"""
+
+
+@contextmanager
+def temporary_module_source(path, original, source, *, skip_syntax_check=False):
+    args = {"projectName": PROJECT, "modulePath": path, "mode": "replace"}
+    disk_path = "src/" + path
+    assert_ok(call("write_module_source", {**args, "expectedSource": original, "source": source,
+        "skipSyntaxCheck": skip_syntax_check}), "install temporary BSL fixture")
+    try:
+        assert read_disk(disk_path).removeprefix("\ufeff") == source
+        yield
+    finally:
+        assert_ok(call("write_module_source", {**args, "expectedSource": source,
+            "source": original}), "restore temporary BSL fixture")
+        assert read_disk(disk_path).removeprefix("\ufeff") == original
+
+
+@e2e_test(tool="get_module_structure", kind="write-metadata")
+def test_overlapping_preprocessors_report_incomplete_structure_and_recover_methods():
+    original = read_disk("src/" + OVERLAP_PATH).removeprefix("\ufeff")
+    with temporary_module_source(OVERLAP_PATH, original, OVERLAP_SOURCE, skip_syntax_check=True):
+        result = call("get_module_structure", {"projectName": PROJECT, "modulePath": OVERLAP_PATH})
+        assert_ok(result, "read overlapping preprocessor module structure")
+        assert_contains(result.text, "**Incomplete EDT parse.**")
+        assert_contains(result.text, "EDT model methods: 4. Saved text declarations: 6.")
+        assert re.search(r"First syntax error at line 9: .+\. EDT could not reliably parse past", result.text), result.text
+        assert_contains(result.text, "| Function | Остаток _(recovered from text)_ | Yes | - | 14-16 | Хвост |")
+        assert_contains(result.text, "| Procedure | Tail _(recovered from text)_ | - | - | 17-18 | Хвост |")
+        assert_contains(result.text, "**Total:** 5 procedures, 1 functions | **Lines:** 19")
+    assert_no_diff("restored the original Calc module after reading its incomplete structure")
 
 
 # ──────────────────────────────────────────────────────────────────────────────

@@ -10,7 +10,9 @@ import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.BiFunction;
 
+import org.eclipse.core.resources.IProject;
 import org.eclipse.emf.common.util.URI;
 import org.eclipse.emf.ecore.resource.Resource;
 
@@ -53,6 +55,36 @@ public final class InterceptionUtils
         // Utility class
     }
 
+    private static IModuleExtensionService extensionService()
+    {
+        return IModuleExtensionServiceProvider.INSTANCE.getModuleExtensionService();
+    }
+
+    /** Reads an adopted module's source in the base model while the extension read is active. */
+    public static <T> T readSourceModule(IProject project, Module module, String taskName,
+        BiFunction<IProject, Module, T> read)
+    {
+        IProject base = ExtensionOriginUtils.resolveBaseProject(project);
+        if (base == null || base.equals(project))
+        {
+            return null;
+        }
+        IModuleExtensionService service = extensionService();
+        if (service == null || !service.isExtensionModule(module))
+        {
+            return null;
+        }
+        return ReadToolExecution.readModel(base, taskName, () -> {
+            Module source = service.getSourceModule(module);
+            if (source == null || source.eIsProxy())
+            {
+                throw Refusals.state("The adopted module's source is unavailable in base project '" + base.getName() //$NON-NLS-1$
+                    + "'. Open and index the base project, then retry."); //$NON-NLS-1$
+            }
+            return read.apply(base, source);
+        });
+    }
+
     /**
      * A short blockquote footer for a SINGLE method, or {@code null} when the method
      * neither intercepts nor is intercepted (or the service is unavailable). Append it
@@ -70,7 +102,7 @@ public final class InterceptionUtils
         }
         try
         {
-            IModuleExtensionService svc = IModuleExtensionServiceProvider.INSTANCE.getModuleExtensionService();
+            IModuleExtensionService svc = extensionService();
             if (svc == null)
             {
                 return null;
@@ -119,7 +151,7 @@ public final class InterceptionUtils
         }
         try
         {
-            IModuleExtensionService svc = IModuleExtensionServiceProvider.INSTANCE.getModuleExtensionService();
+            IModuleExtensionService svc = extensionService();
             if (svc == null)
             {
                 return null;

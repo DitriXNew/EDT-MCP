@@ -69,7 +69,8 @@ public final class MetadataClonePlan
 {
     /** Each kind is enabled only together with its own live acceptance (fixture + e2e). */
     private static final List<String> KINDS = List.of("Catalog", "Document", "Report", "DataProcessor",
-        "Constant", "Enum", "InformationRegister", "ScheduledJob", "CommonModule", "Role");
+        "Constant", "Enum", "InformationRegister", "ScheduledJob", "CommonModule", "Role",
+        "CommonForm", "ExchangePlan");
     public static final Set<String> SUPPORTED = Set.copyOf(KINDS);
     private static final String KIND_LIST = String.join(", ", KINDS.subList(0, KINDS.size() - 1))
         + " or " + KINDS.get(KINDS.size() - 1);

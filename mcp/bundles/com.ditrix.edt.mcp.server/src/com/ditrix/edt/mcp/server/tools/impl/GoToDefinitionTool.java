@@ -11,6 +11,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BiFunction;
 
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
@@ -32,9 +33,11 @@ import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.FrontMatter;
+import com.ditrix.edt.mcp.server.utils.InterceptionUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
+import com.ditrix.edt.mcp.server.utils.BslMethodRecovery;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.Refusals;
 
@@ -59,16 +62,36 @@ public class GoToDefinitionTool implements IMcpTool
     /** Closing fence for a code block. */
     private static final String CODE_FENCE_CLOSE = "```\n"; //$NON-NLS-1$
 
-    private final java.util.function.BiFunction<IProject, String, Module> moduleLoader;
+    private static final String BASE_NOTICE = "> Declared in the base configuration.\n\n"; //$NON-NLS-1$
+
+    record MethodLookup(String definition, List<String> names)
+    {
+    }
+
+    @FunctionalInterface
+    interface BaseModuleReader
+    {
+        MethodLookup read(IProject project, Module module, BiFunction<IProject, Module, MethodLookup> lookup);
+    }
+
+    private final BiFunction<IProject, String, Module> moduleLoader;
+    private final BaseModuleReader baseModuleReader;
 
     public GoToDefinitionTool()
     {
-        this(BslModuleUtils::loadModule);
+        this(BslModuleUtils::loadModule,
+            (project, module, lookup) -> InterceptionUtils.readSourceModule(project, module, NAME, lookup));
     }
 
-    GoToDefinitionTool(java.util.function.BiFunction<IProject, String, Module> moduleLoader)
+    GoToDefinitionTool(BiFunction<IProject, String, Module> moduleLoader)
+    {
+        this(moduleLoader, (project, module, lookup) -> null);
+    }
+
+    GoToDefinitionTool(BiFunction<IProject, String, Module> moduleLoader, BaseModuleReader baseModuleReader)
     {
         this.moduleLoader = moduleLoader;
+        this.baseModuleReader = baseModuleReader;
     }
 
     @Override
@@ -280,7 +303,7 @@ public class GoToDefinitionTool implements IMcpTool
      * Resolves a method definition within a specific BSL module.
      * Returns full definition info including source code.
      */
-    private String resolveMethodInModule(IProject project, String projectName, String modulePath,
+    String resolveMethodInModule(IProject project, String projectName, String modulePath,
                                           String methodName, boolean includeSource, String qualifiedPrefix)
     {
         // Load module via EMF
@@ -292,20 +315,88 @@ public class GoToDefinitionTool implements IMcpTool
                 includeSource, qualifiedPrefix);
         }
 
-        Method method = BslModuleUtils.findMethod(module, methodName);
-        if (method == null)
+        MethodLookup local = lookupInModule(project, projectName, modulePath, module, methodName,
+            includeSource, qualifiedPrefix, false);
+        if (local.definition() != null)
         {
-            return ToolResult.error(BslModuleUtils.buildMethodNotFoundResponse(module, modulePath, methodName)).toJson();
+            return local.definition();
         }
 
-        return formatMethodDefinition(project, projectName, modulePath, method, includeSource, qualifiedPrefix);
+        MethodLookup base = baseModuleReader.read(project, module, (baseProject, source) -> {
+            var resource = source.eResource();
+            String path = resource == null || resource.getURI() == null ? null : resource.getURI().toPlatformString(true);
+            if (path == null || !path.startsWith("/" + baseProject.getName() + "/")) //$NON-NLS-1$ //$NON-NLS-2$
+            {
+                throw Refusals.state("Cannot locate the source of '" + modulePath + "' in base project '" //$NON-NLS-1$ //$NON-NLS-2$
+                    + baseProject.getName() + "'. Use list_modules to check the base module path."); //$NON-NLS-1$
+            }
+            String relative = path.substring(baseProject.getName().length() + 2);
+            String baseModulePath = relative.startsWith(BslModuleUtils.SOURCE_FOLDER + "/") //$NON-NLS-1$
+                ? BslModuleUtils.extractModulePath(path) : relative;
+            // EDT's source module can lag behind a base edit; the base project's own load is current.
+            Module current = moduleLoader.apply(baseProject, baseModulePath);
+            if (current == null)
+            {
+                return lookupInSavedText(baseProject, baseModulePath, methodName, includeSource, qualifiedPrefix);
+            }
+            return lookupInModule(baseProject, baseProject.getName(), baseModulePath,
+                current, methodName, includeSource, qualifiedPrefix, true);
+        });
+        if (base != null && base.definition() != null)
+        {
+            return base.definition();
+        }
+        StringBuilder error = new StringBuilder(
+            BslModuleUtils.buildTextMethodNotFoundResponse(methodName, modulePath, local.names()));
+        if (base != null)
+        {
+            error.append("\nBase configuration\n\n"); //$NON-NLS-1$
+            BslModuleUtils.appendAvailableMethods(error, base.names());
+        }
+        return ToolResult.error(error.toString()).toJson();
+    }
+
+    /** The base module could not be loaded now: only its saved text is current. */
+    private static MethodLookup lookupInSavedText(IProject baseProject, String baseModulePath, String methodName,
+        boolean includeSource, String qualifiedPrefix)
+    {
+        BslMethodRecovery.TextScan text = BslMethodRecovery.scanSavedModule(baseProject, baseModulePath);
+        var span = text == null ? null : text.find(methodName);
+        if (span == null)
+        {
+            return new MethodLookup(null, text == null ? List.of() : text.names());
+        }
+        return new MethodLookup(formatTextDefinition(baseProject.getName(), baseModulePath, includeSource,
+            qualifiedPrefix, text, span, true, "Span read from the base module's saved source text: EDT could not " //$NON-NLS-1$
+                + "load the base module now."), List.of()); //$NON-NLS-1$
+    }
+
+    private MethodLookup lookupInModule(IProject project, String projectName, String modulePath, Module module,
+        String methodName, boolean includeSource, String qualifiedPrefix, boolean base)
+    {
+        Method method = BslModuleUtils.findMethod(module, methodName);
+        if (method != null)
+        {
+            return new MethodLookup(formatMethodDefinition(project, projectName, modulePath, method,
+                includeSource, qualifiedPrefix, base), List.of());
+        }
+
+        BslMethodRecovery.TextScan text = BslMethodRecovery.scanSavedModule(project, modulePath);
+        List<String> modelNames = BslModuleUtils.methodNames(module);
+        var span = text == null ? null : text.find(methodName);
+        if (span != null)
+        {
+            return new MethodLookup(formatTextDefinition(projectName, modulePath, includeSource,
+                qualifiedPrefix, text, span, base, BslMethodRecovery.recoveredSpanNotice(span)), List.of());
+        }
+        return new MethodLookup(null, text == null ? modelNames : text.availableNames(modelNames));
     }
 
     /**
      * Formats method definition result with optional source code.
      */
     private String formatMethodDefinition(IProject project, String projectName, String modulePath,
-                                           Method method, boolean includeSource, String qualifiedPrefix)
+        Method method, boolean includeSource, String qualifiedPrefix, boolean base)
     {
         int startLine = BslModuleUtils.getStartLine(method);
         int endLine = BslModuleUtils.getEndLine(method);
@@ -361,7 +452,8 @@ public class GoToDefinitionTool implements IMcpTool
             fm.put("qualifiedName", qualifiedPrefix + "." + method.getName()); //$NON-NLS-1$ //$NON-NLS-2$
         }
 
-        return fm.wrapContent(buildMethodSource(includeSource, allLines, from, to, method));
+        return fm.wrapContent((base ? BASE_NOTICE : "") //$NON-NLS-1$
+            + buildMethodSource(includeSource, allLines, from, to, method));
     }
 
     /**
@@ -424,60 +516,53 @@ public class GoToDefinitionTool implements IMcpTool
 
         try
         {
-            List<String> allLines = BslModuleUtils.readFileLines(file);
-
-            // Locate the method via the shared text-scan fallback.
-            BslModuleUtils.TextMethod tm = BslModuleUtils.findMethodViaText(allLines, methodName);
-            if (!tm.found)
+            var text = BslMethodRecovery.scan(BslModuleUtils.readFileLines(file));
+            var span = text.find(methodName);
+            if (span == null)
             {
                 return ToolResult.error(BslModuleUtils.buildTextMethodNotFoundResponse(
-                    methodName, modulePath, tm.allMethodNames)).toJson();
+                    methodName, modulePath, text.names())).toJson();
             }
-
-            int methodStart = tm.startLine;
-            int methodEnd = tm.endLine;
-            String matchedName = tm.matchedName;
-            String typeStr = tm.isFunction ? "Function" : "Procedure"; //$NON-NLS-1$ //$NON-NLS-2$
-
-            // Find containing region
-            String region = BslModuleUtils.findRegionForLine(allLines, methodStart + 1);
-
-            FrontMatter fm = FrontMatter.create()
-                .put(McpKeys.PROJECT_NAME, projectName)
-                .put("module", modulePath) //$NON-NLS-1$
-                .put("method", matchedName) //$NON-NLS-1$
-                .put("type", typeStr) //$NON-NLS-1$
-                .put("startLine", methodStart + 1) //$NON-NLS-1$
-                .put("endLine", methodEnd + 1) //$NON-NLS-1$
-                .put("totalLines", allLines.size()); //$NON-NLS-1$
-
-            if (region != null)
-            {
-                fm.put("region", region); //$NON-NLS-1$
-            }
-
-            if (qualifiedPrefix != null)
-            {
-                fm.put("qualifiedName", qualifiedPrefix + "." + matchedName); //$NON-NLS-1$ //$NON-NLS-2$
-            }
-
-            StringBuilder sb = new StringBuilder();
-            if (includeSource)
-            {
-                sb.append(BSL_CODE_FENCE_OPEN);
-                for (int i = methodStart; i <= methodEnd; i++)
-                {
-                    sb.append(allLines.get(i)).append('\n');
-                }
-                sb.append(CODE_FENCE_CLOSE);
-            }
-
-            return fm.wrapContent(sb.toString());
+            return formatTextDefinition(projectName, modulePath, includeSource, qualifiedPrefix,
+                text, span, false, null);
         }
         catch (Exception e)
         {
             return ToolResult.error("Error reading file: " + e.getMessage()).toJson(); //$NON-NLS-1$
         }
+    }
+
+    private static String formatTextDefinition(String projectName, String modulePath, boolean includeSource,
+        String qualifiedPrefix, BslMethodRecovery.TextScan text, BslModuleUtils.MethodSpan span,
+        boolean base, String notice)
+    {
+        boolean recovered = notice != null;
+        int from = span.startLine + 1;
+        int to = span.endLine + 1;
+        String region = recovered ? text.region(span) : BslModuleUtils.findRegionForLine(text.lines(), from);
+        String type = span.isFunction ? "Function" : "Procedure"; //$NON-NLS-1$ //$NON-NLS-2$
+        FrontMatter fm = FrontMatter.create()
+            .put(McpKeys.PROJECT_NAME, projectName)
+            .put("module", modulePath) //$NON-NLS-1$
+            .put("method", span.name) //$NON-NLS-1$
+            .put("type", type); //$NON-NLS-1$
+        if (recovered)
+        {
+            fm.put("export", text.exported(span)); //$NON-NLS-1$
+        }
+        fm.put("startLine", from).put("endLine", to).put("totalLines", text.lines().size()); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        if (region != null)
+        {
+            fm.put("region", region); //$NON-NLS-1$
+        }
+        if (qualifiedPrefix != null)
+        {
+            fm.put("qualifiedName", qualifiedPrefix + "." + span.name); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+
+        return fm.wrapContent((base ? BASE_NOTICE : "") //$NON-NLS-1$
+            + (recovered ? "> " + notice + "\n\n" : "") //$NON-NLS-1$ //$NON-NLS-2$
+            + buildMethodSource(includeSource, text.lines(), from, to, null));
     }
 
     // ========== Metadata resolution ==========

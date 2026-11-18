@@ -348,6 +348,15 @@ public class PredefinedWriterTest
     }
 
     @Test
+    public void testParsePropertiesIdIsAStructuredRefusal()
+    {
+        String err = PredefinedWriter.parseProperties(List.of(stringProp("id", "x")), false, //$NON-NLS-1$ //$NON-NLS-2$
+            new PredefinedWriter.ItemProps());
+        assertTrue(err, com.ditrix.edt.mcp.server.protocol.ToolResult.isErrorPayload(err));
+        assertTrue(err, err.contains("read-only predefined item identifier")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testParsePropertiesUnknownPropertyRejected()
     {
         PredefinedWriter.ItemProps out = new PredefinedWriter.ItemProps();

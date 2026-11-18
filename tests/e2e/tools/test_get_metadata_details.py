@@ -19,11 +19,11 @@ Two distinct error channels exist and are tested separately:
     regression that promoted a per-object miss to a whole-call failure (or that
     silently dropped the failures table) must make these tests FAIL.
 
-The tool has no XOR / conditional / enum parameters: `projectName` and
-`objectFqns` are both unconditionally required, `full` is an optional boolean,
-and an unknown `language` is silently tolerated (MetadataLanguageUtils falls back
-to any non-empty synonym) -- so there is no invalid enum/combination to test.
+`projectName` and `objectFqns` are required. The controlled-mismatch view excludes
+`full` and `assignable` and requires an extension project.
 """
+
+import xml.etree.ElementTree as ET
 
 from harness import (
     call,
@@ -33,13 +33,97 @@ from harness import (
     assert_contains,
     assert_not_contains,
     assert_no_diff,
+    assert_no_diff_rel,
+    calls_aborted,
     poll_disk_contains_all,
     poll_disk_count,
     read_disk,
+    read_fixture_file,
+    restore_extension_fixture,
     wait_for_project_ready,
     e2e_test,
     PROJECT,
+    TESTS_PROJECT,
+    TESTS_PROJECT_REL,
 )
+
+
+@e2e_test(tool="get_metadata_details", kind="read")
+def test_full_details_show_generated_type_ids_of_owner_and_tabular_section():
+    document = ET.fromstring(read_disk("src/Documents/QueryOrder/QueryOrder.mdo"))
+    section = document.find("tabularSections")
+    for address in ("Document.QueryOrder", "Документ.QueryOrder"):
+        full = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [address], "full": True})
+        assert_ok(full)
+        assert_contains(full.text, "| Object | Type | typeId | valueTypeId |")
+        for fqn, element in (("Document.QueryOrder", document),
+                             ("Document.QueryOrder.TabularSection.Items", section)):
+            for produced in element.find("producedTypes"):
+                assert_contains(full.text, "| %s | %s | %s | %s |" %
+                                (fqn, produced.tag, produced.attrib["typeId"], produced.attrib["valueTypeId"]))
+        compact = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [address]})
+        assert_ok(compact)
+        assert_not_contains(compact.text, "| typeId | valueTypeId |")
+    assert_no_diff()
+
+
+@e2e_test(tool="get_metadata_details", kind="read")
+def test_controlled_mismatches_requires_extension_and_its_own_view():
+    args = {"projectName": PROJECT, "objectFqns": ["Catalog.Catalog"], "controlledMismatches": True}
+    result = call("get_metadata_details", args)
+    assert_error_quality(assert_error(result), names=[PROJECT], suggests=["list_projects"])
+    for flag in ("full", "assignable"):
+        result = call("get_metadata_details", {**args, flag: True})
+        assert_error_quality(assert_error(result), names=["controlledMismatches", flag], suggests=["false", "omitted"])
+    assert_no_diff()
+
+
+@e2e_test(tool="get_metadata_details", kind="write-metadata")
+def test_adopted_type_cells_and_mismatch_report_use_current_base_qualifiers():
+    fqn = "Catalog.Catalog.Attribute.Attribute"
+    mdo = "src/Catalogs/Catalog/Catalog.mdo"
+
+    def update_base(precision):
+        assert_ok(call("modify_metadata", {"projectName": PROJECT, "fqn": fqn,
+            "properties": [{"name": "type", "value": {"types": [
+                {"kind": "Number", "precision": precision, "scale": 2}]}}]}))
+        root = ET.fromstring(read_disk(mdo))
+        assert root.findtext("attributes/type/numberQualifiers/precision") == str(precision)
+
+    try:
+        update_base(10)
+        assert_ok(call("adopt_metadata_object", {"projectName": PROJECT, "fqn": fqn,
+                                                "extensionProjectName": TESTS_PROJECT}))
+        before = read_fixture_file(TESTS_PROJECT_REL, mdo)
+        adopted = ET.fromstring(before).find("attributes")
+        assert adopted.findtext("extension/typeExtension/numberQualifiers/precision") == "10"
+        update_base(15)
+
+        for address in (fqn, "Справочник.Catalog.Реквизит.Attribute"):
+            for mode in ({"assignable": True}, {"full": True}):
+                details = call("get_metadata_details", {"projectName": TESTS_PROJECT, "objectFqns": [address], **mode})
+                assert_ok(details)
+                assert_contains(details.text, "Number(10, 2, Signed) (Checked)")
+                assert_contains(details.text, "Base: Number(15, 2, Signed) [MISMATCH]")
+        owner = call("get_metadata_details", {"projectName": TESTS_PROJECT, "objectFqns": ["Catalog.Catalog"]})
+        assert_ok(owner)
+        assert_contains(owner.text, "Base: Number(15, 2, Signed) [MISMATCH]")
+
+        args = {"projectName": TESTS_PROJECT, "objectFqns": ["Справочник.Catalog"], "controlledMismatches": True}
+        report = call("get_metadata_details", args)
+        assert_ok(report)
+        row = next(line for line in report.text.splitlines() if line.startswith("| " + fqn + " | type |"))
+        assert_contains(row, "Number(10, 2, Signed) (Checked)")
+        assert_contains(row, "| Number(15, 2, Signed) | MISMATCH |")
+        later = call("get_metadata_details", {**args, "objectFqns": [fqn], "offset": 1, "limit": 1})
+        assert_ok(later)
+        assert_contains(later.text, "no rows at offset 1")
+        assert_not_contains(later.text, "| " + fqn + " | type |")
+        assert read_fixture_file(TESTS_PROJECT_REL, mdo) == before, "comparison must leave the adopted model export alone"
+    finally:
+        if not calls_aborted():
+            restore_extension_fixture("adopted type comparison")
+            assert_no_diff_rel(TESTS_PROJECT_REL)
 
 
 @e2e_test(tool="get_metadata_details", kind="write-metadata")

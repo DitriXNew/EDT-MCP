@@ -87,6 +87,8 @@ public final class MetadataPropertyIntrospector
     {
         /** A free-text string (e.g. name, comment). */
         STRING,
+        /** An ExchangePlan's this-node UUID. */
+        UUID,
         /** A boolean flag. */
         BOOLEAN,
         /** An integer (e.g. a length / precision). */
@@ -684,6 +686,10 @@ public final class MetadataPropertyIntrospector
     private static ValueKind classifyAttribute(EAttribute feature)
     {
         EClassifier type = feature.getEAttributeType();
+        if (type == McorePackage.Literals.UUID)
+        {
+            return feature == MdClassPackage.Literals.EXCHANGE_PLAN__THIS_NODE ? ValueKind.UUID : null;
+        }
         if (type instanceof EEnum)
         {
             return feature.isMany() ? ValueKind.MANY_ENUM : ValueKind.ENUM;
@@ -702,6 +708,13 @@ public final class MetadataPropertyIntrospector
             return ValueKind.LONG;
         }
         return ValueKind.STRING;
+    }
+
+    static boolean isReadOnlyUuid(EObject object, String name)
+    {
+        return object.eClass().getEAllAttributes().stream().anyMatch(feature ->
+            feature.getName().equalsIgnoreCase(name) && feature.getEAttributeType() == McorePackage.Literals.UUID
+                && classifyAttribute(feature) == null);
     }
 
     /**
@@ -1792,6 +1805,7 @@ public final class MetadataPropertyIntrospector
             return "-"; //$NON-NLS-1$
         }
         List<String> parts = new ArrayList<>();
+        AdoptedPropertyRouter.Qualifiers qualifiers = AdoptedPropertyRouter.Qualifiers.of(description);
         for (TypeItem item : description.getTypes())
         {
             String name = McoreUtil.getTypeName(item);
@@ -1803,36 +1817,31 @@ public final class MetadataPropertyIntrospector
             {
                 name = item.getClass().getSimpleName();
             }
-            String suffix = ""; //$NON-NLS-1$
-            if ("String".equals(name)) //$NON-NLS-1$
-            {
-                StringQualifiers q = description.getStringQualifiers();
-                int length = q == null ? 0 : q.getLength();
-                boolean fixed = q != null && q.isFixed();
-                suffix = "(" + (length == 0 ? "unlimited" : Integer.toString(length)) //$NON-NLS-1$ //$NON-NLS-2$
-                    + (fixed ? ", Fixed" : length == 0 ? "" : ", Variable") + ")"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-            }
-            else if ("Number".equals(name) && description.getNumberQualifiers() != null) //$NON-NLS-1$
-            {
-                NumberQualifiers q = description.getNumberQualifiers();
-                suffix = "(" + q.getPrecision() + ", " + q.getScale() //$NON-NLS-1$ //$NON-NLS-2$
-                    + (q.isNonNegative() ? ", Nonnegative" : ", Signed") + ")"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            }
-            else if ("Date".equals(name)) //$NON-NLS-1$
-            {
-                DateQualifiers q = description.getDateQualifiers();
-                DateFractions fractions = q == null ? DateFractions.DATE_TIME : q.getDateFractions();
-                suffix = "(" + fractions.getLiteral() + ")"; //$NON-NLS-1$ //$NON-NLS-2$
-            }
-            else if ("BinaryData".equals(name) && description.getBinaryQualifiers() != null) //$NON-NLS-1$
-            {
-                BinaryQualifiers q = description.getBinaryQualifiers();
-                suffix = "(" + (q.getLength() == 0 ? "unlimited" : Integer.toString(q.getLength())) //$NON-NLS-1$ //$NON-NLS-2$
-                    + (q.isFixed() ? ", Fixed" : ", Variable") + ")"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            }
-            parts.add(name + suffix);
+            parts.add(formatQualifiedType(name, qualifiers));
         }
         return String.join(", ", parts); //$NON-NLS-1$
+    }
+
+    static String formatQualifiedType(String name, AdoptedPropertyRouter.Qualifiers q)
+    {
+        return switch (name)
+        {
+            case "String" -> name + formatLength(q.stringLength == null ? 0 : q.stringLength,
+                Boolean.TRUE.equals(q.stringFixed), true);
+            case "Number" -> q.numberPrecision == null ? name : name + "(" + q.numberPrecision + ", "
+                + q.numberScale + (Boolean.TRUE.equals(q.numberNonNegative) ? ", Nonnegative)" : ", Signed)");
+            case "Date" -> name + "(" + (q.dateFractions == null ? DateFractions.DATE_TIME : q.dateFractions)
+                .getLiteral() + ")";
+            case "BinaryData" -> q.binaryLength == null ? name
+                : name + formatLength(q.binaryLength, Boolean.TRUE.equals(q.binaryFixed), false);
+            default -> name;
+        };
+    }
+
+    private static String formatLength(int length, boolean fixed, boolean omitUnlimitedVariable)
+    {
+        return "(" + (length == 0 ? "unlimited" : Integer.toString(length))
+            + (fixed ? ", Fixed" : length == 0 && omitUnlimitedVariable ? "" : ", Variable") + ")";
     }
 
     /**

@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.server.tools.metadata;
 
 import java.util.Collection;
 
+import org.eclipse.core.resources.IProject;
 import org.eclipse.emf.common.util.URI;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.EReference;
@@ -31,15 +32,19 @@ import com._1c.g5.v8.dt.mcore.ColorValue;
 import com._1c.g5.v8.dt.mcore.FontValue;
 import com._1c.g5.v8.dt.mcore.Value;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
+import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.ObjectBelonging;
 import com._1c.g5.v8.dt.metadata.mdclass.PaletteColor;
 import com._1c.g5.v8.dt.metadata.mdclass.StandardAttribute;
 import com._1c.g5.v8.dt.metadata.mdclass.StyleItem;
 import com._1c.g5.v8.dt.metadata.mdclass.TemplateType;
+import com._1c.g5.v8.dt.metadata.mdtype.AbstractMdType;
+import com._1c.g5.v8.dt.metadata.mdclass.util.MdClassUtil;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.utils.ExtensionOriginUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector;
+import com.ditrix.edt.mcp.server.utils.PersistedContents;
 import com.ditrix.edt.mcp.server.utils.StyleValueBuilder;
 
 /**
@@ -49,9 +54,26 @@ import com.ditrix.edt.mcp.server.utils.StyleValueBuilder;
  * This replaces all individual type-specific formatters (CatalogFormatter,
  * DocumentFormatter, etc.) with a single universal implementation.
  */
-public class UniversalMetadataFormatter extends AbstractMetadataFormatter // NOSONAR intentional singleton (Eclipse service / getInstance); a single instance is by design
+public class UniversalMetadataFormatter extends AbstractMetadataFormatter
 {
     private static final UniversalMetadataFormatter INSTANCE = new UniversalMetadataFormatter();
+    private final IProject project;
+
+    public UniversalMetadataFormatter()
+    {
+        this(null);
+    }
+
+    UniversalMetadataFormatter(IProject project)
+    {
+        this.project = project;
+    }
+
+    @Override
+    protected String typeFeatureCell(EObject owner, EStructuralFeature feature)
+    {
+        return typeFeatureCell(owner, feature, project);
+    }
 
     /** Table column / property label for a value cell. */
     private static final String VALUE_TOKEN = "Value"; //$NON-NLS-1$
@@ -147,8 +169,49 @@ public class UniversalMetadataFormatter extends AbstractMetadataFormatter // NOS
 
         // Format containment collections (attributes, tabular sections, forms, commands, etc.)
         formatContainmentCollections(sb, mdObject, full, language);
+        if (full)
+        {
+            formatProducedTypes(sb, mdObject);
+        }
 
         return sb.toString();
+    }
+
+    private void formatProducedTypes(StringBuilder sb, MdObject root)
+    {
+        StringBuilder rows = new StringBuilder();
+        appendProducedTypes(rows, root);
+        for (EObject child : PersistedContents.descendants(root))
+        {
+            if (child instanceof MdObject member)
+            {
+                appendProducedTypes(rows, member);
+            }
+        }
+        if (rows.length() > 0)
+        {
+            addSectionHeader(sb, "Produced Types");
+            startTable(sb, "Object", "Type", "typeId", "valueTypeId");
+            sb.append(rows);
+        }
+    }
+
+    private void appendProducedTypes(StringBuilder rows, MdObject owner)
+    {
+        EObject types = MdClassUtil.getProducedTypes(owner);
+        if (types == null)
+        {
+            return;
+        }
+        for (EObject child : PersistedContents.of(types))
+        {
+            if (child instanceof AbstractMdType type)
+            {
+                addTableRow(rows, MetadataNodeResolver.addressOf(owner), child.eContainingFeature().getName(),
+                    type.getTypeId() == null ? DASH : type.getTypeId().toString(),
+                    type.getValueTypeId() == null ? DASH : type.getValueTypeId().toString());
+            }
+        }
     }
 
     /**
@@ -578,7 +641,7 @@ public class UniversalMetadataFormatter extends AbstractMetadataFormatter // NOS
                 java.util.List<String> cells = new java.util.ArrayList<>(java.util.Arrays.asList(
                     attr.getName(),
                     getSynonym(attr.getSynonym(), language),
-                    formatType(attr.getType()),
+                    typeFeatureCell(attr, MdClassPackage.Literals.BASIC_FEATURE__TYPE),
                     indexing,
                     formatEnum(attr.getFillChecking()),
                     fullTextSearch,
@@ -621,7 +684,7 @@ public class UniversalMetadataFormatter extends AbstractMetadataFormatter // NOS
                     addTableRow(sb,
                         attr.getName(),
                         getSynonym(attr.getSynonym(), language),
-                        formatType(attr.getType()),
+                        typeFeatureCell(attr, MdClassPackage.Literals.BASIC_FEATURE__TYPE),
                         originCell(attr));
                 }
                 else
@@ -629,7 +692,7 @@ public class UniversalMetadataFormatter extends AbstractMetadataFormatter // NOS
                     addTableRow(sb,
                         attr.getName(),
                         getSynonym(attr.getSynonym(), language),
-                        formatType(attr.getType()));
+                        typeFeatureCell(attr, MdClassPackage.Literals.BASIC_FEATURE__TYPE));
                 }
             }
         }
@@ -924,7 +987,7 @@ public class UniversalMetadataFormatter extends AbstractMetadataFormatter // NOS
             Object typeValue = mdObj.eGet(typeFeature);
             if (typeValue instanceof com._1c.g5.v8.dt.mcore.TypeDescription)
             {
-                return formatType((com._1c.g5.v8.dt.mcore.TypeDescription) typeValue);
+                return typeFeatureCell(mdObj, typeFeature);
             }
         }
         return DASH;

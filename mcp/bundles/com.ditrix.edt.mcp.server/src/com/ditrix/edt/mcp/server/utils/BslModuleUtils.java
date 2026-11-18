@@ -15,7 +15,9 @@ import java.io.File;
 import java.nio.charset.Charset;
 import java.nio.charset.CodingErrorAction;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -665,16 +667,16 @@ public final class BslModuleUtils
      */
     public static List<MethodSpan> findMethodSpansViaText(List<String> lines)
     {
-        List<MethodSpan> spans = new ArrayList<>();
-        if (lines == null)
-        {
-            return spans;
-        }
+        return lines == null ? new ArrayList<>()
+            : findMethodSpansViaText(lines, BslSyntaxChecker.maskLiteralsAndComments(lines));
+    }
 
+    static List<MethodSpan> findMethodSpansViaText(List<String> lines, List<String> scan)
+    {
         // Every rule below reads text whose string literals and comments are blanked out: a
         // keyword inside a default value or behind a trailing comment is not code, and the
         // splice still uses the ORIGINAL lines.
-        List<String> scan = BslSyntaxChecker.maskLiteralsAndComments(lines);
+        List<MethodSpan> spans = new ArrayList<>();
         for (int declarationLine = 0; declarationLine < scan.size(); declarationLine++)
         {
             Matcher startMatcher = METHOD_START_PATTERN.matcher(scan.get(declarationLine));
@@ -1544,12 +1546,17 @@ public final class BslModuleUtils
             sb.append('\'').append(requestedNames.get(i)).append('\'');
         }
         sb.append(" not found in ").append(modulePath).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        appendAvailableMethods(sb, allMethodNames);
+        return sb.toString();
+    }
+
+    public static void appendAvailableMethods(StringBuilder sb, List<String> allMethodNames)
+    {
         sb.append("**Available methods** (").append(allMethodNames.size()).append("):\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
         for (String name : allMethodNames)
         {
             sb.append("- ").append(name).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
         }
-        return sb.toString();
     }
 
     /**
@@ -1922,6 +1929,24 @@ public final class BslModuleUtils
         }
 
         return null;
+    }
+
+    static Map<Integer, String> findMethodRegions(List<String> lines, List<MethodSpan> spans)
+    {
+        Map<Integer, String> regions = new HashMap<>();
+        List<String> stack = new ArrayList<>();
+        int next = 0;
+        for (int line = 0; next < spans.size() && line < lines.size(); line++)
+        {
+            int target = spans.get(next).declarationLine;
+            RegionScanResult result = scanRegionLine(lines.get(line), line + 1, target + 1, stack);
+            if (result.resolved)
+            {
+                regions.put(target, result.regionName);
+                next++;
+            }
+        }
+        return regions;
     }
 
     /**

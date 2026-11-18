@@ -174,7 +174,9 @@ public final class NativeMetadataClone extends AttachingModelObjectCopier
     protected boolean shouldCopyAttribute(EAttribute from, EObject original, EAttribute to,
         EObject target, CopyContext copyContext)
     {
-        return (extensionProject || from != MdClassPackage.Literals.MD_OBJECT__OBJECT_BELONGING)
+        // Keep the fresh node UUID assigned by EDT's ExchangePlanInitializer.
+        return to != MdClassPackage.Literals.EXCHANGE_PLAN__THIS_NODE
+            && (extensionProject || from != MdClassPackage.Literals.MD_OBJECT__OBJECT_BELONGING)
             && super.shouldCopyAttribute(from, original, to, target, copyContext);
     }
 

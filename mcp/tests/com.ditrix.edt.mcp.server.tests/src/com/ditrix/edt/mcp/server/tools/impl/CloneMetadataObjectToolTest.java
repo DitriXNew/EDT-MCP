@@ -13,6 +13,7 @@ import java.util.UUID;
 
 import org.junit.Test;
 
+import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
@@ -204,6 +205,26 @@ public class CloneMetadataObjectToolTest
         {
             assertTrue(expected.getMessage().contains("new identity"));
         }
+    }
+
+    @Test
+    public void exchangePlanRequiresAFreshThisNode()
+    {
+        var source = MdClassFactory.eINSTANCE.createExchangePlan();
+        source.setUuid(UUID.randomUUID());
+        source.setThisNode(UUID.randomUUID());
+        var clone = MdClassFactory.eINSTANCE.createExchangePlan();
+        clone.setUuid(UUID.randomUUID());
+        clone.setName("Copy");
+        for (UUID invalid : new UUID[] {null, source.getThisNode()})
+        {
+            clone.setThisNode(invalid);
+            var error = assertThrows(IllegalStateException.class,
+                () -> CloneMetadataObjectTool.validateClone(source, clone, "Copy"));
+            assertTrue(error.getMessage(), error.getMessage().contains("ExchangePlan.Copy has no fresh thisNode UUID"));
+        }
+        clone.setThisNode(UUID.randomUUID());
+        CloneMetadataObjectTool.validateClone(source, clone, "Copy");
     }
 
     @Test

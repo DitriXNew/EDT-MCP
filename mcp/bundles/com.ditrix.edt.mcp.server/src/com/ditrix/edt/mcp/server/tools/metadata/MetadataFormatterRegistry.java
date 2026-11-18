@@ -6,6 +6,8 @@
 
 package com.ditrix.edt.mcp.server.tools.metadata;
 
+import org.eclipse.core.resources.IProject;
+
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 
 /**
@@ -41,5 +43,12 @@ public class MetadataFormatterRegistry
     public static String format(MdObject mdObject, boolean full, String language)
     {
         return UniversalMetadataFormatter.getInstance().format(mdObject, full, language);
+    }
+
+    /** Includes base-type comparisons for adopted attributes of the project. */
+    public static String format(MdObject mdObject, boolean full, String language, IProject project)
+    {
+        return project == null ? format(mdObject, full, language)
+            : new UniversalMetadataFormatter(project).format(mdObject, full, language);
     }
 }

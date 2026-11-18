@@ -484,3 +484,28 @@ def test_windowed_formatter_contract():
     from read_host_contracts import contract_read_method_source
     contract_read_method_source(call, "WINDOWED")
     assert_no_diff("pinned formatter reads must not change fixture files")
+
+
+@e2e_test(tool="read_method_source", kind="write-metadata")
+def test_overlapping_preprocessors_recover_source_and_list_text_only_methods_on_miss():
+    from harness import read_disk
+    from tools.test_get_module_structure import OVERLAP_PATH, OVERLAP_SOURCE, temporary_module_source
+
+    args = {"projectName": PROJECT, "modulePath": OVERLAP_PATH}
+    original = read_disk("src/" + OVERLAP_PATH).removeprefix("\ufeff")
+    with temporary_module_source(OVERLAP_PATH, original, OVERLAP_SOURCE, skip_syntax_check=True):
+        result = call("read_method_source", {**args, "methodNames": ["остаток", "Tail"]})
+        assert_ok(result, "read methods after overlapping preprocessors")
+        assert_contains(result.text, "methodsFound: 2")
+        assert_contains(result.text, "### Остаток\nFunction · export · lines 14-16 · region Хвост")
+        assert_contains(result.text, "Функция Остаток() Экспорт\nВозврат 42;\nКонецФункции")
+        assert_contains(result.text, "### Tail\nProcedure · lines 17-18 · region Хвост")
+        assert result.text.count("Span recovered from saved source text because EDT's parse of the module is incomplete.") == 2, result.text
+
+        missing = call("read_method_source", {**args, "methodName": "Missing959"})
+        message = assert_error(missing, "unknown method in an incomplete module")
+        assert_error_quality(message, names=["Missing959", OVERLAP_PATH],
+            suggests=["Available methods", "- Остаток", "- Tail"])
+        assert_contains(message, "- Остаток")
+        assert_contains(message, "- Tail")
+    assert_no_diff("restored the original Calc module after reading recovered source")
