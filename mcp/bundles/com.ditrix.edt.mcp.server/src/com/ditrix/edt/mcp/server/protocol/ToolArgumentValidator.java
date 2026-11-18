@@ -147,7 +147,7 @@ public final class ToolArgumentValidator
         {
             return;
         }
-        List<String> types = types(schema);
+        List<String> types = nativeFirst(types(schema), value);
         if (types.isEmpty())
         {
             checkEnum(path, schema, value, problems);
@@ -291,7 +291,11 @@ public final class ToolArgumentValidator
 
     private static void checkNested(String path, JsonObject schema, JsonElement value, List<String> problems)
     {
-        List<String> types = types(schema);
+        if (isEmptyText(value) && schema.has("enum")) //$NON-NLS-1$
+        {
+            return;
+        }
+        List<String> types = nativeFirst(types(schema), value);
         if (types.isEmpty())
         {
             checkEnum(path, schema, value, problems);
@@ -525,6 +529,24 @@ public final class ToolArgumentValidator
     private static boolean declares(JsonObject schema, String type)
     {
         return types(schema).contains(type);
+    }
+
+    /** Tries the declared type that matches the value's own JSON kind first, so {@code true} is a boolean. */
+    private static List<String> nativeFirst(List<String> types, JsonElement value)
+    {
+        if (types.size() < 2 || !value.isJsonPrimitive())
+        {
+            return types;
+        }
+        JsonPrimitive primitive = value.getAsJsonPrimitive();
+        String own = primitive.isBoolean() ? BOOLEAN : primitive.isNumber() ? NUMBER : STRING;
+        List<String> ordered = new ArrayList<>(types);
+        String match = NUMBER.equals(own) && !types.contains(NUMBER) ? INTEGER : own;
+        if (ordered.remove(match))
+        {
+            ordered.add(0, match);
+        }
+        return ordered;
     }
 
     private static List<String> types(JsonObject schema)
