@@ -17,6 +17,8 @@ import java.util.Map;
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.IPath;
+import org.eclipse.emf.common.notify.Notification;
+import org.eclipse.emf.common.notify.impl.AdapterImpl;
 import org.eclipse.emf.common.util.Enumerator;
 import org.eclipse.emf.common.util.URI;
 import org.eclipse.emf.ecore.EAttribute;
@@ -131,6 +133,10 @@ public final class FormSourceCheck
         {
             return List.of(notChecked(relativePath, "no .form parser is registered")); //$NON-NLS-1$
         }
+        // EDT's resource clears getErrors() once the parse ends, so the diagnostics are caught as added.
+        List<Resource.Diagnostic> errors = new ArrayList<>();
+        List<Resource.Diagnostic> warnings = new ArrayList<>();
+        resource.eAdapters().add(new DiagnosticRecorder(errors, warnings));
         try (InputStream in = new FileInputStream(file))
         {
             prepare(project, resource);
@@ -156,11 +162,11 @@ public final class FormSourceCheck
                 }
             });
             List<Problem> problems = new ArrayList<>();
-            for (Resource.Diagnostic diagnostic : resource.getErrors())
+            for (Resource.Diagnostic diagnostic : errors)
             {
                 problems.add(problemOf(diagnostic, true, relativePath));
             }
-            for (Resource.Diagnostic diagnostic : resource.getWarnings())
+            for (Resource.Diagnostic diagnostic : warnings)
             {
                 problems.add(problemOf(diagnostic, false, relativePath));
             }
@@ -179,6 +185,47 @@ public final class FormSourceCheck
         finally
         {
             resource.unload();
+        }
+    }
+
+    /** Collects every diagnostic added to the resource's error and warning lists while it loads. */
+    static final class DiagnosticRecorder extends AdapterImpl
+    {
+        private final List<Resource.Diagnostic> errors;
+        private final List<Resource.Diagnostic> warnings;
+
+        DiagnosticRecorder(List<Resource.Diagnostic> errors, List<Resource.Diagnostic> warnings)
+        {
+            this.errors = errors;
+            this.warnings = warnings;
+        }
+
+        @Override
+        public void notifyChanged(Notification notification)
+        {
+            int feature = notification.getFeatureID(Resource.class);
+            List<Resource.Diagnostic> target = feature == Resource.RESOURCE__ERRORS ? errors
+                : feature == Resource.RESOURCE__WARNINGS ? warnings : null;
+            if (target == null)
+            {
+                return;
+            }
+            if (notification.getEventType() == Notification.ADD
+                && notification.getNewValue() instanceof Resource.Diagnostic diagnostic)
+            {
+                target.add(diagnostic);
+            }
+            else if (notification.getEventType() == Notification.ADD_MANY
+                && notification.getNewValue() instanceof java.util.Collection<?> added)
+            {
+                for (Object item : added)
+                {
+                    if (item instanceof Resource.Diagnostic diagnostic)
+                    {
+                        target.add(diagnostic);
+                    }
+                }
+            }
         }
     }
 

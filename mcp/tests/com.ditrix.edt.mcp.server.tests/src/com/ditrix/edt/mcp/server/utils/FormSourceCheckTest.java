@@ -139,4 +139,22 @@ public class FormSourceCheckTest
         assertEquals(path, finding.path);
         assertEquals(message, finding.message);
     }
+
+    /** EDT's form resource clears its error list once a parse ends; the recorder keeps what was added. */
+    @Test
+    public void testTheRecorderKeepsDiagnosticsTheResourceClearsAfterTheParse()
+    {
+        org.eclipse.emf.ecore.resource.Resource resource = new org.eclipse.emf.ecore.resource.impl.ResourceImpl();
+        List<org.eclipse.emf.ecore.resource.Resource.Diagnostic> errors = new java.util.ArrayList<>();
+        List<org.eclipse.emf.ecore.resource.Resource.Diagnostic> warnings = new java.util.ArrayList<>();
+        resource.eAdapters().add(new FormSourceCheck.DiagnosticRecorder(errors, warnings));
+        XmlException error = new XmlException(new IllegalValueException(null, null, "Leftmost", null, "f", 3, 4));
+        XmlException warning = new XmlException(new IllegalValueException(null, null, "x", null, "f", 5, 6));
+        resource.getErrors().add(error);
+        resource.getWarnings().addAll(List.of(warning));
+        resource.getErrors().clear();
+        resource.getWarnings().clear();
+        assertEquals(List.of(error), errors);
+        assertEquals(List.of(warning), warnings);
+    }
 }
