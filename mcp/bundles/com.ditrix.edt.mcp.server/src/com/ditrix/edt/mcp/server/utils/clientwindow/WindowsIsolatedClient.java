@@ -272,7 +272,8 @@ public final class WindowsIsolatedClient implements IsolatedClientLauncher.Owned
         }
     }
 
-    private void release()
+    /** Synchronized on its own: the {@code wait(20)} below needs this client's monitor, whoever calls it. */
+    private synchronized void release()
     {
         RuntimeException failure = null;
         if (job != null)
