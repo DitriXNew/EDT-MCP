@@ -1217,7 +1217,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                 + ". Nothing was deleted. Use get_metadata_details to verify the target, then retry.").toJson(); //$NON-NLS-1$
         }
 
-        return DeleteMetadataTool.<java.util.function.Supplier<String>>readPreparation(project, () -> {
+        return AbstractMetadataWriteTool.<java.util.function.Supplier<String>>readPreparation(project, () -> {
             if (!confirm)
             {
                 String preview = buildPreview(normFqn, refactoring, descendants);

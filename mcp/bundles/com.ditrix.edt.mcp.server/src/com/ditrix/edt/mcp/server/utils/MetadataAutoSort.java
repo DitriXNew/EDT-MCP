@@ -172,6 +172,7 @@ public final class MetadataAutoSort
     }
 
     public record Notice(String governs, String setting, String order, String effect, String userAction)
+        implements java.io.Serializable
     {
         public Map<String, Object> block()
         {
