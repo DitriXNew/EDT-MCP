@@ -30,6 +30,7 @@ Reads procedures or functions out of a BSL module by name - so you get the 40 li
 - `methodName` alone: Markdown with a YAML front-matter block (projectName, module, `contentHash`, method, type, export flag, startLine/endLine, totalLines, and region) followed by the source in a ```bsl``` fence.
 - `methodNames`: ONE front-matter block for the module (projectName, module, `contentHash`, totalLines, `methodsFound`, and `methodsNotFound` listing the names that do not exist, when any), then one `### <Name>` section per found method in request order: a summary line (`Function · export · lines 12-40 · region X`) and the ```bsl``` fence.
 - If a method participates in extension interception, that is noted below its code.
+- If the module declares the name more than once (preprocessor branches, or a duplicate the 1C platform will refuse to load), the FIRST declaration is returned and a `> ... is declared N times` note above its code lists every declaration's lines and what the repetition means; the single-name answer also carries `duplicateDeclarations` (each `start-end`). Read another one with `read_module_source` `startLine`/`endLine`.
 
 ## Notes & gotchas
 - **Method not found?** When none of the requested names exists it returns the list of available method names in that module - copy the exact one and retry. With `methodNames`, names that exist are still returned and the rest are listed in `methodsNotFound`. (Name matching ignores ru/en keyword dialect.)

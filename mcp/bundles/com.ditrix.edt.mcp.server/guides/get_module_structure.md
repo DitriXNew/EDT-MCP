@@ -13,7 +13,7 @@ The table of contents for ONE BSL module: every procedure and function with its 
 - `responseFormat` - `concise` (default) drops the verbose Parameters and Description columns to save tokens; `detailed` gives the full table with signatures and doc-comments. Use `detailed` when you actually need parameter lists.
 
 ## What you get
-Markdown: a header with procedure/function counts and total lines, a **Regions** list (with line ranges), an optional **Variables** table, and a **Methods** table (#, Type, Name, Export, Context, Lines, Region - plus Parameters/Description in detailed mode). When the module participates in extension interception, a footer lists those links.
+Markdown: a header with procedure/function counts and total lines, a **Regions** list (with line ranges), an optional **Variables** table, and a **Methods** table (#, Type, Name, Export, Context, Lines, Region - plus Parameters/Description in detailed mode). When the module participates in extension interception, a footer lists those links. When it declares one procedure/function name more than once, a `Repeated method names` note above the table gives each such name's lines and what it means (different `#If` branches are legal; one preprocessor context means the 1C platform will refuse to load the module).
 
 ## Notes & gotchas
 - This is for a SINGLE module. To discover module paths across a whole project use `list_modules`.

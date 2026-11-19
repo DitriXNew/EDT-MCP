@@ -13,6 +13,7 @@ import java.util.TreeMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Collectors;
 
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
@@ -42,6 +43,7 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
+import com.ditrix.edt.mcp.server.utils.BslDuplicateMethods;
 import com.ditrix.edt.mcp.server.utils.BslMethodRecovery;
 import com.ditrix.edt.mcp.server.utils.InterceptionUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
@@ -249,6 +251,7 @@ public class GetModuleStructureTool implements IMcpTool
         }
         sb.append("**Total:** ").append(procCount).append(" procedures, ") //$NON-NLS-1$ //$NON-NLS-2$
           .append(funcCount).append(" functions | **Lines:** ").append(totalLines).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        appendDuplicateNames(sb, sourceLines, methods);
 
         // Regions section
         if (!regions.isEmpty())
@@ -289,6 +292,53 @@ public class GetModuleStructureTool implements IMcpTool
         return sb.toString();
     }
 
+
+    /**
+     * The notice of the names the module declares more than once (#987), above the table that lists each of them:
+     * the declaration lines and what the repetition means - read from the saved text, so the platform's own
+     * verdict (a module that declares one name twice in one preprocessor context does not load) is named even
+     * when EDT's model shows both rows. Without the text, the names repeated in the table are listed alone.
+     */
+    private static void appendDuplicateNames(StringBuilder sb, List<String> sourceLines, List<MethodInfo> methods)
+    {
+        List<String> entries = new ArrayList<>();
+        if (sourceLines != null)
+        {
+            for (BslDuplicateMethods.Group group : BslDuplicateMethods.find(sourceLines))
+            {
+                entries.add(group.name + " (lines " + group.lines() + "): " + group.meaning()); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+        }
+        else
+        {
+            Map<String, List<Integer>> byName = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
+            for (MethodInfo method : methods)
+            {
+                if (method.name != null)
+                {
+                    byName.computeIfAbsent(method.name, name -> new ArrayList<>()).add(method.startLine);
+                }
+            }
+            for (Map.Entry<String, List<Integer>> entry : byName.entrySet())
+            {
+                if (entry.getValue().size() > 1)
+                {
+                    entries.add(entry.getKey() + " (lines " //$NON-NLS-1$
+                        + entry.getValue().stream().map(String::valueOf).collect(Collectors.joining(", ")) + ")"); //$NON-NLS-1$ //$NON-NLS-2$
+                }
+            }
+        }
+        if (entries.isEmpty())
+        {
+            return;
+        }
+        sb.append("> **Repeated method names.**"); //$NON-NLS-1$
+        for (String entry : entries)
+        {
+            sb.append(' ').append(entry);
+        }
+        sb.append("\n\n"); //$NON-NLS-1$
+    }
 
     /**
      * Appends a markdown methods table to the StringBuilder.

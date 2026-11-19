@@ -396,6 +396,79 @@ public final class BslSyntaxChecker
         return open;
     }
 
+    /**
+     * For every line, the path of {@code #If}/{@code #Если} branches it sits in, outermost first: pairs of
+     * the block's 1-based opening line and the 0-based index of its arm ({@code 0} the {@code #If} arm, each
+     * {@code #ElsIf}/{@code #Else} the next). An empty array means outside every conditional block. Two lines
+     * whose paths reach one block through DIFFERENT arms are never compiled together - the preprocessor keeps
+     * one arm of a block. Reads the same directives, by the same rules, as {@link #openConditionalLines}; a
+     * directive line itself reads the path before it takes effect, except an arm switch, which reads its new arm.
+     *
+     * @param lines raw module lines
+     * @return a same-sized array of paths; consecutive lines with one path share its array
+     */
+    public static int[][] conditionalBranches(List<String> lines)
+    {
+        List<String> masked = maskLiteralsAndComments(lines);
+        int[][] paths = new int[masked.size()][];
+        Deque<int[]> conditionals = new ArrayDeque<>();
+        int[] current = new int[0];
+        for (int i = 0; i < masked.size(); i++)
+        {
+            String code = masked.get(i);
+            String kind = isPreprocessorDirective(code)
+                ? DIRECTIVE_KINDS.get(directiveWord(code).toLowerCase(Locale.ROOT)) : null;
+            if ("close:I".equals(kind) && !conditionals.isEmpty()) //$NON-NLS-1$
+            {
+                conditionals.pop();
+                current = flatten(conditionals);
+            }
+            else if ("mid:I".equals(kind) && !conditionals.isEmpty()) //$NON-NLS-1$
+            {
+                int[] block = conditionals.peek();
+                // An #ElsIf or a second #Else after the block's #Else is malformed: no new arm is granted, so what
+                // follows reads as the same context as the #Else arm and is never taken for mutually exclusive.
+                if (block[2] == 0)
+                {
+                    block[1]++;
+                    if (isElseWord(directiveWord(code)))
+                    {
+                        block[2] = 1;
+                    }
+                }
+                current = flatten(conditionals);
+            }
+            paths[i] = current;
+            if ("open:I".equals(kind)) //$NON-NLS-1$
+            {
+                conditionals.push(new int[] {i + 1, 0, 0});
+                current = flatten(conditionals);
+            }
+        }
+        return paths;
+    }
+
+    /** Whether a directive word is {@code #Else}/{@code #Иначе} (not {@code #ElsIf}), either case. */
+    private static boolean isElseWord(String word)
+    {
+        String lower = word.toLowerCase(Locale.ROOT);
+        return "else".equals(lower) || "иначе".equals(lower); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** The open blocks as {@code [line, arm, line, arm, ...]}, outermost first. */
+    private static int[] flatten(Deque<int[]> conditionals)
+    {
+        int[] path = new int[conditionals.size() * 2];
+        int at = path.length;
+        for (int[] block : conditionals)
+        {
+            // The deque iterates from the innermost (the head) outwards.
+            path[--at] = block[1];
+            path[--at] = block[0];
+        }
+        return path;
+    }
+
     private static String directiveWord(String code)
     {
         int start = code.indexOf('#') + 1;
