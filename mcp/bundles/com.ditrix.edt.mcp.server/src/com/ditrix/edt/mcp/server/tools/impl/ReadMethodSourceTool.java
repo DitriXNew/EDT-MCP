@@ -28,6 +28,7 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.ContentHash;
 import com.ditrix.edt.mcp.server.utils.FrontMatter;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
+import com.ditrix.edt.mcp.server.utils.BslDuplicateMethods;
 import com.ditrix.edt.mcp.server.utils.BslMethodRecovery;
 import com.ditrix.edt.mcp.server.utils.InterceptionUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
@@ -64,6 +65,8 @@ public class ReadMethodSourceTool implements IMcpTool
     private static final String KEY_REGION = "region"; //$NON-NLS-1$
     private static final String KEY_METHODS_FOUND = "methodsFound"; //$NON-NLS-1$
     private static final String KEY_METHODS_NOT_FOUND = "methodsNotFound"; //$NON-NLS-1$
+    /** Every declaration's line range when the module declares the read name more than once (#987). */
+    private static final String KEY_DUPLICATE_DECLARATIONS = "duplicateDeclarations"; //$NON-NLS-1$
     private static final String TYPE_PROCEDURE = "Procedure"; //$NON-NLS-1$
     private static final String TYPE_FUNCTION = "Function"; //$NON-NLS-1$
     private static final String BSL_FENCE_OPEN = "```bsl\n"; //$NON-NLS-1$
@@ -504,6 +507,9 @@ public class ReadMethodSourceTool implements IMcpTool
             fm.put(KEY_CONTENT_HASH, contentHash);
         }
         StringBuilder sb = new StringBuilder();
+        // A name the module declares more than once (#987): the lookup returns the first declaration, and the
+        // answer says so instead of passing it off as the only one.
+        List<BslDuplicateMethods.Group> repeated = BslDuplicateMethods.find(allLines);
         if (!multi)
         {
             LocatedMethod method = located.get(0);
@@ -516,6 +522,17 @@ public class ReadMethodSourceTool implements IMcpTool
             if (method.region != null)
             {
                 fm.put(KEY_REGION, method.region);
+            }
+            BslDuplicateMethods.Group group = BslDuplicateMethods.groupOf(repeated, method.name);
+            if (group != null)
+            {
+                List<String> ranges = new ArrayList<>();
+                for (BslDuplicateMethods.Declaration declaration : group.declarations)
+                {
+                    ranges.add(declaration.range());
+                }
+                fm.putList(KEY_DUPLICATE_DECLARATIONS, ranges);
+                appendDuplicateNotice(sb, group, method);
             }
             appendBody(sb, allLines, method);
             return fm.wrapContent(sb.toString());
@@ -546,9 +563,44 @@ public class ReadMethodSourceTool implements IMcpTool
                 sb.append(SUMMARY_SEPARATOR).append("region ").append(method.region); //$NON-NLS-1$
             }
             sb.append('\n');
+            BslDuplicateMethods.Group group = BslDuplicateMethods.groupOf(repeated, method.name);
+            if (group != null)
+            {
+                appendDuplicateNotice(sb, group, method);
+            }
             appendBody(sb, allLines, method);
         }
         return fm.wrapContent(sb.toString());
+    }
+
+    /**
+     * The notice above a method whose name the module declares more than once (#987): every declaration's lines,
+     * which one is shown, and what the repetition means.
+     */
+    private static void appendDuplicateNotice(StringBuilder sb, BslDuplicateMethods.Group group, LocatedMethod method)
+    {
+        StringBuilder ranges = new StringBuilder();
+        String shown = null;
+        for (BslDuplicateMethods.Declaration declaration : group.declarations)
+        {
+            if (ranges.length() > 0)
+            {
+                ranges.append(", "); //$NON-NLS-1$
+            }
+            ranges.append(declaration.range());
+            if (shown == null && declaration.line >= method.from && declaration.line <= method.to)
+            {
+                shown = declaration.range();
+            }
+        }
+        sb.append("> '").append(group.name).append("' is declared ").append(group.declarations.size()) //$NON-NLS-1$ //$NON-NLS-2$
+            .append(" times in this module (lines ").append(ranges).append(')'); //$NON-NLS-1$
+        if (shown != null)
+        {
+            sb.append("; shown: lines ").append(shown); //$NON-NLS-1$
+        }
+        sb.append(". ").append(group.meaning()) //$NON-NLS-1$
+            .append(" Read another one with read_module_source startLine/endLine.\n\n"); //$NON-NLS-1$
     }
 
     /** The {@code ```bsl} fence with the method's lines, then the interception footer if any. */

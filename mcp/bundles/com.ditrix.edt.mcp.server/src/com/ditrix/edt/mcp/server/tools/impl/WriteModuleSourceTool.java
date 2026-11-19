@@ -38,6 +38,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.AdoptedModuleState;
+import com.ditrix.edt.mcp.server.utils.BslDuplicateMethods;
 import com.ditrix.edt.mcp.server.utils.BslMethodTransfer;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
 import com.ditrix.edt.mcp.server.utils.BslSyntaxChecker;
@@ -632,6 +633,7 @@ public class WriteModuleSourceTool implements IMcpTool
         int totalOriginal = plan.totalOriginal;
         List<String> stillCalled = plan.stillCalled;
         List<String> deletedMethods = plan.deletedMethods;
+        String duplicateWarning = plan.duplicateWarning;
 
         // The module of an object ADOPTED into an extension gets the state EDT's UI records in the owner's
         // .mdo when code is added to an adopted module - Extended - recorded at once (#711): EDT's own
@@ -643,7 +645,7 @@ public class WriteModuleSourceTool implements IMcpTool
             () -> AdoptedModuleState.ensureExtended(file.getProject(), scope, file.getProjectRelativePath().toString()),
             moduleState -> buildSuccessResponse(req.projectName, req.modulePath, req.mode, req.skipSyntaxCheck,
                 newLines, fileExists, totalOriginal, contentHash, charFix.summary(), moduleState,
-                methodFacts(req, deletedMethods, stillCalled)));
+                methodFacts(req, deletedMethods, stillCalled, duplicateWarning)));
     }
 
     /** What {@link #planWrite} found: a ready refusal, or the lines to write and how to write them. */
@@ -656,6 +658,8 @@ public class WriteModuleSourceTool implements IMcpTool
         final int totalOriginal;
         final List<String> stillCalled;
         final List<String> deletedMethods;
+        /** What the write does to repeated method names that does not block it (#987), or {@code null}. */
+        private String duplicateWarning;
 
         WritePlan(String error, List<String> newLines, boolean hasBom, String lineDelimiter, int totalOriginal,
             List<String> stillCalled, List<String> deletedMethods)
@@ -667,6 +671,13 @@ public class WriteModuleSourceTool implements IMcpTool
             this.totalOriginal = totalOriginal;
             this.stillCalled = stillCalled;
             this.deletedMethods = deletedMethods;
+        }
+
+        /** Attaches the repeated-method-name warning of the write (#987) and returns this plan. */
+        WritePlan withDuplicateWarning(String warning)
+        {
+            this.duplicateWarning = warning;
+            return this;
         }
 
         static WritePlan refused(String error)
@@ -728,24 +739,83 @@ public class WriteModuleSourceTool implements IMcpTool
                 return WritePlan.refused(syntaxError);
             }
         }
-        return new WritePlan(null, newLines, hasBom, lineDelimiter, totalOriginal, stillCalled, deletedMethods);
+        // Method names (#987): the block-balance check cannot see a second procedure or function of one name,
+        // and the platform then refuses to load the whole module. Judged on the text this write produces
+        // against the text it replaces, in every mode - and again under the modify rule, with the rest of the plan.
+        DuplicateCheck duplicates = checkDuplicateMethods(originalLines, newLines, req.skipSyntaxCheck);
+        if (duplicates.error != null)
+        {
+            return WritePlan.refused(duplicates.error);
+        }
+        return new WritePlan(null, newLines, hasBom, lineDelimiter, totalOriginal, stillCalled, deletedMethods)
+            .withDuplicateWarning(duplicates.warning);
+    }
+
+    /** The outcome of {@link #checkDuplicateMethods}: a ready refusal, or a warning for the response, or neither. */
+    static final class DuplicateCheck
+    {
+        final String error;
+        final String warning;
+
+        DuplicateCheck(String error, String warning)
+        {
+            this.error = error;
+            this.warning = warning;
+        }
     }
 
     /**
-     * The facts a copy or a deletion adds to the success response (#978), or {@code null} for any other write.
+     * The repeated-method-name rule of a write (#987): a write that CREATES a certain duplicate - a name declared
+     * twice in one preprocessor context, or once more than before - is refused, nothing written; with the syntax
+     * check skipped it is written and the response warns instead. A possible duplicate (separate {@code #If}
+     * blocks, different compilation directives) and a duplicate the module already had are reported as a warning
+     * and never block, so a legacy module stays editable. Pure: no I/O. Package-visible for tests.
+     *
+     * @param originalLines the module before the write (empty for a new module)
+     * @param newLines the lines the write would produce
+     * @param skipSyntaxCheck whether the caller skipped the syntax check
+     * @return the refusal JSON or the warning text
      */
-    private static MethodFacts methodFacts(WriteRequest req, List<String> deletedMethods, List<String> stillCalled)
+    static DuplicateCheck checkDuplicateMethods(List<String> originalLines, List<String> newLines,
+        boolean skipSyntaxCheck)
     {
+        BslDuplicateMethods.WriteVerdict verdict = BslDuplicateMethods.judgeWrite(originalLines, newLines);
+        String refusal = verdict.refusal();
+        if (refusal != null && !skipSyntaxCheck)
+        {
+            return new DuplicateCheck(ToolResult.error("BSL duplicate method check failed. " + refusal).toJson(), //$NON-NLS-1$
+                null);
+        }
+        return new DuplicateCheck(null, verdict.warning(skipSyntaxCheck));
+    }
+
+    /**
+     * The facts a copy or a deletion (#978) and a repeated method name (#987) add to the success response, or
+     * {@code null} when there are none.
+     */
+    private static MethodFacts methodFacts(WriteRequest req, List<String> deletedMethods, List<String> stillCalled,
+        String duplicateWarning)
+    {
+        MethodFacts facts = null;
         if (req.copy != null)
         {
-            return MethodFacts.copied(req.copy.methods, req.copy.fromModulePath, req.copy.fromContentHash);
+            facts = MethodFacts.copied(req.copy.methods, req.copy.fromModulePath, req.copy.fromContentHash);
         }
-        return req.isDelete() ? MethodFacts.deleted(deletedMethods, stillCalled) : null;
+        else if (req.isDelete())
+        {
+            facts = MethodFacts.deleted(deletedMethods, stillCalled);
+        }
+        if (duplicateWarning == null)
+        {
+            return facts;
+        }
+        return (facts == null ? MethodFacts.none() : facts).withDuplicateWarning(duplicateWarning);
     }
 
     /**
      * What a copy ({@code copiedMethods}, {@code fromModulePath}, {@code fromContentHash}) or a deletion
-     * ({@code deletedMethods} and the calls left behind) reports in the success frontmatter (#978).
+     * ({@code deletedMethods} and the calls left behind) reports in the success frontmatter (#978), and the
+     * repeated-method-name warning of the write (#987).
      */
     static final class MethodFacts
     {
@@ -754,25 +824,41 @@ public class WriteModuleSourceTool implements IMcpTool
         final String fromContentHash;
         final List<String> deletedMethods;
         final List<String> stillCalled;
+        /** What the write does to repeated method names that does not block it (#987), or {@code null}. */
+        final String duplicateWarning;
 
         private MethodFacts(List<String> copiedMethods, String fromModulePath, String fromContentHash,
-            List<String> deletedMethods, List<String> stillCalled)
+            List<String> deletedMethods, List<String> stillCalled, String duplicateWarning)
         {
             this.copiedMethods = copiedMethods;
             this.fromModulePath = fromModulePath;
             this.fromContentHash = fromContentHash;
             this.deletedMethods = deletedMethods;
             this.stillCalled = stillCalled;
+            this.duplicateWarning = duplicateWarning;
         }
 
         static MethodFacts copied(List<String> methods, String fromModulePath, String fromContentHash)
         {
-            return new MethodFacts(methods, fromModulePath, fromContentHash, null, List.of());
+            return new MethodFacts(methods, fromModulePath, fromContentHash, null, List.of(), null);
         }
 
         static MethodFacts deleted(List<String> methods, List<String> stillCalled)
         {
-            return new MethodFacts(null, null, null, methods, stillCalled == null ? List.of() : stillCalled);
+            return new MethodFacts(null, null, null, methods, stillCalled == null ? List.of() : stillCalled, null);
+        }
+
+        /** No copy and no deletion: only the warning a later {@link #withDuplicateWarning} attaches. */
+        static MethodFacts none()
+        {
+            return new MethodFacts(null, null, null, null, List.of(), null);
+        }
+
+        /** These facts plus the repeated-method-name warning of the write (#987). */
+        MethodFacts withDuplicateWarning(String warning)
+        {
+            return new MethodFacts(copiedMethods, fromModulePath, fromContentHash, deletedMethods, stillCalled,
+                warning);
         }
     }
 
@@ -1471,9 +1557,10 @@ public class WriteModuleSourceTool implements IMcpTool
      * {@link #buildSuccessResponse(String, String, String, boolean, List, boolean, int, String, String,
      * AdoptedModuleState.Result)} with what a copy or a deletion of methods reports (#978): a copy names the
      * methods, its source and the source's token ({@code fromContentHash}), and says how to finish a move; a
-     * deletion names the methods and warns about the calls left behind. Package-visible for tests.
+     * deletion names the methods and warns about the calls left behind; a repeated method name that does not
+     * block the write joins the frontmatter's {@code warning} (#987). Package-visible for tests.
      *
-     * @param facts the copy's or deletion's facts, or {@code null} for any other write
+     * @param facts the copy's, deletion's or repeated-name facts, or {@code null} when there are none
      */
     static String buildSuccessResponse(String projectName, String modulePath, String mode, // NOSONAR the response's facts; a parameter object would only rename them
         boolean skipSyntaxCheck, List<String> newLines, boolean fileExists, int totalOriginal,
@@ -1518,6 +1605,10 @@ public class WriteModuleSourceTool implements IMcpTool
             warnings.add("Deleted methods are still called in this module (a text check of unqualified calls " //$NON-NLS-1$
                 + "outside comments and strings): " + String.join(", ", facts.stillCalled) //$NON-NLS-1$ //$NON-NLS-2$
                 + ". Qualify the calls with the new module's name or move the callers too."); //$NON-NLS-1$
+        }
+        if (facts != null && facts.duplicateWarning != null)
+        {
+            warnings.add(facts.duplicateWarning);
         }
 
         // Only when something WAS replaced: a key that is always there would be noise on every
