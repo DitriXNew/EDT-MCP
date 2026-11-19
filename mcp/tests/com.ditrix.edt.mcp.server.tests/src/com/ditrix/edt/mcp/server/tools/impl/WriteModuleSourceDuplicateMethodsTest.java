@@ -273,6 +273,38 @@ public class WriteModuleSourceDuplicateMethodsTest
         assertFalse(response, response.contains("warning:")); //$NON-NLS-1$
     }
 
+    // ==================== the text modes re-plan under the modify rule ====================
+
+    /**
+     * A function of the same name saved by another writer after the first read and before the locked write: the
+     * searchReplace plan is computed again from the text under the rule, so the duplicate it would now create is
+     * refused and the other writer's text survives - not overwritten with the stale plan.
+     */
+    @Test
+    public void searchReplaceIsJudgedAgainstTheTextSavedBeforeTheLockedWrite() throws Exception
+    {
+        IFile module = tree.module("src/" + MODULE, BASE); //$NON-NLS-1$
+        String theirs = BASE + "\nФункция Новая()\nКонецФункции\n"; //$NON-NLS-1$
+        beforeLockedWrite = () -> tree.contents.get(module).set(theirs.getBytes(StandardCharsets.UTF_8));
+        String error = refused(write(Map.of("oldSource", "\tЗначение = 1;\nКонецПроцедуры\n", //$NON-NLS-1$ //$NON-NLS-2$
+            "source", "\tЗначение = 1;\nКонецПроцедуры\n\nФункция Новая()\nКонецФункции\n"))); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(error, error.contains("'Новая' is declared 2 times")); //$NON-NLS-1$
+        assertEquals(theirs, tree.text(module));
+    }
+
+    /** An append keeps an edit saved after the first read: the appended text lands after what the file holds now. */
+    @Test
+    public void appendKeepsAnEditSavedBeforeTheLockedWrite() throws Exception
+    {
+        IFile module = tree.module("src/" + MODULE, BASE); //$NON-NLS-1$
+        String theirs = BASE + "\nПроцедура Их()\nКонецПроцедуры\n"; //$NON-NLS-1$
+        beforeLockedWrite = () -> tree.contents.get(module).set(theirs.getBytes(StandardCharsets.UTF_8));
+        String response = write(Map.of("mode", "append", "source", "\nПроцедура Наша()\nКонецПроцедуры\n")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        assertFalse(response, response.startsWith("{")); //$NON-NLS-1$
+        assertTrue(tree.text(module), tree.text(module).startsWith(theirs));
+        assertTrue(tree.text(module), tree.text(module).contains("Процедура Наша()")); //$NON-NLS-1$
+    }
+
     private static String refused(String response)
     {
         assertTrue("expected a refusal: " + response, response.startsWith("{")); //$NON-NLS-1$ //$NON-NLS-2$

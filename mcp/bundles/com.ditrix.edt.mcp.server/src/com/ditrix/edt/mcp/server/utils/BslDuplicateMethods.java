@@ -86,15 +86,19 @@ public final class BslDuplicateMethods
         public final List<Declaration> declarations;
         /** The worst relation between any two of them. */
         public final Kind kind;
-        /** For {@link Kind#EXCLUSIVE}: the 1-based line of the #If block whose arms separate them; else 0. */
-        public final int branchBlockLine;
+        /**
+         * For {@link Kind#EXCLUSIVE}: the 1-based opening lines of the #If blocks whose arms separate the pairs, in
+         * ascending order - more than one when the declarations sit at different depths (two in the arms of an
+         * inner block, a third in the outer block's #Else); else empty.
+         */
+        public final List<Integer> branchBlockLines;
 
-        Group(String name, List<Declaration> declarations, Kind kind, int branchBlockLine)
+        Group(String name, List<Declaration> declarations, Kind kind, List<Integer> branchBlockLines)
         {
             this.name = name;
             this.declarations = declarations;
             this.kind = kind;
-            this.branchBlockLine = branchBlockLine;
+            this.branchBlockLines = branchBlockLines;
         }
 
         /** @return the declaration lines, e.g. {@code "12, 300"} */
@@ -125,8 +129,11 @@ public final class BslDuplicateMethods
                     return "They share one preprocessor context, so the 1C platform will refuse to load the module " //$NON-NLS-1$
                         + "(EDT marks it method-already-defined): rename or delete one."; //$NON-NLS-1$
                 case EXCLUSIVE:
-                    return "They sit in different branches of the #If block opened at line " + branchBlockLine //$NON-NLS-1$
-                        + ", so only one of them is compiled."; //$NON-NLS-1$
+                    return branchBlockLines.size() == 1
+                        ? "They sit in different branches of the #If block opened at line " + branchBlockLines.get(0) //$NON-NLS-1$
+                            + ", so only one of them is compiled." //$NON-NLS-1$
+                        : "They sit in mutually exclusive branches of the #If blocks opened at lines " //$NON-NLS-1$
+                            + joined(branchBlockLines) + ", so only one of them is compiled."; //$NON-NLS-1$
                 default:
                     return "They sit in separate #If blocks or carry different compilation directives; whether both " //$NON-NLS-1$
                         + "are compiled together depends on those conditions."; //$NON-NLS-1$
@@ -207,7 +214,7 @@ public final class BslDuplicateMethods
         List<String> masked)
     {
         Kind worst = Kind.EXCLUSIVE;
-        int blockLine = 0;
+        Set<Integer> blockLines = new TreeSet<>();
         for (int i = 0; i < same.size(); i++)
         {
             for (int j = i + 1; j < same.size(); j++)
@@ -219,10 +226,7 @@ public final class BslDuplicateMethods
                 if (separating > 0)
                 {
                     kind = Kind.EXCLUSIVE;
-                    if (blockLine == 0)
-                    {
-                        blockLine = separating;
-                    }
+                    blockLines.add(separating);
                 }
                 else if (separating == 0 && directives(masked, a).equals(directives(masked, b)))
                 {
@@ -243,7 +247,8 @@ public final class BslDuplicateMethods
         {
             declarations.add(new Declaration(span.declarationLine + 1, span.startLine + 1, span.endLine + 1));
         }
-        return new Group(same.get(0).name, declarations, worst, worst == Kind.EXCLUSIVE ? blockLine : 0);
+        return new Group(same.get(0).name, declarations, worst,
+            worst == Kind.EXCLUSIVE ? List.copyOf(blockLines) : List.of());
     }
 
     /**

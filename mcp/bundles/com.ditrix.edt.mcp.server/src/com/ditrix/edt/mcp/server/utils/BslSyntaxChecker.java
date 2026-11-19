@@ -425,17 +425,34 @@ public final class BslSyntaxChecker
             }
             else if ("mid:I".equals(kind) && !conditionals.isEmpty()) //$NON-NLS-1$
             {
-                conditionals.peek()[1]++;
+                int[] block = conditionals.peek();
+                // An #ElsIf or a second #Else after the block's #Else is malformed: no new arm is granted, so what
+                // follows reads as the same context as the #Else arm and is never taken for mutually exclusive.
+                if (block[2] == 0)
+                {
+                    block[1]++;
+                    if (isElseWord(directiveWord(code)))
+                    {
+                        block[2] = 1;
+                    }
+                }
                 current = flatten(conditionals);
             }
             paths[i] = current;
             if ("open:I".equals(kind)) //$NON-NLS-1$
             {
-                conditionals.push(new int[] {i + 1, 0});
+                conditionals.push(new int[] {i + 1, 0, 0});
                 current = flatten(conditionals);
             }
         }
         return paths;
+    }
+
+    /** Whether a directive word is {@code #Else}/{@code #Иначе} (not {@code #ElsIf}), either case. */
+    private static boolean isElseWord(String word)
+    {
+        String lower = word.toLowerCase(Locale.ROOT);
+        return "else".equals(lower) || "иначе".equals(lower); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     /** The open blocks as {@code [line, arm, line, arm, ...]}, outermost first. */

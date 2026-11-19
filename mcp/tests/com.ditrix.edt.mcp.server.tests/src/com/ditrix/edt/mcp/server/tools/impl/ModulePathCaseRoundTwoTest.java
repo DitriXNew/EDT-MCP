@@ -40,14 +40,18 @@ import org.eclipse.core.resources.IFolder;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IProjectDescription;
 import org.eclipse.core.resources.IResource;
+import org.eclipse.core.resources.IResourceRuleFactory;
 import org.eclipse.core.resources.IWorkspace;
 import org.eclipse.core.resources.IWorkspaceRoot;
 import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.CoreException;
+import org.eclipse.core.runtime.ICoreRunnable;
 import org.eclipse.core.runtime.IPath;
+import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.IStatus;
 import org.eclipse.core.runtime.Path;
 import org.eclipse.core.runtime.Status;
+import org.eclipse.core.runtime.jobs.ISchedulingRule;
 import org.eclipse.emf.common.util.BasicEList;
 import org.eclipse.emf.common.util.URI;
 import org.eclipse.emf.ecore.resource.Resource;
@@ -95,6 +99,12 @@ public class ModulePathCaseRoundTwoTest
         when(workspace.getRoot()).thenReturn(root);
         when(root.getProject(anyString())).thenReturn(tree.project);
         when(root.getProjects()).thenReturn(new IProject[] { tree.project });
+        // A write into an existing module compares and writes inside ONE workspace operation: run it in place.
+        IResourceRuleFactory rules = mock(IResourceRuleFactory.class);
+        when(rules.modifyRule(any(IResource.class))).thenReturn(mock(ISchedulingRule.class));
+        when(workspace.getRuleFactory()).thenReturn(rules);
+        doAnswer(call -> { ((ICoreRunnable) call.getArgument(0)).run(null); return null; })
+            .when(workspace).run(any(ICoreRunnable.class), any(ISchedulingRule.class), anyInt(), (IProgressMonitor) isNull());
         Field customizerField = ResourcesPlugin.class.getDeclaredField("workspaceInitCustomizer");
         customizerField.setAccessible(true);
         Object customizer = customizerField.get(ResourcesPlugin.getPlugin());
@@ -635,6 +645,7 @@ public class ModulePathCaseRoundTwoTest
             when(file.getCharset()).thenReturn("UTF-8");
             when(file.getType()).thenReturn(IResource.FILE);
             when(file.getProject()).thenReturn(project);
+            when(file.getWorkspace()).thenAnswer(call -> ResourcesPlugin.getWorkspace());
             when(file.getFullPath()).thenReturn(new Path("/CaseFixture").append(relative));
             when(file.getProjectRelativePath()).thenReturn(relative);
             when(file.getParent()).thenAnswer(call -> folders.get(relative.removeLastSegments(1).toString()));

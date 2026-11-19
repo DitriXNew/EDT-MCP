@@ -583,7 +583,11 @@ public class WriteModuleSourceTool implements IMcpTool
         // plan recomputed from that text: a copy without expectedHash then splices into what the file holds
         // now - an edit saved after the first read is kept, and a name that appeared meanwhile refuses the copy -
         // and for a hashed write it is the same compare the late hash check always made.
-        if ((isMethodTargetedMode(req.mode) || req.isDelete() || req.isCopy()) && fileExists)
+        // The text modes (searchReplace, append, replace) take the same path for an existing module (#987): their
+        // plan - the replaced fragment, the appended text, the repeated-method-name verdict - is judged against the
+        // text the file holds under the rule, so an edit saved after the first read is neither overwritten nor
+        // left out of the duplicate check.
+        if (fileExists)
         {
             WritePlan[] locked = new WritePlan[1];
             Exception[] failure = new Exception[1];

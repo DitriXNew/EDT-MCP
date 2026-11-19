@@ -73,7 +73,7 @@ public class BslDuplicateMethodsTest
             "#Если Сервер Тогда\nПроцедура Ф()\nКонецПроцедуры\n#Иначе\nПроцедура Ф()\nКонецПроцедуры\n#КонецЕсли")); //$NON-NLS-1$
         assertEquals(1, groups.size());
         assertEquals(BslDuplicateMethods.Kind.EXCLUSIVE, groups.get(0).kind);
-        assertEquals(1, groups.get(0).branchBlockLine);
+        assertEquals(List.of(1), groups.get(0).branchBlockLines);
         assertTrue(groups.get(0).meaning(), groups.get(0).meaning().contains("opened at line 1")); //$NON-NLS-1$
     }
 
@@ -84,7 +84,7 @@ public class BslDuplicateMethodsTest
             "Procedure Top()\nEndProcedure\n#If Server Then\nProcedure P()\nEndProcedure\n" //$NON-NLS-1$
                 + "#ElsIf Client Then\nProcedure P()\nEndProcedure\n#EndIf")); //$NON-NLS-1$
         assertEquals(BslDuplicateMethods.Kind.EXCLUSIVE, groups.get(0).kind);
-        assertEquals(3, groups.get(0).branchBlockLine);
+        assertEquals(List.of(3), groups.get(0).branchBlockLines);
     }
 
     /** Two separate #If blocks: a text scan cannot tell whether both conditions hold at once. */
@@ -121,7 +121,7 @@ public class BslDuplicateMethodsTest
             "#If Server Then\n#If ExternalConnection Then\nProcedure P()\nEndProcedure\n#EndIf\n" //$NON-NLS-1$
                 + "#Else\nProcedure P()\nEndProcedure\n#EndIf")); //$NON-NLS-1$
         assertEquals(BslDuplicateMethods.Kind.EXCLUSIVE, groups.get(0).kind);
-        assertEquals(1, groups.get(0).branchBlockLine);
+        assertEquals(List.of(1), groups.get(0).branchBlockLines);
     }
 
     /** Different compilation directives: whether both compile together is the platform's call, not the text's. */
@@ -142,6 +142,39 @@ public class BslDuplicateMethodsTest
         assertEquals(BslDuplicateMethods.Kind.DUPLICATE, groups.get(0).kind);
     }
 
+    /** A second #Else after the block's #Else is malformed: it grants no new arm, so the copies are not exclusive. */
+    @Test
+    public void aSecondElseGrantsNoNewArm()
+    {
+        List<BslDuplicateMethods.Group> groups = BslDuplicateMethods.find(lines(
+            "#Если Сервер Тогда\n#Иначе\nПроцедура П()\nКонецПроцедуры\n#Иначе\nПроцедура П()\nКонецПроцедуры\n#КонецЕсли")); //$NON-NLS-1$
+        assertEquals(BslDuplicateMethods.Kind.DUPLICATE, groups.get(0).kind);
+    }
+
+    /** An #ElsIf after the block's #Else is malformed as well: no new arm. */
+    @Test
+    public void anElsIfAfterElseGrantsNoNewArm()
+    {
+        List<BslDuplicateMethods.Group> groups = BslDuplicateMethods.find(lines(
+            "#If Server Then\n#Else\nProcedure P()\nEndProcedure\n#ElsIf Client Then\nProcedure P()\nEndProcedure\n#EndIf")); //$NON-NLS-1$
+        assertEquals(BslDuplicateMethods.Kind.DUPLICATE, groups.get(0).kind);
+    }
+
+    /**
+     * Three exclusive copies at two depths - two in the arms of an inner block, the third in the outer #Else: the
+     * notice names both separating blocks instead of attributing the group to the inner one.
+     */
+    @Test
+    public void exclusiveCopiesAtTwoDepthsNameEverySeparatingBlock()
+    {
+        List<BslDuplicateMethods.Group> groups = BslDuplicateMethods.find(lines(
+            "#If Server Then\n#If ExternalConnection Then\nProcedure P()\nEndProcedure\n#Else\nProcedure P()\n" //$NON-NLS-1$
+                + "EndProcedure\n#EndIf\n#Else\nProcedure P()\nEndProcedure\n#EndIf")); //$NON-NLS-1$
+        assertEquals(BslDuplicateMethods.Kind.EXCLUSIVE, groups.get(0).kind);
+        assertEquals(List.of(1, 2), groups.get(0).branchBlockLines);
+        assertTrue(groups.get(0).meaning(), groups.get(0).meaning().contains("#If blocks opened at lines 1, 2")); //$NON-NLS-1$
+    }
+
     /** A worst pair decides the group: two excluded copies plus a third at top level is a certain duplicate. */
     @Test
     public void theWorstPairDecidesTheGroup()
@@ -150,7 +183,7 @@ public class BslDuplicateMethodsTest
             "#If Server Then\nProcedure P()\nEndProcedure\n#Else\nProcedure P()\nEndProcedure\n#EndIf\n" //$NON-NLS-1$
                 + "Procedure P()\nEndProcedure")); //$NON-NLS-1$
         assertEquals(BslDuplicateMethods.Kind.DUPLICATE, groups.get(0).kind);
-        assertEquals(0, groups.get(0).branchBlockLine);
+        assertEquals(List.of(), groups.get(0).branchBlockLines);
         assertEquals(3, groups.get(0).declarations.size());
     }
 
