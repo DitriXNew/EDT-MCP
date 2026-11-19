@@ -51,6 +51,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.ChartOfCharacteristicTypesPredefinedIte
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.ExtDimensionAccountingFlag;
 import com._1c.g5.v8.dt.metadata.mdclass.ExtDimensionType;
+import com._1c.g5.v8.dt.metadata.mdclass.HierarchyType;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.Predefined;
@@ -369,8 +370,13 @@ public final class PredefinedWriter
         public boolean codeSet;
         public Boolean isFolder;
         public boolean isFolderSet;
-        /** Create-only: the name of an existing predefined FOLDER to nest the new item under. */
+        /**
+         * The Name of the existing item to nest under: on create the new item's parent, on modify the
+         * move target ({@code null} with {@link #parentSet} = move to the owner's top level).
+         */
         public String parentName;
+        /** Modify only: whether {@code parent} was supplied, i.e. the item is to be moved. */
+        public boolean parentSet;
         /**
          * The raw JSON value of a supplied {@code valueType} (alias {@code type}) property - a
          * {@code ChartOfCharacteristicTypes} item's VALUE TYPE. Meaningless for any other owner (see
@@ -448,14 +454,12 @@ public final class PredefinedWriter
      * {@code ChartOfCharacteristicTypes}; {@code accountType} / {@code offBalance} / {@code order} /
      * {@code accountingFlags} / {@code extDimensionTypes} on a {@code ChartOfAccounts};
      * {@code base} / {@code displaced} / {@code leading} / {@code actionPeriodIsBase} on a
-     * {@code ChartOfCalculationTypes}; and (create only) {@code parent}. The owner gate itself lives
-     * in {@code rejectCrossOwnerProps} - this only parses the shapes. {@code name} is always
-     * refused - a predefined item's identity is the FQN leaf, not a renamable property (delete and
-     * re-create instead). On modify, {@code parent} (a move) is refused with an actionable
-     * "not yet supported" message rather than silently ignored.
+     * {@code ChartOfCalculationTypes}; and {@code parent} (on modify, a move). The owner gate itself
+     * lives in {@code rejectCrossOwnerProps} - this only parses the shapes. {@code name} is always
+     * refused with a redirect to rename_metadata_object - the identity is the FQN leaf.
      *
      * @param properties the raw {@code properties} array (may be {@code null}, treated as empty)
-     * @param isModify {@code true} when parsing for {@code modify_metadata} (rejects {@code parent})
+     * @param isModify {@code true} when parsing for {@code modify_metadata} ({@code parent} is a move)
      * @param out the props holder to fill
      * @return a ready JSON error string on the first malformed/unsupported entry, or {@code null} on success
      */
@@ -496,9 +500,10 @@ public final class PredefinedWriter
                 return ToolResult.error("Property 'id' is a read-only predefined item identifier. " //$NON-NLS-1$
                     + "Remove it from properties.").toJson(); //$NON-NLS-1$
             case PROP_NAME:
-                return ToolResult.error("Renaming a predefined item is not supported: its identity is " //$NON-NLS-1$
-                    + "the FQN leaf ('...Predefined.<Item>'). Delete it and create a new item under " //$NON-NLS-1$
-                    + "the new name.").toJson(); //$NON-NLS-1$
+                return ToolResult.error("A predefined item's Name is its FQN leaf ('...Predefined.<Item>') " //$NON-NLS-1$
+                    + "and is not a property. Rename it with rename_metadata_object (objectFqn = this FQN, " //$NON-NLS-1$
+                    + "newName = the new Name): it keeps the item's UUID and updates the references EDT " //$NON-NLS-1$
+                    + "resolves. Nothing was changed.").toJson(); //$NON-NLS-1$
             case PROP_DESCRIPTION:
                 return applyDescriptionProperty(prop, out);
             case PROP_CODE:
@@ -520,13 +525,7 @@ public final class PredefinedWriter
             case PROP_IS_FOLDER:
                 return applyIsFolderProperty(prop, out);
             case PROP_PARENT:
-                if (isModify)
-                {
-                    return ToolResult.error("Moving a predefined item under a different parent is " //$NON-NLS-1$
-                        + "not yet supported by modify_metadata; delete the item and re-create it with " //$NON-NLS-1$
-                        + "the new 'parent' (a create-time-only property).").toJson(); //$NON-NLS-1$
-                }
-                return applyParentProperty(prop, out);
+                return isModify ? applyMoveParentProperty(prop, out) : applyParentProperty(prop, out);
             case PROP_VALUE_TYPE:
             case PROP_TYPE_ALIAS:
                 return applyValueTypeProperty(prop, out, isModify);
@@ -569,7 +568,7 @@ public final class PredefinedWriter
                     + "ChartOfCharacteristicTypes only), accountType / offBalance / order / " //$NON-NLS-1$
                     + "accountingFlags / extDimensionTypes (ChartOfAccounts only), base / displaced / " //$NON-NLS-1$
                     + "leading / actionPeriodIsBase (ChartOfCalculationTypes only)" //$NON-NLS-1$
-                    + (isModify ? "" : ", parent (create only; not on a ChartOfCalculationTypes)") //$NON-NLS-1$
+                    + ", parent (not on a ChartOfCalculationTypes)" //$NON-NLS-1$
                     + ".").toJson(); //$NON-NLS-1$
         }
     }
@@ -611,6 +610,26 @@ public final class PredefinedWriter
                 + jsonLabel(v) + ". Omit it entirely for a top-level item.").toJson(); //$NON-NLS-1$
         }
         out.parentName = v.getAsString();
+        return null;
+    }
+
+    /**
+     * {@code parent} on modify is a MOVE: the Name of the new parent, or a missing / null / empty value
+     * for the owner's top level (the MCP wire drops a null-valued key). Checked against the owner in
+     * {@link #modify}.
+     */
+    private static String applyMoveParentProperty(JsonObject prop, ItemProps out)
+    {
+        JsonElement v = prop.get(KEY_VALUE);
+        if (v != null && !v.isJsonNull() && (!v.isJsonPrimitive() || !v.getAsJsonPrimitive().isString()))
+        {
+            return ToolResult.error("'parent' must be a JSON string (the Name of the new parent item on " //$NON-NLS-1$
+                + "the same owner), or omitted / null / empty to move the item to the top level; got " //$NON-NLS-1$
+                + jsonLabel(v) + ". Nothing was changed.").toJson(); //$NON-NLS-1$
+        }
+        String name = v == null || v.isJsonNull() ? null : v.getAsString().trim();
+        out.parentName = name == null || name.isEmpty() ? null : name;
+        out.parentSet = true;
         return null;
     }
 
@@ -1052,6 +1071,13 @@ public final class PredefinedWriter
     {
         Located l = locateYo(owner, name);
         return l != null ? new ItemLookup(l.item, l.parentName) : null;
+    }
+
+    /** Where {@code item} sits: {@code "top level"} or {@code "under 'Parent'"}. */
+    public static String locationOf(PredefinedItem item)
+    {
+        return item.eContainer() instanceof PredefinedItem parent ? "under '" + parent.getName() + "'" //$NON-NLS-1$ //$NON-NLS-2$
+            : "top level"; //$NON-NLS-1$
     }
 
     /** Counts every descendant of {@code item} (its whole content tree), NOT including itself. */
@@ -1498,8 +1524,9 @@ public final class PredefinedWriter
      * every owner, {@code isFolder} / {@code valueType} and the ChartOfAccounts /
      * ChartOfCalculationTypes owner-specific ones where they apply (see {@link #parseProperties}).
      * A folder-&gt;item transition ({@code isFolder=false} on a folder that still has children) is
-     * rejected (remove/move the children first). {@code parent} (a move) is refused upstream in
-     * {@link #parseProperties} before this is ever called.
+     * rejected (remove/move the children first). {@code parent} MOVES the item, with its subtree,
+     * under another item of the same owner or to the top level: the same object is re-contained, so
+     * its UUID is kept. The target is checked before anything is changed.
      *
      * @param owner the (already re-fetched, tx-bound) owner
      * @param itemName the item's programmatic Name (identity; never changed here)
@@ -1520,6 +1547,16 @@ public final class PredefinedWriter
             return WriteResult.fail(gateErr);
         }
         PredefinedItem item = found.item;
+        WriteResultOrParent move = null;
+        if (props.parentSet)
+        {
+            boolean folderAfter = props.isFolderSet ? Boolean.TRUE.equals(props.isFolder) : isFolder(item);
+            move = resolveMoveTarget(owner, item, props.parentName, folderAfter);
+            if (move.error != null)
+            {
+                return WriteResult.fail(move.error);
+            }
+        }
         if (props.descriptionSet)
         {
             String descriptionLengthErr = validateDescriptionLength(owner, props.description);
@@ -1560,7 +1597,128 @@ public final class PredefinedWriter
         {
             return WriteResult.fail(ownerPropsErr);
         }
+        if (move != null)
+        {
+            Predefined predefined = getPredefinedContainer(owner);
+            EObject newContainer = move.parent != null ? move.parent : predefined;
+            // Re-adding to the current list would only reorder it, so a move in place changes nothing.
+            if (item.eContainer() != newContainer)
+            {
+                attach(predefined, move.parent, item);
+            }
+        }
         return WriteResult.ok(item);
+    }
+
+    /**
+     * The checked target of a move, following EDT's own Move command: a hierarchical owner that is not
+     * a subordinate catalog; the top level, a folder, or any item where the owner nests items in items
+     * (a hierarchy of items, a chart of accounts); never the item itself or one of its descendants; and
+     * within a catalog's level limit.
+     */
+    private static WriteResultOrParent resolveMoveTarget(EObject owner, PredefinedItem item, String parentName,
+        boolean folderAfter)
+    {
+        String nothing = " Nothing was changed."; //$NON-NLS-1$
+        if (owner instanceof ChartOfCalculationTypes)
+        {
+            return new WriteResultOrParent(null, "Property 'parent' is not supported for a " + ownerLabel(owner) //$NON-NLS-1$
+                + " predefined item: calculation types are a flat list." + nothing); //$NON-NLS-1$
+        }
+        boolean hierarchical = owner instanceof ChartOfAccounts
+            || owner instanceof Catalog catalog && catalog.isHierarchical()
+            || owner instanceof ChartOfCharacteristicTypes types && types.isHierarchical();
+        if (!hierarchical)
+        {
+            return new WriteResultOrParent(null, ownerLabel(owner) + " is not hierarchical, so its predefined " //$NON-NLS-1$
+                + "items stay at the top level." + nothing); //$NON-NLS-1$
+        }
+        if (owner instanceof Catalog catalog && !catalog.getOwners().isEmpty())
+        {
+            return new WriteResultOrParent(null, ownerLabel(owner) + " is subordinate to owners, and EDT does " //$NON-NLS-1$
+                + "not move the predefined items of a subordinate catalog." + nothing); //$NON-NLS-1$
+        }
+        if (parentName == null)
+        {
+            String depthErr = levelLimitError(owner, item, 0, folderAfter);
+            return new WriteResultOrParent(null, depthErr == null ? null : depthErr + nothing);
+        }
+        Located parentLoc = locateYo(owner, parentName);
+        if (parentLoc == null)
+        {
+            return new WriteResultOrParent(null, "Parent predefined item not found: '" + parentName + "' on " //$NON-NLS-1$ //$NON-NLS-2$
+                + ownerLabel(owner) + ". Use get_metadata_details on the owner to list its predefined items, " //$NON-NLS-1$
+                + "or omit the value to move the item to the top level." + nothing); //$NON-NLS-1$
+        }
+        PredefinedItem parent = parentLoc.item;
+        for (EObject up = parent; up instanceof PredefinedItem; up = up.eContainer())
+        {
+            if (up == item)
+            {
+                return new WriteResultOrParent(null, "Cannot move '" + item.getName() + "' under '" //$NON-NLS-1$ //$NON-NLS-2$
+                    + parent.getName() + "': that is the item itself or one of its own descendants." + nothing); //$NON-NLS-1$
+            }
+        }
+        boolean itemsInItems = owner instanceof ChartOfAccounts
+            || owner instanceof Catalog catalog && catalog.getHierarchyType() == HierarchyType.HIERARCHY_OF_ITEMS;
+        if (!itemsInItems && !isFolder(parent))
+        {
+            return new WriteResultOrParent(null, "Parent '" + parent.getName() + "' on " + ownerLabel(owner) //$NON-NLS-1$ //$NON-NLS-2$
+                + " is not a folder (isFolder=false); in a hierarchy of folders and items only a folder can " //$NON-NLS-1$
+                + "hold items." + nothing); //$NON-NLS-1$
+        }
+        String depthErr = levelLimitError(owner, item, depthOf(parent), folderAfter);
+        return new WriteResultOrParent(depthErr == null ? parent : null, depthErr == null ? null : depthErr + nothing);
+    }
+
+    /** The 1-based level of {@code item} (a top-level item is level 1). */
+    private static int depthOf(PredefinedItem item)
+    {
+        int depth = 0;
+        for (EObject up = item; up instanceof PredefinedItem; up = up.eContainer())
+        {
+            depth++;
+        }
+        return depth;
+    }
+
+    /**
+     * Whether moving {@code item} under a parent at {@code parentDepth} (0 = top level) keeps every
+     * item of its subtree within the catalog's level limit, by EDT's rule: a folder at most at level
+     * {@code levelCount}, an item one level deeper (an unset count means 2).
+     */
+    private static String levelLimitError(EObject owner, PredefinedItem item, int parentDepth, boolean folderAfter)
+    {
+        if (!(owner instanceof Catalog catalog) || !catalog.isLimitLevelCount())
+        {
+            return null;
+        }
+        int levelCount = catalog.getLevelCount() == 0 ? 2 : catalog.getLevelCount();
+        ArrayDeque<Object[]> stack = new ArrayDeque<>();
+        stack.push(new Object[] { item, Integer.valueOf(parentDepth + 1) });
+        Set<PredefinedItem> seen = newVisitedSet();
+        while (!stack.isEmpty())
+        {
+            Object[] frame = stack.pop();
+            PredefinedItem node = (PredefinedItem)frame[0];
+            int level = ((Integer)frame[1]).intValue();
+            if (!seen.add(node))
+            {
+                continue;
+            }
+            boolean folder = node == item ? folderAfter : isFolder(node);
+            if (level > (folder ? levelCount : levelCount + 1))
+            {
+                return "Moving '" + item.getName() + "' there would put " + (folder ? "folder" : "item") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+                    + " '" + node.getName() + "' at level " + level + ", past the limit of " + levelCount //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    + " level(s) set on " + ownerLabel(owner) + "."; //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            for (PredefinedItem child : childrenOf(node))
+            {
+                stack.push(new Object[] { child, Integer.valueOf(level + 1) });
+            }
+        }
+        return null;
     }
 
     // ---- delete (two-phase: preview + confirm) ----------------------------------------------------

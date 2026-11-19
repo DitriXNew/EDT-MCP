@@ -40,6 +40,7 @@ import com._1c.g5.v8.dt.lcore.refactoring.IFullTextSearchChange;
 import com._1c.g5.v8.dt.md.refactoring.core.IMdRefactoringService;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
+import com._1c.g5.v8.dt.metadata.mdclass.PredefinedItem;
 
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.EStructuralFeature;
@@ -66,7 +67,9 @@ import com.ditrix.edt.mcp.server.utils.BmObjectAddress;
 import com.ditrix.edt.mcp.server.utils.ConsentPreview;
 import com.ditrix.edt.mcp.server.utils.ContentHash;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
+import com.ditrix.edt.mcp.server.utils.AdoptedPropertyRouter;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
+import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
 import com.ditrix.edt.mcp.server.utils.FormValidationException;
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
@@ -376,6 +379,13 @@ public class MetadataRenameService
             return ToolResult.error("IMdRefactoringService not available").toJson(); //$NON-NLS-1$
         }
 
+        PredefinedWriter.PredefinedRef predefinedRef = PredefinedWriter.parseRef(objectFqn);
+        if (predefinedRef != null)
+        {
+            return renamePredefinedItem(project, config, objectFqn, newName, confirm, disableRequest,
+                expectedHash, maxResults, progress, predefinedRef, refactoringService);
+        }
+
         // Find the object
         final String normalizedFqn = objectFqn;
         return readBoundary(project, "Prepare metadata rename", () -> {
@@ -678,6 +688,130 @@ public class MetadataRenameService
             return ToolResult.error("Failed to rename form element: " //$NON-NLS-1$
                 + causeMessage(e)).toJson();
         }
+    }
+
+    /**
+     * Renames a PREDEFINED item ({@code Type.Owner.Predefined.Item}) through EDT's own
+     * {@code createPredefinedItemRenameRefactoring}: the item object keeps its UUID, and the
+     * refactoring rewrites the references EDT resolves. The owner and item are resolved and a
+     * clashing name is refused inside a read; the refactoring is built, previewed and applied
+     * outside it, exactly as the other branches.
+     */
+    private String renamePredefinedItem(IProject project, Configuration config, String normFqn,
+        String newName, boolean confirm, DisableRequest disableRequest, String expectedHash,
+        int maxResults, RenameProgress progress, PredefinedWriter.PredefinedRef ref,
+        IMdRefactoringService refactoringService)
+    {
+        String ownerTypeErr = PredefinedWriter.unsupportedOwnerTypeError(ref.ownerType);
+        if (ownerTypeErr != null)
+        {
+            return ToolResult.error(ownerTypeErr).toJson();
+        }
+        BmModelResolver.Resolution modelResolution = BmModelResolver.resolveForRefactoring(project);
+        if (!modelResolution.isAvailable())
+        {
+            return ToolResult.error(modelResolution.actionableError(TOOL_NAME, "Nothing was renamed.")).toJson(); //$NON-NLS-1$
+        }
+        String[] oldName = new String[1];
+        String[] refusal = new String[1];
+        PredefinedItem target = readBoundary(project, "Prepare predefined item rename", () -> { //$NON-NLS-1$
+            Configuration currentConfig = com.ditrix.edt.mcp.server.HostKind.current()
+                == com.ditrix.edt.mcp.server.HostKind.HEADLESS
+                ? Activator.getDefault().getConfigurationProvider().getConfiguration(project) : config;
+            MdObject owner = resolveObject(currentConfig, ref.ownerFqn());
+            if (owner == null)
+            {
+                refusal[0] = ToolResult.error("Owner object not found: " + ref.ownerFqn() //$NON-NLS-1$
+                    + ". Use get_metadata_objects to list the objects. Nothing was renamed.").toJson(); //$NON-NLS-1$
+                return null;
+            }
+            String dropped = AdoptedPropertyRouter.refusalIfDropped(owner,
+                owner.eClass().getEStructuralFeature("predefined"), ref.ownerFqn(), project, //$NON-NLS-1$
+                ProjectContext.platformVersion(project));
+            if (dropped != null)
+            {
+                refusal[0] = dropped;
+                return null;
+            }
+            PredefinedTarget resolved = predefinedTarget(owner, ref.ownerFqn(), ref.itemName, newName);
+            if (resolved.refusal() != null)
+            {
+                refusal[0] = ToolResult.error(resolved.refusal()).toJson();
+                return null;
+            }
+            oldName[0] = resolved.item().getName();
+            return resolved.item();
+        });
+        if (target == null)
+        {
+            return refusal[0];
+        }
+        checkCanceled();
+        IRefactoring refactoring;
+        try
+        {
+            refactoring = refactoringService.createPredefinedItemRenameRefactoring(target, newName);
+        }
+        catch (RuntimeException e)
+        {
+            Activator.logError("Could not prepare predefined item rename for " + normFqn, e); //$NON-NLS-1$
+            return ToolResult.error("Could not prepare rename of predefined item '" + normFqn //$NON-NLS-1$
+                + "'. Nothing was renamed; no cascade started. Use get_metadata_details to verify the " //$NON-NLS-1$
+                + "item, then retry rename_metadata_object.").toJson(); //$NON-NLS-1$
+        }
+        if (refactoring == null)
+        {
+            return ToolResult.error("EDT created no rename refactoring for '" + normFqn //$NON-NLS-1$
+                + "'. Nothing was renamed. Use get_metadata_details to verify the item, then retry.").toJson(); //$NON-NLS-1$
+        }
+        checkCanceled();
+        Collection<IRefactoring> refactorings = Collections.singletonList(refactoring);
+        String lockedReferrers = readBoundary(project, "Check predefined item rename referrers", //$NON-NLS-1$
+            () -> supportLockRefusal(normFqn, refactorings));
+        if (lockedReferrers != null)
+        {
+            return ToolResult.error(lockedReferrers).toJson();
+        }
+        if (!confirm)
+        {
+            return renderPreview(normFqn, newName, oldName[0], refactorings, maxResults,
+                Collections.emptyMap(), Collections.emptyList());
+        }
+        return performRename(project, normFqn, newName, refactorings, disableRequest, expectedHash, progress,
+            "predefined item"); //$NON-NLS-1$
+    }
+
+    /** The predefined item a rename targets, or why it is refused. */
+    record PredefinedTarget(PredefinedItem item, String refusal)
+    {
+    }
+
+    /**
+     * Resolves the renamed item on {@code owner} and refuses a missing item, an unchanged name and a
+     * Name another item of the owner already has (unique across its whole tree, ignoring case).
+     * Package-visible for tests.
+     */
+    static PredefinedTarget predefinedTarget(EObject owner, String ownerFqn, String itemName, String newName)
+    {
+        PredefinedItem item = PredefinedWriter.findByName(owner, itemName);
+        if (item == null)
+        {
+            return new PredefinedTarget(null, "Predefined item not found: '" + itemName + "' on " + ownerFqn //$NON-NLS-1$ //$NON-NLS-2$
+                + ". Use get_metadata_details on the owner to list its predefined items. Nothing was renamed."); //$NON-NLS-1$
+        }
+        if (newName.equals(item.getName()))
+        {
+            return new PredefinedTarget(null, "The predefined item is already named '" + newName //$NON-NLS-1$
+                + "'. Nothing was renamed."); //$NON-NLS-1$
+        }
+        PredefinedItem clash = PredefinedWriter.findByNameExact(owner, newName);
+        if (clash != null && clash != item)
+        {
+            return new PredefinedTarget(null, "A predefined item named '" + clash.getName() + "' already exists on " //$NON-NLS-1$ //$NON-NLS-2$
+                + ownerFqn + " (Names are unique across the owner's whole tree, ignoring case). " //$NON-NLS-1$
+                + "Choose another name. Nothing was renamed."); //$NON-NLS-1$
+        }
+        return new PredefinedTarget(item, null);
     }
 
     /**

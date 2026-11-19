@@ -556,8 +556,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             .stringArrayProperty(ExcludedCommandsSupport.PROPERTY,
                 "For an excludedCommands write: the stored exclusion set as canonical English names") //$NON-NLS-1$
             .stringProperty("destination", //$NON-NLS-1$
-                "Where a moved form item ended up (when 'parent'/'position' moved a form item), e.g. " //$NON-NLS-1$
-                + "\"group 'Main' at index 1\"") //$NON-NLS-1$
+                "Where a moved form item or predefined item ended up (when 'parent'/'position' moved it), " //$NON-NLS-1$
+                + "e.g. \"group 'Main' at index 1\", \"under 'Folder'\"") //$NON-NLS-1$
             .stringProperty(McpKeys.MESSAGE, "Human-readable confirmation message") //$NON-NLS-1$
             .stringArrayProperty(WriteScope.RESULT_MEMBER, WriteScope.OUTPUT_SCHEMA_DESCRIPTION))
             .build();
@@ -1120,6 +1120,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         // caller's spelling (ownerResolved.fqn echoes the input) - a case/spelling variant that
         // still resolves would otherwise export a non-existent FQN and leave the change in memory.
         final String[] canonicalOwnerFqnHolder = new String[1];
+        final String[] destination = new String[1];
 
         return () -> {
             if (props.valueTypeSet)
@@ -1149,6 +1150,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                         // A refusal: the message is OUR validation's, so mark it and keep the log quiet.
                         throw Refusals.state(result.error);
                     }
+                    destination[0] = props.parentSet ? PredefinedWriter.locationOf(result.item) : null;
                     return null;
                 });
             }
@@ -1214,7 +1216,13 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             {
                 applied.add("leading"); //$NON-NLS-1$
             }
-            return buildModifiedResult(normFqn, applied, persisted, args.normReport);
+            if (props.parentSet)
+            {
+                applied.add("parent"); //$NON-NLS-1$
+            }
+            String modified = buildModifiedResult(normFqn, applied, persisted, args.normReport);
+            return destination[0] == null ? modified
+                : ToolResult.parse(modified).put("destination", destination[0]).toJson(); //$NON-NLS-1$
         };
     }
 
