@@ -6,7 +6,7 @@ Rename a metadata object or member and rewrite the references EDT RESOLVES for i
 | Parameter | Required | Type | Description |
 | --- | --- | --- | --- |
 | projectName | yes | string | EDT project name. |
-| objectFqn | yes | string | FQN of the rename target: an object ('Catalog.Products'), a member ('Document.SalesOrder.Attribute.Amount'), or a managed-form element ('Catalog.Products.Form.ItemForm.Field.Price', 'CommonForm.Settings.Group.Main', 'Catalog.Products.Form.ItemForm.Attribute.Rows.Column.Price'). Russian type and kind tokens are also accepted. |
+| objectFqn | yes | string | FQN of the rename target: an object ('Catalog.Products'), a member ('Document.SalesOrder.Attribute.Amount'), a predefined item ('Catalog.Units.Predefined.Piece'), or a managed-form element ('Catalog.Products.Form.ItemForm.Field.Price', 'CommonForm.Settings.Group.Main', 'Catalog.Products.Form.ItemForm.Attribute.Rows.Column.Price'). Russian type and kind tokens are also accepted. |
 | newName | yes | string | New programmatic Name for the rename target (the object, member or form element addressed by objectFqn). |
 | confirm | — | boolean | true = apply the rename; default false = preview only. |
 | disableIndices | — | string | Comma-separated preview '#' indices of OPTIONAL change points to skip, e.g. '2,3,5'. Entries that cannot be an index at all - not whole numbers, or negative - are refused before anything runs; an index the current preview simply does not have is reported back as unknown instead. |
@@ -17,7 +17,7 @@ Rename a metadata object or member and rewrite the references EDT RESOLVES for i
 | timeout | — | integer | Bounds the server-side computation, not the HTTP call (default 420, clamped to 60..3600 seconds); it cannot keep the call alive. waitSeconds bounds the preview call. A preview timeout produces a FAILED job naming the stage. Confirm stays synchronous and EDT may still finish the rename after its timeout; verify the model. The pre-flight index drain has a separate 60s bound inside the preview job or before confirm. |
 
 ## Guide
-Renames one metadata object, one of its child members, or one managed-form element, and cascades the rename to every reference EDT resolves for the target: BSL code, forms, and other metadata. It is backed by LTK refactoring, so the same change set EDT computes for the IDE rename is what gets applied. The object's identity is its programmatic Name (not its synonym), and only newName is renamed (for a FORM element EDT additionally refreshes the derived title - see below).
+Renames one metadata object, one of its child members, one predefined item, or one managed-form element, and cascades the rename to every reference EDT resolves for the target: BSL code, forms, and other metadata. It is backed by LTK refactoring, so the same change set EDT computes for the IDE rename is what gets applied. The object's identity is its programmatic Name (not its synonym), and only newName is renamed (for a FORM element EDT additionally refreshes the derived title - see below).
 
 ## Think twice
 This is a CASCADING, hard-to-reverse refactoring: a wrong target or newName can mass-edit BSL, forms and metadata across the whole configuration. Always preview first, run it on a configuration you can revert (version control), and do not execute without an explicit request. After execute, verify with get_project_errors.
@@ -54,6 +54,9 @@ Shapes this branch refuses, each with its own error:
 The preview is rendered by the same code minus the two mdclass-only inputs: the supplemental full-text exact-match scan does not run for a form target, so `debugExactMatches` is 0 and every listed change point comes from EDT's own form refactoring. That is not a cold index - there is nothing missing.
 
 A form OBJECT is not a rename target: `Catalog.X.Form.ItemForm` resolves to nothing here. (`CommonForm.Name` is a top-level metadata object and renames through the ordinary top-object path.)
+
+## Predefined items
+A predefined item is addressed as `Catalog.X.Predefined.Item` (also `ChartOfCharacteristicTypes`, `ChartOfAccounts`, `ChartOfCalculationTypes`; the Russian kind token is `Предопределенные`) and renamed through EDT's own predefined-item refactoring, with the same preview, indices, contentHash lock and confirm as any other target. The item keeps its UUID, so the infobase data stays linked to it. The cascade rewrites the references EDT resolves, such as `Catalogs.X.Item` and `PredefinedValue("Catalog.X.Item")` in code; query text held in a BSL string literal (`VALUE(Catalog.X.Item)`) comes as a text occurrence (see above). EDT also replaces the item's description when it still equals the old name. A newName already used by another predefined item of the owner (names are unique across its whole tree, ignoring case) or equal to the current name is refused before anything changes. To move the item to another parent, use modify_metadata with `parent`.
 
 ## Parameter details
 - projectName (required): EDT project name.

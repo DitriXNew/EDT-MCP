@@ -87,9 +87,9 @@ public class GetToolGuideToolReviewTest
             assertTrue(result.contains("(#parameters): "));
             if ("type".equals(query))
             {
-                String unrelated = GuideSections.parse(full).find("Predefined items").text();
+                String unrelated = GuideSections.parse(full).find("Reverting (no undo)").text();
                 assertFalse("Chosen unrelated section must not match", unrelated.toLowerCase(Locale.ROOT).contains(query));
-                assertFalse(result.contains("A PREDEFINED item is addressed through its owner's member FQN"));
+                assertFalse(result.contains("There is no automatic undo"));
             }
         }
     }

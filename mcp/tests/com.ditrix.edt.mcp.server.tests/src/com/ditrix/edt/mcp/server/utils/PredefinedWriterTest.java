@@ -37,9 +37,11 @@ import com._1c.g5.v8.dt.mcore.TypeItem;
 import com._1c.g5.v8.dt.metadata.mdclass.Catalog;
 import com._1c.g5.v8.dt.metadata.mdclass.CatalogCodeType;
 import com._1c.g5.v8.dt.metadata.mdclass.CatalogPredefinedItem;
+import com._1c.g5.v8.dt.metadata.mdclass.ChartOfCalculationTypes;
 import com._1c.g5.v8.dt.metadata.mdclass.ChartOfCharacteristicTypes;
 import com._1c.g5.v8.dt.metadata.mdclass.ChartOfCharacteristicTypesPredefinedItem;
 import com._1c.g5.v8.dt.metadata.mdclass.Document;
+import com._1c.g5.v8.dt.metadata.mdclass.HierarchyType;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 import com._1c.g5.v8.dt.metadata.mdclass.PredefinedItem;
 import com.google.gson.JsonArray;
@@ -321,15 +323,29 @@ public class PredefinedWriterTest
     }
 
     @Test
-    public void testParsePropertiesParentAllowedOnCreateRefusedOnModify()
+    public void testParsePropertiesParentIsANestingOnCreateAndAMoveOnModify()
     {
         PredefinedWriter.ItemProps createProps = parse(List.of(stringProp("parent", "Colors")), false); //$NON-NLS-1$ //$NON-NLS-2$
         assertEquals("Colors", createProps.parentName); //$NON-NLS-1$
+        assertFalse(createProps.parentSet);
+
+        PredefinedWriter.ItemProps moveProps = parse(List.of(stringProp("parent", " Colors ")), true); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(moveProps.parentSet);
+        assertEquals("Colors", moveProps.parentName); //$NON-NLS-1$
+
+        for (JsonObject toTop : List.of(prop("parent", null), prop("parent", JsonNull.INSTANCE), //$NON-NLS-1$ //$NON-NLS-2$
+            stringProp("parent", ""))) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            PredefinedWriter.ItemProps top = parse(List.of(toTop), true);
+            assertTrue(top.parentSet);
+            assertNull("an empty parent moves the item to the top level", top.parentName); //$NON-NLS-1$
+        }
 
         PredefinedWriter.ItemProps out = new PredefinedWriter.ItemProps();
-        String err = PredefinedWriter.parseProperties(List.of(stringProp("parent", "Colors")), true, out); //$NON-NLS-1$ //$NON-NLS-2$
-        assertNotNull("moving to a different parent must be refused on modify", err); //$NON-NLS-1$
-        assertTrue(err.contains("not yet supported")); //$NON-NLS-1$
+        String err = PredefinedWriter.parseProperties(List.of(numberProp("parent", 1)), true, out); //$NON-NLS-1$
+        assertNotNull("a non-string parent must be refused", err); //$NON-NLS-1$
+        assertTrue(err.contains("'parent' must be a JSON string")); //$NON-NLS-1$
+        assertFalse(out.parentSet);
     }
 
     @Test
@@ -339,12 +355,13 @@ public class PredefinedWriterTest
         String errCreate = PredefinedWriter.parseProperties(List.of(stringProp("name", "NewName")), false, //$NON-NLS-1$ //$NON-NLS-2$
             out);
         assertNotNull(errCreate);
-        assertTrue(errCreate.contains("Renaming a predefined item is not supported")); //$NON-NLS-1$
+        assertTrue(errCreate.contains("Rename it with rename_metadata_object")); //$NON-NLS-1$
 
         String errModify = PredefinedWriter.parseProperties(List.of(stringProp("name", "NewName")), true, //$NON-NLS-1$ //$NON-NLS-2$
             out);
         assertNotNull(errModify);
-        assertTrue(errModify.contains("Renaming a predefined item is not supported")); //$NON-NLS-1$
+        assertTrue(errModify.contains("Rename it with rename_metadata_object")); //$NON-NLS-1$
+        assertTrue(errModify.contains("keeps the item's UUID")); //$NON-NLS-1$
     }
 
     @Test
@@ -1818,5 +1835,170 @@ public class PredefinedWriterTest
         PredefinedWriter.inheritChartValueType(types, item);
 
         assertSame("an explicit valueType must win over the chart's type", explicit, item.getType()); //$NON-NLS-1$
+    }
+
+    // ---- move (modify 'parent', issue #983) ------------------------------------------------------
+
+    private static Catalog newFolderCatalog(String name)
+    {
+        Catalog catalog = newCatalog(name);
+        catalog.setHierarchical(true);
+        catalog.setHierarchyType(HierarchyType.HIERARCHY_FOLDERS_AND_ITEMS);
+        return catalog;
+    }
+
+    private static PredefinedItem add(EObject owner, String name, String parent, boolean folder)
+    {
+        PredefinedWriter.ItemProps props = new PredefinedWriter.ItemProps();
+        props.parentName = parent;
+        if (folder)
+        {
+            props.isFolder = Boolean.TRUE;
+            props.isFolderSet = true;
+        }
+        PredefinedWriter.WriteResult result = PredefinedWriter.create(owner, name, props, false);
+        assertFalse(result.error, result.isError());
+        return result.item;
+    }
+
+    private static PredefinedWriter.ItemProps moveTo(String parent)
+    {
+        PredefinedWriter.ItemProps props = new PredefinedWriter.ItemProps();
+        props.parentSet = true;
+        props.parentName = parent;
+        return props;
+    }
+
+    @Test
+    public void testMoveReContainsTheSameItemAndKeepsItsUuid()
+    {
+        Catalog catalog = newFolderCatalog("Colors"); //$NON-NLS-1$
+        PredefinedItem warm = add(catalog, "Warm", null, true); //$NON-NLS-1$
+        PredefinedItem cold = add(catalog, "Cold", null, true); //$NON-NLS-1$
+        PredefinedItem red = add(catalog, "Red", "Warm", true); //$NON-NLS-1$ //$NON-NLS-2$
+        PredefinedItem dark = add(catalog, "DarkRed", "Red", false); //$NON-NLS-1$ //$NON-NLS-2$
+        java.util.UUID id = red.getId();
+
+        PredefinedWriter.WriteResult moved = PredefinedWriter.modify(catalog, "Red", moveTo("Cold")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertFalse(moved.error, moved.isError());
+        assertSame("the same object is moved, not a copy", red, moved.item); //$NON-NLS-1$
+        assertEquals(id, red.getId());
+        assertSame(cold, red.eContainer());
+        assertSame("the subtree moves with it", red, dark.eContainer()); //$NON-NLS-1$
+        assertTrue(((CatalogPredefinedItem)warm).getContent().isEmpty());
+        assertEquals("under 'Cold'", PredefinedWriter.locationOf(red)); //$NON-NLS-1$
+
+        PredefinedWriter.WriteResult top = PredefinedWriter.modify(catalog, "Red", moveTo(null)); //$NON-NLS-1$
+        assertFalse(top.error, top.isError());
+        assertSame(catalog.getPredefined(), red.eContainer());
+        assertEquals(id, red.getId());
+        assertEquals("top level", PredefinedWriter.locationOf(red)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testMoveUnderTheCurrentParentKeepsTheOrder()
+    {
+        Catalog catalog = newFolderCatalog("Colors"); //$NON-NLS-1$
+        add(catalog, "Warm", null, true); //$NON-NLS-1$
+        PredefinedItem red = add(catalog, "Red", "Warm", false); //$NON-NLS-1$ //$NON-NLS-2$
+        PredefinedItem yellow = add(catalog, "Yellow", "Warm", false); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertFalse(PredefinedWriter.modify(catalog, "Red", moveTo("Warm")).isError()); //$NON-NLS-1$ //$NON-NLS-2$
+
+        CatalogPredefinedItem warm = (CatalogPredefinedItem)red.eContainer();
+        assertEquals(List.of(red, yellow), List.copyOf(warm.getContent()));
+    }
+
+    @Test
+    public void testMoveRefusesAnInvalidTargetBeforeChangingAnything()
+    {
+        Catalog catalog = newFolderCatalog("Colors"); //$NON-NLS-1$
+        PredefinedItem warm = add(catalog, "Warm", null, true); //$NON-NLS-1$
+        PredefinedItem red = add(catalog, "Red", "Warm", true); //$NON-NLS-1$ //$NON-NLS-2$
+        add(catalog, "DarkRed", "Red", true); //$NON-NLS-1$ //$NON-NLS-2$
+        add(catalog, "Plain", null, false); //$NON-NLS-1$
+        red.setDescription("Red"); //$NON-NLS-1$
+
+        PredefinedWriter.ItemProps props = moveTo("Plain"); //$NON-NLS-1$
+        props.description = "Changed"; //$NON-NLS-1$
+        props.descriptionSet = true;
+        PredefinedWriter.WriteResult notFolder = PredefinedWriter.modify(catalog, "Red", props); //$NON-NLS-1$
+        assertTrue(notFolder.isError());
+        assertTrue(notFolder.error, notFolder.error.contains("is not a folder")); //$NON-NLS-1$
+        assertEquals("a refused move changes no other property", "Red", red.getDescription()); //$NON-NLS-1$ //$NON-NLS-2$
+
+        for (String self : List.of("Red", "DarkRed")) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            PredefinedWriter.WriteResult cycle = PredefinedWriter.modify(catalog, "Red", moveTo(self)); //$NON-NLS-1$
+            assertTrue(cycle.isError());
+            assertTrue(cycle.error, cycle.error.contains("the item itself or one of its own descendants")); //$NON-NLS-1$
+        }
+
+        PredefinedWriter.WriteResult missing = PredefinedWriter.modify(catalog, "Red", moveTo("Nope")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(missing.isError());
+        assertTrue(missing.error, missing.error.contains("Parent predefined item not found: 'Nope'")); //$NON-NLS-1$
+        assertSame(warm, red.eContainer());
+    }
+
+    @Test
+    public void testMoveUnderAPlainItemIsAllowedInAHierarchyOfItems()
+    {
+        Catalog catalog = newCatalog("Units"); //$NON-NLS-1$
+        catalog.setHierarchical(true);
+        catalog.setHierarchyType(HierarchyType.HIERARCHY_OF_ITEMS);
+        PredefinedItem base = add(catalog, "Base", null, false); //$NON-NLS-1$
+        PredefinedItem piece = add(catalog, "Piece", null, false); //$NON-NLS-1$
+
+        PredefinedWriter.WriteResult moved = PredefinedWriter.modify(catalog, "Piece", moveTo("Base")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertFalse(moved.error, moved.isError());
+        assertSame(base, piece.eContainer());
+    }
+
+    @Test
+    public void testMoveRefusesOwnersEdtDoesNotMoveIn()
+    {
+        Catalog flat = newCatalog("Flat"); //$NON-NLS-1$
+        add(flat, "A", null, false); //$NON-NLS-1$
+        PredefinedWriter.WriteResult notHierarchical = PredefinedWriter.modify(flat, "A", moveTo(null)); //$NON-NLS-1$
+        assertTrue(notHierarchical.isError());
+        assertTrue(notHierarchical.error, notHierarchical.error.contains("is not hierarchical")); //$NON-NLS-1$
+
+        Catalog subordinate = newFolderCatalog("Contracts"); //$NON-NLS-1$
+        subordinate.getOwners().add(newCatalog("Partners")); //$NON-NLS-1$
+        add(subordinate, "Folder", null, true); //$NON-NLS-1$
+        add(subordinate, "Main", null, false); //$NON-NLS-1$
+        PredefinedWriter.WriteResult owned = PredefinedWriter.modify(subordinate, "Main", moveTo("Folder")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(owned.isError());
+        assertTrue(owned.error, owned.error.contains("subordinate catalog")); //$NON-NLS-1$
+
+        ChartOfCalculationTypes calc = MdClassFactory.eINSTANCE.createChartOfCalculationTypes();
+        calc.setName("Accruals"); //$NON-NLS-1$
+        add(calc, "Salary", null, false); //$NON-NLS-1$
+        PredefinedWriter.WriteResult flatList = PredefinedWriter.modify(calc, "Salary", moveTo(null)); //$NON-NLS-1$
+        assertTrue(flatList.isError());
+        assertTrue(flatList.error, flatList.error.contains("calculation types are a flat list")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testMoveKeepsTheWholeSubtreeWithinTheLevelLimit()
+    {
+        Catalog catalog = newFolderCatalog("Goods"); //$NON-NLS-1$
+        catalog.setLimitLevelCount(true);
+        catalog.setLevelCount(2);
+        add(catalog, "A", null, true); //$NON-NLS-1$
+        add(catalog, "B", "A", true); //$NON-NLS-1$ //$NON-NLS-2$
+        PredefinedItem c = add(catalog, "C", null, true); //$NON-NLS-1$
+        add(catalog, "D", "C", true); //$NON-NLS-1$ //$NON-NLS-2$
+        add(catalog, "Item", null, false); //$NON-NLS-1$
+
+        PredefinedWriter.WriteResult tooDeep = PredefinedWriter.modify(catalog, "C", moveTo("A")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("folder D would land at level 3 of 2", tooDeep.isError()); //$NON-NLS-1$
+        assertTrue(tooDeep.error, tooDeep.error.contains("folder 'D' at level 3, past the limit of 2")); //$NON-NLS-1$
+        assertSame(catalog.getPredefined(), c.eContainer());
+
+        PredefinedWriter.WriteResult itemFits = PredefinedWriter.modify(catalog, "Item", moveTo("B")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("an item may sit one level below the deepest folder", itemFits.isError()); //$NON-NLS-1$
     }
 }

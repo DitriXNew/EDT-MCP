@@ -6,7 +6,7 @@ delete_metadata / get_metadata_details on a dedicated FQN grammar
 
 OwnerType in {Catalog, ChartOfCharacteristicTypes}. This is a deliberately CROSS-TOOL
 file (the documented one-file-per-tool exception, like test_extension_coverage.py /
-test_dcs.py): the feature spans four existing tools, each of which
+test_dcs.py): the feature spans five existing tools (rename_metadata_object since #983), each of which
 already has its own primary per-tool file — this file's tool= tags match those real,
 already-covered tool names, so it adds DEPTH for this one feature rather than
 duplicating each tool's general contract tests.
@@ -38,10 +38,15 @@ after each test.
 """
 
 import os
+import re
 import time
 
 from harness import (
     call,
+    rename_call,
+    read_disk,
+    poll_disk_contains,
+    settle_or_fail,
     assert_ok,
     assert_error,
     assert_error_quality,
@@ -343,12 +348,12 @@ def test_rename_via_modify_is_refused():
         "fqn": owner + ".Predefined.Blue",
         "properties": [{"name": "name", "value": "Navy"}],
     })
-    err = assert_error(r, "renaming a predefined item must be refused")
-    assert_error_quality(err, suggests=["not supported"])
+    err = assert_error(r, "renaming a predefined item through modify must be refused")
+    assert_error_quality(err, suggests=["rename_metadata_object"])
 
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")
-def test_parent_move_via_modify_is_refused():
+def test_parent_move_on_a_flat_catalog_is_refused():
     catalog = "E2EPredefMove"
     owner = _seed_catalog(catalog)
     call("create_metadata", {
@@ -356,14 +361,181 @@ def test_parent_move_via_modify_is_refused():
         "properties": [{"name": "isFolder", "value": True}],
     })
     call("create_metadata", {"projectName": PROJECT, "fqn": owner + ".Predefined.Blue"})
+    snap = tree_snapshot()
 
     r = call("modify_metadata", {
         "projectName": PROJECT,
         "fqn": owner + ".Predefined.Blue",
         "properties": [{"name": "parent", "value": "Group"}],
     })
-    err = assert_error(r, "moving a predefined item via modify must be refused")
-    assert_error_quality(err, suggests=["not yet supported"])
+    err = assert_error(r, "a move on a catalog that is not hierarchical must be refused")
+    assert_error_quality(err, names=["Catalog." + catalog], suggests=["is not hierarchical"])
+    assert_tree_unchanged(snap, "a refused move must not mutate the project")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Issue #983: moving (modify_metadata 'parent') and renaming (rename_metadata_object) an
+# existing predefined item keep its UUID - the id attribute of its element in the owner's .mdo.
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _item_uuid(catalog_name, item_name, timeout=15):
+    """The id of predefined item item_name in the owner's .mdo, polled until it is on disk."""
+    rel = os.path.join("src", "Catalogs", catalog_name, catalog_name + ".mdo")
+    pattern = re.compile(r'<(?:items|content) id="([0-9a-f-]{36})">\s*<name>' + re.escape(item_name) + "</name>")
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            with open(os.path.join(PROJECT_DIR, rel), encoding="utf-8") as f:
+                m = pattern.search(f.read())
+            if m:
+                return m.group(1)
+        except OSError:
+            pass
+        time.sleep(0.5)
+    _fail("predefined item %r did not appear with an id in %s within %ds" % (item_name, rel, timeout))
+
+
+def _item_parent(owner, item_name):
+    details = call("get_metadata_details",
+                   {"projectName": PROJECT, "objectFqns": [owner + ".Predefined." + item_name]})
+    assert_ok(details, "get_metadata_details on " + item_name)
+    m = re.search(r"\| Parent \| ([^|]*) \|", details.text)
+    assert m, "the single-item view must have a Parent row: %r" % details.text[:600]
+    return m.group(1).strip()
+
+
+def _seed_hierarchical_catalog(name):
+    owner = _seed_catalog(name)
+    r = call("modify_metadata", {"projectName": PROJECT, "fqn": owner,
+                                 "properties": [{"name": "hierarchical", "value": True}]})
+    assert_ok(r, "make " + owner + " hierarchical")
+    for folder in ("Warm", "Cold"):
+        rf = call("create_metadata", {"projectName": PROJECT, "fqn": owner + ".Predefined." + folder,
+                                      "properties": [{"name": "isFolder", "value": True}]})
+        assert_ok(rf, "create folder " + folder)
+    return owner
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_move_predefined_item_keeps_its_uuid():
+    catalog = "E2EPredefMoveUuid"
+    owner = _seed_hierarchical_catalog(catalog)
+    rc = call("create_metadata", {"projectName": PROJECT, "fqn": owner + ".Predefined.Red",
+                                  "properties": [{"name": "parent", "value": "Warm"}]})
+    assert_ok(rc, "create Red under Warm")
+    uuid = _item_uuid(catalog, "Red")
+
+    moved = call("modify_metadata", {"projectName": PROJECT, "fqn": owner + ".Predefined.Red",
+                                     "properties": [{"name": "parent", "value": "Cold"}]})
+    assert_ok(moved, "move Red under Cold")
+    assert moved.structured.get("destination") == "under 'Cold'", moved.structured
+    assert "parent" in (moved.structured.get("applied") or []), moved.structured
+    assert _item_parent(owner, "Red") == "Cold", "the item must now sit under Cold"
+    poll_disk_contains(os.path.join("src", "Catalogs", catalog, catalog + ".mdo"), uuid,
+                       ctx="the moved item keeps its id on disk")
+    assert _item_uuid(catalog, "Red") == uuid, "a move must keep the item's UUID"
+
+    # An omitted value moves the item to the top level.
+    top = call("modify_metadata", {"projectName": PROJECT, "fqn": owner + ".Predefined.Red",
+                                   "properties": [{"name": "parent"}]})
+    assert_ok(top, "move Red to the top level")
+    assert top.structured.get("destination") == "top level", top.structured
+    assert _item_parent(owner, "Red") == "-", "the item must now be at the top level"
+    assert _item_uuid(catalog, "Red") == uuid, "a move to the top level must keep the item's UUID"
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_move_predefined_item_to_an_invalid_parent_is_refused_before_writing():
+    catalog = "E2EPredefMoveBad"
+    owner = _seed_hierarchical_catalog(catalog)
+    rc = call("create_metadata", {"projectName": PROJECT, "fqn": owner + ".Predefined.Red",
+                                  "properties": [{"name": "parent", "value": "Warm"},
+                                                 {"name": "isFolder", "value": True}]})
+    assert_ok(rc, "create folder Red under Warm")
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": owner + ".Predefined.Plain"}),
+              "create the plain item Plain")
+    wait_for_project_ready()
+    snap = tree_snapshot()
+
+    cases = (
+        ("Plain", ["is not a folder"]),
+        ("Nope", ["Parent predefined item not found: 'Nope'"]),
+    )
+    for parent, suggests in cases:
+        r = call("modify_metadata", {"projectName": PROJECT, "fqn": owner + ".Predefined.Red",
+                                     "properties": [{"name": "parent", "value": parent},
+                                                    {"name": "description", "value": "Changed"}]})
+        err = assert_error(r, "moving under %r must be refused" % parent)
+        assert_error_quality(err, names=[parent], suggests=suggests + ["Nothing was changed"])
+    # The folder Warm holds Red, so moving Warm under Red's child is a cycle.
+    rw = call("modify_metadata", {"projectName": PROJECT, "fqn": owner + ".Predefined.Warm",
+                                  "properties": [{"name": "parent", "value": "Red"}]})
+    err = assert_error(rw, "moving a folder under its own descendant must be refused")
+    assert_error_quality(err, names=["Warm", "Red"], suggests=["one of its own descendants"])
+    assert_tree_unchanged(snap, "a refused move must not mutate the project, nor any property in the same call")
+
+
+@e2e_test(tool="rename_metadata_object", kind="write-metadata")
+def test_rename_predefined_item_keeps_its_uuid_and_rewrites_bsl_references():
+    catalog = "E2EPredefRenameUuid"
+    owner = _seed_catalog(catalog)
+    module_fqn = "CommonModule.E2EPredefRenameModule"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": owner + ".Predefined.Anchor"}),
+              "seed the predefined item Anchor")
+    uuid = _item_uuid(catalog, "Anchor")
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": module_fqn,
+                                       "commonModuleKind": "ServerCall"}), "seed the module")
+    wait_for_project_ready()
+    source = ("Function GetAnchor() Export\n"
+              "\tA = Catalogs.%s.Anchor;\n"
+              "\tB = PredefinedValue(\"Catalog.%s.Anchor\");\n"
+              "\tReturn A;\n"
+              "EndFunction\n" % (catalog, catalog))
+    assert_ok(call("write_module_source", {"projectName": PROJECT, "objectName": module_fqn,
+                                           "moduleType": "Module", "mode": "replace", "overwrite": True,
+                                           "source": source}), "write the referencing BSL")
+    settle_or_fail("the predefined-item rename (it needs the module indexed)")
+
+    item_fqn = owner + ".Predefined.Anchor"
+    deadline = time.time() + 120
+    preview = None
+    while time.time() < deadline:
+        preview = rename_call({"projectName": PROJECT, "objectFqn": item_fqn, "newName": "Pivot"})
+        assert_ok(preview, "preview the predefined-item rename")
+        if "referenceChanges: 2" in preview.text:
+            break
+        time.sleep(3)
+    assert_contains(preview.text, "referenceChanges: 2",
+                    "the preview must list both BSL references once the module is indexed")
+    assert_contains(preview.text, "CommonModule.E2EPredefRenameModule", "the preview names the module")
+
+    done = rename_call({"projectName": PROJECT, "objectFqn": item_fqn, "newName": "Pivot", "confirm": True})
+    assert_ok(done, "confirm the predefined-item rename")
+    assert_contains(done.text, "action: executed", "the rename must execute")
+
+    module_rel = os.path.join("src", "CommonModules", "E2EPredefRenameModule", "Module.bsl")
+    poll_disk_contains(module_rel, "Catalogs.%s.Pivot" % catalog, ctx="the manager reference is rewritten")
+    text = read_disk(module_rel)
+    assert_contains(text, 'PredefinedValue("Catalog.%s.Pivot")' % catalog, "the PredefinedValue path is rewritten")
+    assert_not_contains(text, ".Anchor", "no reference keeps the old name")
+    assert _item_uuid(catalog, "Pivot") == uuid, "the renamed item must keep its UUID"
+    old = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [item_fqn]})
+    assert_not_contains(old.text, "## Predefined item:", "the old FQN no longer resolves")
+
+
+@e2e_test(tool="rename_metadata_object", kind="write-metadata")
+def test_rename_predefined_item_to_a_taken_name_is_refused():
+    catalog = "E2EPredefRenameClash"
+    owner = _seed_hierarchical_catalog(catalog)
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": owner + ".Predefined.Red",
+                                       "properties": [{"name": "parent", "value": "Warm"}]}), "create Red")
+    snap = tree_snapshot()
+
+    r = rename_call({"projectName": PROJECT, "objectFqn": owner + ".Predefined.Red",
+                     "newName": "COLD", "confirm": True})
+    err = assert_error(r, "a name another item of the owner has must be refused")
+    assert_error_quality(err, names=["Cold", owner], suggests=["already exists", "Nothing was renamed"])
+    assert_tree_unchanged(snap, "a refused rename must not mutate the project")
 
 
 @e2e_test(tool="delete_metadata", kind="write-metadata")

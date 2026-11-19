@@ -277,7 +277,7 @@ def test_broad_modify_metadata_query_caps_lines_with_an_exact_remainder():
         assert_contains(line, "(#", "each snippet identifies its enclosing anchor")
     if not r.text.endswith("... (%s more)\n" % (count - 20)):
         _fail("remainder must equal the independently counted total minus 20")
-    assert_not_contains(r.text, "A PREDEFINED item is addressed through its owner's member FQN",
+    assert_not_contains(r.text, "There is no automatic undo",
                         "query excludes a body sentence from a non-matching section")
     assert_no_diff("broad guide search must not change the fixture")
 

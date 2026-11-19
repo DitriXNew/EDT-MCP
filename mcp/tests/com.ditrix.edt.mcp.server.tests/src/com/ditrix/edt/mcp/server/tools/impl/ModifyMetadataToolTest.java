@@ -2109,10 +2109,11 @@ public class ModifyMetadataToolTest
     public void testDescriptionMentionsPredefinedItems()
     {
         String desc = new ModifyMetadataTool().getDescription();
-        assertTrue("description should mention predefined items", new ModifyMetadataTool().getGuide().contains("PREDEFINED")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the guide documents predefined items", //$NON-NLS-1$
+            new ModifyMetadataTool().getGuide().contains("## Predefined items (")); //$NON-NLS-1$
     }
 
-    /** 'name' is always refused (identity is the FQN leaf); 'parent' (a move) is refused on modify only. */
+    /** 'name' is always refused (the rename tool renames); 'parent' on modify is a move. */
     @Test
     public void testPredefinedItemPropertiesGuardRules()
     {
@@ -2130,8 +2131,9 @@ public class ModifyMetadataToolTest
         parentProp.addProperty("value", "Folder"); //$NON-NLS-1$ //$NON-NLS-2$
         String parentErr =
             PredefinedWriter.parseProperties(java.util.List.of(parentProp), true, out);
-        assertNotNull("moving to a different parent must be refused on modify", parentErr); //$NON-NLS-1$
-        assertTrue(parentErr.contains("not yet supported")); //$NON-NLS-1$
+        assertNull("'parent' on modify is a move", parentErr); //$NON-NLS-1$
+        assertTrue(out.parentSet);
+        assertEquals("Folder", out.parentName); //$NON-NLS-1$
     }
 
     // ==================== The form-retype authorization point (issue #295 review) ==================
