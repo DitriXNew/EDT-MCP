@@ -136,7 +136,7 @@ public final class IpcListener implements AutoCloseable
     }
 
     private static void closePeer(JsonFrames.Socket peer)
-    { try { peer.close(); } catch (IOException ignored) { } }
+    { try { peer.close(); } catch (IOException ignored) { /* Best effort: the peer is being dropped either way. */ } }
 
     @Override public void close() throws IOException
     {

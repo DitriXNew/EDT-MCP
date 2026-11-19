@@ -2507,7 +2507,7 @@ public class GetProjectErrorsTool implements IMcpTool
                 {
                     continue;
                 }
-                int index = context.total[0]++;
+                int index = context.matchCount[0]++;
                 if (index < context.offset || errors.size() >= context.limit)
                 {
                     continue;
@@ -2645,7 +2645,7 @@ public class GetProjectErrorsTool implements IMcpTool
         /** How many matching problems precede the page ({@code offset}). */
         final int offset;
         /** Out-counter: how many problems match the filters, over every page. */
-        final int[] total = new int[1];
+        final int[] matchCount = new int[1];
 
         CollectContext(MarkerSeverity severityFilter, String checkId, Set<String> objects,
             ICheckRepository checkRepository, IFixRepository fixRepository, int limit,
@@ -2691,7 +2691,7 @@ public class GetProjectErrorsTool implements IMcpTool
         /** How many problems matched the filters in the last {@link #collectErrors} run, over every page. */
         int total()
         {
-            return total[0];
+            return matchCount[0];
         }
     }
 

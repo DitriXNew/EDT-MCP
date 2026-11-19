@@ -258,7 +258,7 @@ public final class MetadataClonePlan
     }
 
     /** Kind-specific consequences of a native copy the caller must act on; empty when there are none. */
-    public static List<String> kindWarnings(MdObject source)
+    public static List<String> kindWarningsFor(MdObject source)
     {
         List<String> warnings = new ArrayList<>();
         if (source instanceof ScheduledJob && ((ScheduledJob)source).isUse())
@@ -485,7 +485,7 @@ public final class MetadataClonePlan
         grouped.sort(java.util.Comparator.comparing(item -> item.getAsJsonObject().get("kind").getAsString()));
         JsonArray incoming = new JsonArray();
         grouped.forEach(incoming::add);
-        List<String> warnings = new ArrayList<>(kindWarnings(source));
+        List<String> warnings = new ArrayList<>(kindWarningsFor(source));
         String prefix = !extensionProject ? null
             : prefixWarning(destination == null ? config : destination.configuration, source, newName);
         if (prefix != null)

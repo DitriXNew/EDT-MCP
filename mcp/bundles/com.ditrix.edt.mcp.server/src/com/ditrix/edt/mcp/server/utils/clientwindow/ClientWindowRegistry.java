@@ -58,8 +58,8 @@ public final class ClientWindowRegistry
                     }
                 }
             }
-            @Override public void launchesChanged(ILaunch[] launches) { }
-            @Override public void launchesTerminated(ILaunch[] launches) { }
+            @Override public void launchesChanged(ILaunch[] launches) { /* Only a newly added launch is adopted. */ }
+            @Override public void launchesTerminated(ILaunch[] launches) { /* The entry stays until removal, so describe() reports "terminated". */ }
         };
         manager.addLaunchListener(listener);
         listening = true;

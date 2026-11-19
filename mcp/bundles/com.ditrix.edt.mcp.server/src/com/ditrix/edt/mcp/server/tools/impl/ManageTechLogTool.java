@@ -168,14 +168,21 @@ public class ManageTechLogTool implements IMcpTool
                 }
             }
         }
-        catch (Exception e) { if (created) Files.deleteIfExists(output); throw e; }
+        catch (Exception e)
+        {
+            if (created) { Files.deleteIfExists(output); }
+            throw e;
+        }
         return "CSV exported with UTF-8 BOM to " + output + ". Rows: " + (kind.equals("events") ? index.events.size() : index.groups.size()) + ".";
     }
 
     private static void row(BufferedWriter writer, String... cells) throws java.io.IOException
     {
         for (int i = 0; i < cells.length; i++)
-        { if (i > 0) writer.write(','); writer.write('"'); writer.write(cells[i].replace("\"", "\"\"")); writer.write('"'); }
+        {
+            if (i > 0) { writer.write(','); }
+            writer.write('"'); writer.write(cells[i].replace("\"", "\"\"")); writer.write('"');
+        }
         writer.write("\r\n");
     }
     private static String str(String value, String fallback)

@@ -536,8 +536,19 @@ public final class TechLogReader
 
         @Override public void close() throws IOException
         {
-            try { if (plain != null) plain.close(); if (input != null) input.close(); }
-            finally { if (zip != null) zip.close(); plain = null; input = null; zip = null; source = null; }
+            try
+            {
+                if (plain != null) { plain.close(); }
+                if (input != null) { input.close(); }
+            }
+            finally
+            {
+                if (zip != null) { zip.close(); }
+                plain = null;
+                input = null;
+                zip = null;
+                source = null;
+            }
         }
     }
 }
