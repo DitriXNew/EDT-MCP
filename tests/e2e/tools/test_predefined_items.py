@@ -531,8 +531,8 @@ def test_rename_predefined_item_to_a_taken_name_is_refused():
                                        "properties": [{"name": "parent", "value": "Warm"}]}), "create Red")
     snap = tree_snapshot()
 
-    r = call("rename_metadata_object", {"projectName": PROJECT, "objectFqn": owner + ".Predefined.Red",
-                                        "newName": "COLD", "confirm": True})
+    r = rename_call({"projectName": PROJECT, "objectFqn": owner + ".Predefined.Red",
+                     "newName": "COLD", "confirm": True})
     err = assert_error(r, "a name another item of the owner has must be refused")
     assert_error_quality(err, names=["Cold", owner], suggests=["already exists", "Nothing was renamed"])
     assert_tree_unchanged(snap, "a refused rename must not mutate the project")
