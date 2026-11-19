@@ -69,6 +69,13 @@ public class CloneMetadataObjectTool extends AbstractMetadataWriteTool
     /** The optional destination project of a cross-project clone (issue #933 PR-3). */
     static final String TARGET_PROJECT_NAME = "targetProjectName";
 
+    /**
+     * The closing run of sentence punctuation. The lookbehind lets a match start only where a run
+     * begins, so a long run that does not end the text is not retried from each of its characters.
+     */
+    private static final java.util.regex.Pattern TRAILING_PUNCTUATION =
+        java.util.regex.Pattern.compile("(?<![.!?])[.!?]+$"); //$NON-NLS-1$
+
     @Override
     public String getName()
     {
@@ -853,7 +860,7 @@ public class CloneMetadataObjectTool extends AbstractMetadataWriteTool
         {
             return ToolResult.error("Cannot clone '" + fqn + "': " + refusal.getMessage()).toJson();
         }
-        return ToolResult.error("Cannot preview '" + fqn + "': " + unwrapCauseMessage(e).replaceFirst("[.!?]+$", "")
+        return ToolResult.error("Cannot preview '" + fqn + "': " + withoutTrailingPunctuation(unwrapCauseMessage(e))
             + ". Save/refresh the source or use resync_to_disk, then preview again.").toJson();
     }
 
@@ -926,6 +933,12 @@ public class CloneMetadataObjectTool extends AbstractMetadataWriteTool
             + "confirm again, with the intended newName and transfer selection, then use its contentHash.").toJson();
     }
 
+    /** The text without its closing run of {@code .}, {@code !} and {@code ?}, so a sentence can follow it. */
+    static String withoutTrailingPunctuation(String text)
+    {
+        return TRAILING_PUNCTUATION.matcher(text).replaceFirst(""); //$NON-NLS-1$
+    }
+
     static String partial(String fqn, String reason)
     {
         return partial(fqn, reason, null);
@@ -935,7 +948,7 @@ public class CloneMetadataObjectTool extends AbstractMetadataWriteTool
     static String partial(String fqn, String reason, String warning)
     {
         ToolResult result = ToolResult.error("Clone apply did not complete verification: "
-            + reason.replaceFirst("[.!?]+$", "") + ". "
+            + withoutTrailingPunctuation(reason) + ". "
             + (fqn == null ? "No created FQN was established; inspect get_metadata_objects and project files. "
                 : "Inspect clone '" + fqn + "' with get_metadata_details and its project files. ")
             + "External files may have been written even if BM rolled back. Nothing was cleaned up automatically. "

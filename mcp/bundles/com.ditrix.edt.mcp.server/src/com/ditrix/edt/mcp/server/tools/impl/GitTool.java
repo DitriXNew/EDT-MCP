@@ -2345,7 +2345,7 @@ public class GitTool implements IMcpTool
                     + "if it belongs to the project."); //$NON-NLS-1$
             }
             if (scanUrls && scheme.find(0)
-                && (urlCandidate.indexOf('?') > 0 || urlCandidate.indexOf('#') > 0))
+                && (urlCandidate.indexOf('?') >= 0 || urlCandidate.indexOf('#') >= 0))
             {
                 throw new CommandRejectedException("A remote URL with a query string or fragment is " //$NON-NLS-1$
                     + "not accepted: a credential is commonly passed that way " //$NON-NLS-1$

@@ -55,7 +55,8 @@ public class StdioHostApplication implements IApplication
         try
         {
             Duration idle = idleDuration(System.getProperty("edt.mcp.headlessIdleMinutes"));
-            if (!(locked = runtime.lockWorkspace())) {
+            locked = runtime.lockWorkspace();
+            if (!locked) {
                 throw new IllegalStateException("Workspace is unavailable or in use; close its existing EDT host before retrying");
             }
             initialized = true;

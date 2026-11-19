@@ -228,9 +228,9 @@ public class MetadataCloneKindsTest
         ScheduledJob job = MdClassFactory.eINSTANCE.createScheduledJob();
         job.setName("Nightly");
         job.setMethodName("CommonModule.Calc.Add");
-        assertTrue(MetadataClonePlan.kindWarnings(job).isEmpty());
+        assertTrue(MetadataClonePlan.kindWarningsFor(job).isEmpty());
         job.setUse(true);
-        List<String> warnings = MetadataClonePlan.kindWarnings(job);
+        List<String> warnings = MetadataClonePlan.kindWarningsFor(job);
         assertEquals(1, warnings.size());
         String warning = warnings.get(0);
         assertTrue(warning, warning.contains("use=true"));
@@ -244,9 +244,9 @@ public class MetadataCloneKindsTest
     {
         InformationRegister register = MdClassFactory.eINSTANCE.createInformationRegister();
         register.setName("Prices");
-        assertTrue(MetadataClonePlan.kindWarnings(register).isEmpty());
+        assertTrue(MetadataClonePlan.kindWarningsFor(register).isEmpty());
         register.setWriteMode(RegisterWriteMode.RECORDER_SUBORDINATE);
-        List<String> warnings = MetadataClonePlan.kindWarnings(register);
+        List<String> warnings = MetadataClonePlan.kindWarningsFor(register);
         assertEquals(1, warnings.size());
         String warning = warnings.get(0);
         assertTrue(warning, warning.contains("RecorderSubordinate"));
@@ -261,7 +261,7 @@ public class MetadataCloneKindsTest
             MdClassPackage.Literals.ENUM, MdClassPackage.Literals.ROLE, MdClassPackage.Literals.COMMON_MODULE))
         {
             assertTrue(type.getName(),
-                MetadataClonePlan.kindWarnings((MdObject)MdClassFactory.eINSTANCE.create(type)).isEmpty());
+                MetadataClonePlan.kindWarningsFor((MdObject)MdClassFactory.eINSTANCE.create(type)).isEmpty());
         }
     }
 

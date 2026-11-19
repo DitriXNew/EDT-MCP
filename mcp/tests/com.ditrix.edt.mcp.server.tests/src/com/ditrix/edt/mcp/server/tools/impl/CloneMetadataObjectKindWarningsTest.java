@@ -48,7 +48,7 @@ public class CloneMetadataObjectKindWarningsTest
 
         MetadataClonePlan plan = MetadataClonePlan.capture(mock(IProject.class), mock(IBmModel.class), config, job,
             "NightlyCopy", List.of(), fs, false);
-        assertEquals(MetadataClonePlan.kindWarnings(job), plan.kindWarnings);
+        assertEquals(MetadataClonePlan.kindWarningsFor(job), plan.kindWarnings);
         String warning = CloneMetadataObjectTool.withKindWarnings("Base warning.", plan);
         assertTrue(warning, warning.startsWith("Base warning. "));
         assertTrue(warning, warning.contains("both jobs will run the same method"));

@@ -231,7 +231,7 @@ public final class TechLogAnalysis
                 long memory = number(p, "MemoryPeak");
                 if (memory > 0) add(index, event, "memory-peaks", get(p, "Context"), 40, memory);
             }
-            default -> { }
+            default -> { /* Every other event feeds only the shared DB and lock checks below. */ }
         }
         String statement = name.equals("SDBL") && !get(p, "Sdbl").isBlank() ? get(p, "Sdbl") : get(p, "Sql");
         if (DB.contains(name) && !statement.isBlank())
@@ -378,7 +378,7 @@ public final class TechLogAnalysis
 
     public record Chain(List<Event> events, String completeness) { }
 
-    public static Chain chain(Index index, String occurrenceId) throws IOException
+    public static Chain chain(Index index, String occurrenceId)
     {
         Event selected = index.events.stream().filter(e -> e.id().equals(occurrenceId)).findFirst()
             .orElseThrow(() -> new IllegalArgumentException("Unknown occurrenceId '" + occurrenceId + "'. Use details or events first."));

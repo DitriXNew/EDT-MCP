@@ -279,7 +279,6 @@ public class InfobaseSessionsTool implements IMcpTool
 
     /** Resolves the explicit application or the project's default application. */
     private static ResolvedApplication resolveApplication(String projectName, String applicationId)
-        throws Exception
     {
         ApplicationSupport.ManagerResult managerResult = ApplicationSupport.resolveManager(projectName);
         if (!managerResult.ok())

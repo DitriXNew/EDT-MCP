@@ -22,9 +22,9 @@ public final class GuideSections
 {
     private static final int MAX_QUERY_HITS = 20;
     private static final int MAX_SNIPPET_CHARS = 200;
-    private static final Pattern FENCE = Pattern.compile("^ {0,3}(`{3,}|~{3,})(.*)$"); //$NON-NLS-1$
+    private static final Pattern FENCE = Pattern.compile("^ {0,3}(`{3,}+|~{3,}+)(.*)$"); //$NON-NLS-1$
     private static final Pattern LIST_MARKER = Pattern.compile("^ {0,3}(?:[-+*]|\\d{1,9}[.)]) {1,4}(?=\\S|$)"); //$NON-NLS-1$
-    private static final Pattern HEADING = Pattern.compile("^ {0,3}(#{1,6})(?:[\\t ]+(.*)|[\\t ]*)$"); //$NON-NLS-1$
+    private static final Pattern HEADING = Pattern.compile("^ {0,3}(#{1,6})(?:[\\t ]++(.*)|[\\t ]*+)$"); //$NON-NLS-1$
     private static final Pattern CLOSING_HASHES = Pattern.compile("(?:^|[\\t ]+)#+[\\t ]*$"); //$NON-NLS-1$
     private static final Pattern SLUG_PUNCTUATION = Pattern.compile("[^\\p{L}\\p{N}\\p{M}_\\-\\s]"); //$NON-NLS-1$
     private static final Pattern SLUG_WHITESPACE = Pattern.compile("\\s"); //$NON-NLS-1$

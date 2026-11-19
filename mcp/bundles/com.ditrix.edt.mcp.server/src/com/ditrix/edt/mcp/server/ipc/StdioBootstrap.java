@@ -246,9 +246,9 @@ public final class StdioBootstrap implements AutoCloseable
         if (!known) { send(error(id, -32601, "Unknown tool; use tools/list")); return; }
         String refusal = status;
         try { refusal = prepareConnection().get(ATTACH_WAIT_MS, TimeUnit.MILLISECONDS); }
-        catch (java.util.concurrent.TimeoutException e) { /* No invocation is retained by preparation. */ }
+        catch (java.util.concurrent.TimeoutException | java.util.concurrent.ExecutionException e)
+        { /* No invocation is retained by preparation, and preparation sets the actionable refusal. */ }
         catch (InterruptedException e) { Thread.currentThread().interrupt(); }
-        catch (java.util.concurrent.ExecutionException e) { /* Preparation sets the actionable refusal. */ }
         current = connection.get();
         if (current != null) { forward(request, id, current); }
         else
@@ -323,7 +323,7 @@ public final class StdioBootstrap implements AutoCloseable
             // A wedged listener must not hang the client's bootstrap or leak attach workers.
             var timeout = CompletableFuture.delayedExecutor(ATTACH_WAIT_MS, TimeUnit.MILLISECONDS);
             AtomicBoolean ready = new AtomicBoolean();
-            timeout.execute(() -> { if (!ready.get()) { try { socket.close(); } catch (IOException ignored) { } } });
+            timeout.execute(() -> { if (!ready.get()) { try { socket.close(); } catch (IOException ignored) { /* Best effort: the attach path reports the failure. */ } } });
             try
             {
                 // Connect on the channel before constructing any stream wrapper.
@@ -384,7 +384,7 @@ public final class StdioBootstrap implements AutoCloseable
         {
             status = "EDT disconnected. Retry a read to reconnect. This call has not executed.";
         }
-        try { socket.close(); } catch (IOException ignored) { }
+        try { socket.close(); } catch (IOException ignored) { /* The socket is being discarded either way. */ }
         pending.forEach((key, call) -> {
             if (call.owner() == socket && pending.remove(key, call))
             {
@@ -394,7 +394,7 @@ public final class StdioBootstrap implements AutoCloseable
                         + "Read back the state before deciding whether to retry. The bootstrap has not replayed the call.";
                     send(call.toolCall() ? toolError(call.id(), message) : error(call.id(), -32002, "EDT disconnected; reconnect and retry this request."));
                 }
-                catch (IOException ignored) { }
+                catch (IOException ignored) { /* The client channel is gone; no one is left to tell. */ }
             }
         });
     }

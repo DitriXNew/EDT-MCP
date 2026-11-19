@@ -789,8 +789,13 @@ public final class BslModuleUtils
      * {@code EndProcedure; ModuleValue = Call();} is valid code whose terminator does NOT
      * end the line - and every span here is measured in whole lines, so without this the
      * statement would ride along inside the method span.
+     * <p>
+     * The blank runs are possessive and the second one belongs to the separator: two adjacent
+     * optional runs split one run of blanks every possible way, which took seconds on a long
+     * blank tail ending in a stray character.
+     * </p>
      */
-    private static final Pattern METHOD_END_TAIL_PATTERN = Pattern.compile("^\\s*;?\\s*(?://.*)?$"); //$NON-NLS-1$
+    private static final Pattern METHOD_END_TAIL_PATTERN = Pattern.compile("^\\s*+(?:;\\s*+)?(?://.*)?$"); //$NON-NLS-1$
 
     /**
      * Where a real method DECLARATION begins at or after {@code from}, or -1.
