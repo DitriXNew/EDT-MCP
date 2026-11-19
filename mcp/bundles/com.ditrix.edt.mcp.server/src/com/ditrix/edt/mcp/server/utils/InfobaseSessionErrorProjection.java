@@ -28,9 +28,9 @@ public final class InfobaseSessionErrorProjection
     private static final Pattern SESSION_ID = Pattern.compile(
         "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-" //$NON-NLS-1$
             + "[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"); //$NON-NLS-1$
-    private static final Pattern SESSION_NUMBER = Pattern.compile("[0-9]+"); //$NON-NLS-1$
+    private static final Pattern SESSION_NUMBER = Pattern.compile("\\d+"); //$NON-NLS-1$
     private static final Pattern TIMESTAMP = Pattern.compile(
-        "[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}"); //$NON-NLS-1$
+        "\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}"); //$NON-NLS-1$
 
     // These are 1C's documented application identifiers for app-id.
     private static final Set<String> APPLICATION_KINDS = Set.of(

@@ -51,7 +51,7 @@ public final class LinuxWindowController implements WindowController
         for (String line : listing.split("\\R"))
         {
             String[] fields = line.strip().split("\\s+", 5);
-            if (fields.length < 4 || !fields[2].matches("[0-9]+")) { continue; }
+            if (fields.length < 4 || !fields[2].matches("\\d+")) { continue; }
             long pid = Long.parseLong(fields[2]);
             if (!pids.contains(pid)) { continue; }
             String id = Long.toUnsignedString(Long.parseUnsignedLong(fields[0].substring(2), 16));

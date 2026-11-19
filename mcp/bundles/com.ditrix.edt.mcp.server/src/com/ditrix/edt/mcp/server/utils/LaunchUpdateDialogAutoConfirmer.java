@@ -2482,10 +2482,9 @@ public final class LaunchUpdateDialogAutoConfirmer
         // Fails CLOSED when the exact pair is absent (a caller that armed through one overload and
         // released through another): a REASSIGN entry goes first, because the wrong outcome of an
         // imbalance must be "a caller who asked for a re-address is refused", never the reverse.
-        if (removeFirstPortArm(a -> a.policy == StandaloneServerPortConflictPolicy.REASSIGN)
-            || removeFirstPortArm(a -> true))
+        if (!removeFirstPortArm(a -> a.policy == StandaloneServerPortConflictPolicy.REASSIGN))
         {
-            return;
+            removeFirstPortArm(a -> true);
         }
     }
 

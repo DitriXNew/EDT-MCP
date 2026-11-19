@@ -179,7 +179,7 @@ public final class MetadataOrdering
             int index;
             if (direction != null)
             {
-                long requested = (long)oldIndex + ("up".equals(direction) ? -(long)positions : positions);
+                long requested = oldIndex + ("up".equals(direction) ? -(long)positions : positions);
                 index = (int)Math.max(0, Math.min(result.size(), requested));
             }
             else

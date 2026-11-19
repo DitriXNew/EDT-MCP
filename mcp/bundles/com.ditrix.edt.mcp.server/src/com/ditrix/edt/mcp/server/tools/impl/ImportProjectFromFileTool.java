@@ -480,7 +480,7 @@ public class ImportProjectFromFileTool implements IMcpTool
             }
             catch (Exception e) // NOSONAR the CLI API is reached by reflection
             {
-                throw importFailure(name, e, mutation);
+                throw importFailure(name, e);
             }
             IProject project = ProjectContext.of(name).project();
             if (!request.lifecycle.projectExists(project))
@@ -512,15 +512,14 @@ public class ImportProjectFromFileTool implements IMcpTool
     /**
      * Reports a failed import by what it left behind. Nothing is deleted and no start latch is
      * released: EDT's latch is keyed by the project alone, so no check can prove a leftover is this
-     * import's own rather than another operation's.
+     * import's own rather than another operation's. The recorded mutation is not touched either: an
+     * entered import stays of unknown outcome.
      *
      * @param name the project the import was creating
      * @param failure what the import raised
-     * @param mutation left as it is: an entered import stays of unknown outcome
      * @return the failure to report
      */
-    private static ImportFailure importFailure(String name, Exception failure,
-        AtomicReference<Mutation> mutation)
+    private static ImportFailure importFailure(String name, Exception failure)
     {
         String head = "EDT could not import the converted XML files into project '" + name + "': " //$NON-NLS-1$ //$NON-NLS-2$
             + PlatformFailures.describeWithRootCause(failure) + ". "; //$NON-NLS-1$

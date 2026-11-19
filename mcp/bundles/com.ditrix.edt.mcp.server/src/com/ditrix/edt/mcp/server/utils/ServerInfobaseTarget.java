@@ -126,7 +126,7 @@ public record ServerInfobaseTarget(String server, String infobase)
         {
             return true;
         }
-        if (!suffix.matches(":[0-9]{1,5}")) //$NON-NLS-1$
+        if (!suffix.matches(":\\d{1,5}")) //$NON-NLS-1$
         {
             return false;
         }

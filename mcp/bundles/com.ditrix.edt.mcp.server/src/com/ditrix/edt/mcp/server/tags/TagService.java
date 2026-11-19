@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.server.tags;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 
@@ -141,7 +142,7 @@ public class TagService implements IResourceChangeListener {
                 return tag;
             }
             return null;
-        }, changed -> changed != null);
+        }, Objects::nonNull);
         if (result != null) {
             fireTagsChanged(project);
         }

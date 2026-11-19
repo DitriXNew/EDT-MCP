@@ -194,7 +194,7 @@ public class GitTool implements IMcpTool
 
     /** git's documented filter-spec forms a clone accepts; {@code sparse:} and {@code combine:} are not among them. */
     private static final Pattern CLONE_FILTER = Pattern.compile(
-        "blob:none|blob:limit=[0-9]++[kKmMgG]?+|tree:[0-9]++|object:type=(?:blob|tree|commit|tag)"); //$NON-NLS-1$
+        "blob:none|blob:limit=\\d++[kKmMgG]?+|tree:\\d++|object:type=(?:blob|tree|commit|tag)"); //$NON-NLS-1$
 
     /** The result key naming the directory a clone went into. */
     private static final String KEY_DIRECTORY = "directory"; //$NON-NLS-1$
@@ -2001,7 +2001,7 @@ public class GitTool implements IMcpTool
                 }
                 return;
             case "--depth": //$NON-NLS-1$
-                if (!value.matches("[1-9][0-9]{0,8}")) //$NON-NLS-1$
+                if (!value.matches("[1-9]\\d{0,8}")) //$NON-NLS-1$
                 {
                     throw new CommandRejectedException("'git clone --depth' needs a positive whole number of " //$NON-NLS-1$
                         + "commits, e.g. '--depth=1'."); //$NON-NLS-1$
@@ -4841,19 +4841,9 @@ public class GitTool implements IMcpTool
     }
 
     /**
-     * Force-kills every handle that is still alive. Best-effort: a process that is already gone, or
-     * that we may not signal, is skipped.
-     *
-     * @param handles the process handles to kill
-     */
-    private static void killAll(List<ProcessHandle> handles)
-    {
-        killAll(handles, System.nanoTime() + TimeUnit.SECONDS.toNanos(KILL_GRACE_SECONDS));
-    }
-
-    /**
-     * As {@link #killAll(List)}, but bounded by an EXISTING deadline so cleanup cannot be added on
-     * top of a budget the call already spent.
+     * Force-kills every handle that is still alive, bounded by an EXISTING deadline so cleanup cannot
+     * be added on top of a budget the call already spent. Best-effort: a process that is already gone,
+     * or that we may not signal, is skipped.
      *
      * @param handles the process handles to kill
      * @param callDeadlineNanos the call's deadline in {@link System#nanoTime()} terms
@@ -4931,8 +4921,7 @@ public class GitTool implements IMcpTool
                     new BufferedReader(new InputStreamReader(reading.getInputStream(), StandardCharsets.UTF_8)))
                 {
                     firstLine.set(reader.readLine());
-                    String ignored;
-                    while ((ignored = reader.readLine()) != null)
+                    while (reader.readLine() != null)
                     {
                         // keep draining so git can finish writing
                     }

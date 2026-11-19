@@ -662,21 +662,8 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
      * Step 6 (optional, best-effort): refresh stale validation markers. Only runs when a
      * revalidation was requested AND the export actually succeeded - a failed export must
      * not then trigger a full clean build. Any failure is swallowed (logged) and surfaced
-     * as the returned warning. Extracted verbatim from {@link #executeOnUiThread}.
-     *
-     * @param projectName the project to revalidate
-     * @param revalidate whether revalidation was requested
-     * @param exported whether the export succeeded
-     * @return the warning message when revalidation failed, otherwise {@code null}
-     */
-    private String runOptionalRevalidation(String projectName, boolean revalidate, boolean exported)
-    {
-        return runOptionalRevalidation(projectName, revalidate, exported, CleanProjectTool::cleanProject);
-    }
-
-    /**
-     * Same as {@link #runOptionalRevalidation(String, boolean, boolean)} with the revalidation
-     * delegate injected, so the reporting contract can be tested without a live workspace.
+     * as the returned warning. The revalidation delegate is injected ({@link #revalidator()} in
+     * production), so the reporting contract can be tested without a live workspace.
      *
      * @param projectName the project to revalidate
      * @param revalidate whether revalidation was requested

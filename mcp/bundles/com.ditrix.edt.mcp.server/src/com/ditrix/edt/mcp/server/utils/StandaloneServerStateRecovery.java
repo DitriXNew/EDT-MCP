@@ -3024,7 +3024,6 @@ public final class StandaloneServerStateRecovery
         {
             Activator.logError("Standalone server: the pre-flight state check failed for " //$NON-NLS-1$
                 + applicationId, e);
-            return;
         }
     }
 

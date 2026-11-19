@@ -183,7 +183,7 @@ public final class ProjectImportValidation
         try
         {
             // Version(String) also accepts incomplete versions; the CLI runtime needs all three parts.
-            if (!platformVersion.matches("[0-9]+\\.[0-9]+\\.[0-9]+")) //$NON-NLS-1$
+            if (!platformVersion.matches("\\d+\\.\\d+\\.\\d+")) //$NON-NLS-1$
             {
                 throw new IllegalArgumentException();
             }

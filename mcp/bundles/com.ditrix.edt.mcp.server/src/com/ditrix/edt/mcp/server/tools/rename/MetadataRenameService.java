@@ -3881,7 +3881,7 @@ public class MetadataRenameService
                 }
                 catch (Exception e) // NOSONAR an inaccessible field simply is not a collaborator
                 {
-                    continue;
+                    // skip it and read the next field
                 }
             }
             type = type.getSuperclass();

@@ -13,7 +13,7 @@ import java.util.regex.Pattern;
 public final class XmlEntityDecoder
 {
     private static final Pattern REFERENCE =
-        Pattern.compile("&(amp|lt|gt|quot|apos|#[0-9]+|#x[0-9A-Fa-f]+);"); //$NON-NLS-1$
+        Pattern.compile("&(amp|lt|gt|quot|apos|#\\d+|#x[0-9A-Fa-f]+);"); //$NON-NLS-1$
 
     private XmlEntityDecoder()
     {

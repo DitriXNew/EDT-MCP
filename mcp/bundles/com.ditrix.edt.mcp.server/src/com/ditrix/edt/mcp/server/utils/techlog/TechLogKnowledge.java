@@ -166,8 +166,8 @@ public final class TechLogKnowledge
 
     private static void code(StringBuilder out, String language, String text)
     {
-        String fence = "```";
-        while (text.contains(fence)) fence += "`";
+        StringBuilder fence = new StringBuilder("```");
+        while (text.contains(fence)) fence.append('`');
         out.append(fence).append(language).append('\n').append(text).append('\n').append(fence).append("\n\n");
     }
 
