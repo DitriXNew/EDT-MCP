@@ -467,9 +467,9 @@ public final class ProfilingReport
                 out.append(NA_NOTICE);
         }
         List<ILineCompareResult> allLines = methods.stream().flatMap(m -> m.getLinesCompareResults().stream()).toList();
-        out.append("\nUnmatched elements: modules=").append(comparison.getModulesCompareResults().stream().filter(m -> m instanceof IUnmatchedCompareResult).count())
-            .append(", methods=").append(methods.stream().filter(m -> m instanceof IUnmatchedCompareResult).count())
-            .append(", lines=").append(allLines.stream().filter(l -> l instanceof IUnmatchedCompareResult).count())
+        out.append("\nUnmatched elements: modules=").append(comparison.getModulesCompareResults().stream().filter(IUnmatchedCompareResult.class::isInstance).count())
+            .append(", methods=").append(methods.stream().filter(IUnmatchedCompareResult.class::isInstance).count())
+            .append(", lines=").append(allLines.stream().filter(IUnmatchedCompareResult.class::isInstance).count())
             .append(". Unmatched elements are excluded from rankings.\n\nMethods match by name; lines match by number and trimmed text, so edits can shift lines and leave them unmatched.\n\n");
         if (module != null || method != null)
         {

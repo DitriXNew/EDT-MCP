@@ -278,7 +278,7 @@ public final class ClientWindowLaunch
         {
             if (process.isTerminated()) { continue; }
             String value = process.getAttribute(IProcess.ATTR_PROCESS_ID);
-            if (value == null || !value.matches("[0-9]+")) { continue; }
+            if (value == null || !value.matches("\\d+")) { continue; }
             long pid = Long.parseLong(value);
             result.add(pid);
             ProcessHandle.of(pid).ifPresent(handle -> handle.descendants().forEach(child -> result.add(child.pid())));

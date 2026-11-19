@@ -58,7 +58,7 @@ public final class JsonUtils
 
     /** A JSON number (RFC 8259) with a fraction or exponent: the only non-plain shape a transport renders. */
     private static final Pattern JSON_DECIMAL_NUMBER =
-        Pattern.compile("-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?(?:[eE][+-]?[0-9]+)?"); //$NON-NLS-1$
+        Pattern.compile("-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?"); //$NON-NLS-1$
 
     /**
      * Whether a serialized JSON-RPC response reports failure.

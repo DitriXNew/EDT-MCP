@@ -713,7 +713,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         }
 
         // The remaining case: a generic 'properties' change applied through the BM write boundary.
-        return applyGenericPropertyChanges(ctx, args.projectName, normFqn, resolvedTarget.node, target,
+        return applyGenericPropertyChanges(ctx, args.projectName, normFqn, resolvedTarget.node,
             args.properties, args.normReport);
     }
 
@@ -768,7 +768,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             String refusal = dispatchContentPayload(ctx, fqn, target, args.properties, args.content);
             return () -> refusal;
         }
-        return () -> applyGenericPropertyChanges(handle, args.projectName, fqn, null, null,
+        return () -> applyGenericPropertyChanges(handle, args.projectName, fqn, null,
             args.properties, args.normReport);
     }
 
@@ -1378,12 +1378,12 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             });
             if (!decision.matches) return null;
             if (decision.error != null) return decision.error;
-            return applyGenericPropertyChanges(ctx, args.projectName, ConfigurationRoot.FQN, null, null,
+            return applyGenericPropertyChanges(ctx, args.projectName, ConfigurationRoot.FQN, null,
                 args.properties, args.normReport);
         }
         return dispatchConfigurationRoot(ctx.scope, args.fqn, args.hasRolePayload, args.hasContentPayload,
             args.hasTemplatePayload, args.properties,
-            root -> applyGenericPropertyChanges(ctx, args.projectName, ConfigurationRoot.FQN, root, root.object,
+            root -> applyGenericPropertyChanges(ctx, args.projectName, ConfigurationRoot.FQN, root,
                 args.properties, args.normReport));
     }
 
@@ -2738,7 +2738,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * unchanged.
      */
     private String applyGenericPropertyChanges(ProjectContext ctx, String projectName, String normFqn,
-        MetadataNodeResolver.MetadataNode node, MdObject target, List<JsonObject> properties,
+        MetadataNodeResolver.MetadataNode node, List<JsonObject> properties,
         MdNameNormalizer.Report normReport)
     {
         return prepareWrite(ctx.project, () -> {
@@ -2808,7 +2808,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             target, changes, AdoptedPropertyRouter::route);
         if (routing.isRefused())
         {
-            return () -> routing.refusal();
+            return routing::refusal;
         }
         if (changes.isEmpty() && !routing.notes().isEmpty())
         {
@@ -3838,9 +3838,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             message += "; the type change also reset the fill value of every editable object typed " //$NON-NLS-1$
                 + "with it, as EDT's designer does"; //$NON-NLS-1$
         }
-        for (String note : adoptedNotes)
+        if (!adoptedNotes.isEmpty())
         {
-            message += "; " + note; //$NON-NLS-1$
+            message += "; " + String.join("; ", adoptedNotes); //$NON-NLS-1$ //$NON-NLS-2$
         }
         return message;
     }

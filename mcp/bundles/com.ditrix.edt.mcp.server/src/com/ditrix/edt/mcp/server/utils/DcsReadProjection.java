@@ -2014,10 +2014,10 @@ public final class DcsReadProjection
 
     private static void appendFenced(StringBuilder result, String text)
     {
-        String fence = "```"; //$NON-NLS-1$
+        StringBuilder fence = new StringBuilder("```"); //$NON-NLS-1$
         while (text.contains(fence))
         {
-            fence += '`';
+            fence.append('`');
         }
         result.append(fence).append("sql\n").append(text); //$NON-NLS-1$
         if (!text.endsWith("\n")) //$NON-NLS-1$

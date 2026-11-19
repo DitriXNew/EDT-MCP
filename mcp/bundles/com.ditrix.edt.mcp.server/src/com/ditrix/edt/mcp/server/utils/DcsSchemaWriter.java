@@ -1597,7 +1597,6 @@ public final class DcsSchemaWriter
         {
             return PayloadResult.failure(target.error);
         }
-        DataSet set = target.dataSet;
         String pointerKey = target.exact ? segments.get(segments.size() - 1) : null;
         KeyResult keyed = key(request, KEY_DATA_PATH, pointerKey);
         if (keyed.error != null)

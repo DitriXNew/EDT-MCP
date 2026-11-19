@@ -37,7 +37,7 @@ public final class ModuleQueryExtractor
         "(?iu)^(?:SELECT|\u0412\u042b\u0411\u0420\u0410\u0422\u042c)(?![\\p{L}\\p{N}_])");
     private static final Pattern STRUCTURE = Pattern.compile(
         "(?iu)(?<![.\\p{L}\\p{N}_])(?:FROM|INTO|AS|\u0418\u0417|\u041f\u041e\u041c\u0415\u0421\u0422\u0418\u0422\u042c|\u041a\u0410\u041a)(?![\\p{L}\\p{N}_])");
-    private static final Pattern SIMPLE_PROJECTION = Pattern.compile("^(?:[0-9]|\\*|&[\\p{L}_])");
+    private static final Pattern SIMPLE_PROJECTION = Pattern.compile("^(?:\\d|\\*|&[\\p{L}_])");
 
     private ModuleQueryExtractor() { }
 

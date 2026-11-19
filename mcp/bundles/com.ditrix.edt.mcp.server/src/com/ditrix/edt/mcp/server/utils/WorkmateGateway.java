@@ -1671,7 +1671,6 @@ public class WorkmateGateway
             catch (TimeoutException stillRunning)
             {
                 // Deliberately swallowed: only the absolute deadline above ends this wait.
-                continue;
             }
             catch (ExecutionException failed)
             {

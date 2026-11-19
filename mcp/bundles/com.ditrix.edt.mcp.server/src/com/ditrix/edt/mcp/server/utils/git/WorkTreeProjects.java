@@ -152,7 +152,7 @@ public final class WorkTreeProjects
             }
             catch (IOException e) // NOSONAR walk further up: this ancestor is gone too
             {
-                continue;
+                // try the parent next
             }
         }
         return absolute;

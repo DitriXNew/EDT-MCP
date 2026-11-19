@@ -1274,7 +1274,6 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     private String performDelete(IProject project, String fqn, String registrationFqn, String containerFqn,
         IRefactoring refactoring, boolean force, List<String> descendants, RefactoringProblems problems)
     {
-        String projectName = project.getName();
         // EDT's own problem check: genuine incoming references and platform prohibitions are both
         // blocking conditions, but they remain distinct in the response. 'confirm' is the preview
         // gate; 'force' overrides either block - except a vendor-support lock, which it never does.

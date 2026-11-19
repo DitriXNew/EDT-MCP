@@ -2435,10 +2435,8 @@ public class LaunchTool implements IMcpTool
         // is the earlier, more specific cause: nothing about the caller's data was declined.
         if (conflicts.portConflicted())
         {
-            String message =
-                LaunchUpdateDialogAutoConfirmer.portConflictError(conflicts.portConflictDetail(),
-                    conflicts.portConflictReason());
-            return message;
+            return LaunchUpdateDialogAutoConfirmer.portConflictError(conflicts.portConflictDetail(),
+                conflicts.portConflictReason());
         }
         // Consulted ONLY when this launch armed the external-changes matcher: the window also
         // covers the port matcher (armed even with updateBeforeLaunch=false), and an
@@ -2447,8 +2445,7 @@ public class LaunchTool implements IMcpTool
         {
             return null;
         }
-        String message = ExternalInfobaseChangesPolicy.declinedUpdateError(policy, conflicts.reason());
-        return message;
+        return ExternalInfobaseChangesPolicy.declinedUpdateError(policy, conflicts.reason());
     }
 
     /** Describes a launch delegate that returned normally after cancelling its monitor. */

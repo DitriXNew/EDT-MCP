@@ -52,7 +52,7 @@ public final class MetadataTopObjects
     /** Enumerate in BM order, including separately stored nested metadata; requires an active transaction. */
     public static List<String> fqns(IBmTransaction tx)
     {
-        return collect(tx, object -> object instanceof MdObject);
+        return collect(tx, MdObject.class::isInstance);
     }
 
     /** Detached snapshot of the re-exportable top objects ({@link #isReexportable}), in BM order. */

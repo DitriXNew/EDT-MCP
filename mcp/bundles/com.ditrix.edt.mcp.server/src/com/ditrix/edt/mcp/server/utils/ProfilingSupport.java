@@ -137,7 +137,7 @@ public final class ProfilingSupport
                 }
                 return null;
             }
-            catch (NoSuchFieldException e) { continue; }
+            catch (NoSuchFieldException e) { /* not declared here: look in the superclass */ }
             catch (ReflectiveOperationException | RuntimeException e)
             {
                 Activator.logWarning("Profiling session id is unreadable (" + PlatformFailures.describe(e) //$NON-NLS-1$
@@ -167,7 +167,7 @@ public final class ProfilingSupport
                 Object state = states.get(profile);
                 return state != null && "ENABLED".equals(String.valueOf(state)); //$NON-NLS-1$
             }
-            catch (NoSuchFieldException e) { continue; }
+            catch (NoSuchFieldException e) { /* not declared here: look in the superclass */ }
             catch (ReflectiveOperationException | RuntimeException e)
             {
                 return unknownState(PlatformFailures.describe(e));

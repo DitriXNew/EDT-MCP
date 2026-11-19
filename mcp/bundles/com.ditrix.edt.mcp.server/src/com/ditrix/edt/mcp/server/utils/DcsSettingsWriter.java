@@ -473,7 +473,7 @@ public final class DcsSettingsWriter
             if (typeError != null) return SchemaResult.failure(typeError);
             return SchemaResult.success(new SchemaPlan(null, variants, true, false));
         }
-        SettingsLocation location = locateSchemaSettings(schema, variants, address, type, body, action);
+        SettingsLocation location = locateSchemaSettings(schema, variants, address, type, action);
         if (location.error != null)
         {
             return SchemaResult.failure(location.error);
@@ -907,13 +907,12 @@ public final class DcsSettingsWriter
                 + "selection, filter, dataParameter, order, conditionalAppearance, userField, " //$NON-NLS-1$
                 + "outputParameter, or userSettings."; //$NON-NLS-1$
         }
-        String presentation = body == null ? null
+        return body == null ? null
             : DcsPresentationParser.validateRecursively(body, languages);
-        return presentation;
     }
 
     private static SettingsLocation locateSchemaSettings(DataCompositionSchema schema,
-        List<SettingsVariant> variants, DcsAddress address, String type, JsonObject body, String action)
+        List<SettingsVariant> variants, DcsAddress address, String type, String action)
     {
         List<String> segments = new ArrayList<>(address.segments());
         if (segments.isEmpty())
@@ -1577,7 +1576,7 @@ public final class DcsSettingsWriter
             case "order": //$NON-NLS-1$
                 return applyOrderPath(owner, path, body, action, languages);
             case "groupFields": //$NON-NLS-1$
-                return applyGroupFieldsPath(owner, path, body, action, languages, where);
+                return applyGroupFieldsPath(owner, path, body, action, where);
             default:
                 return "Grouping path segment '" + member + "' at '" + where //$NON-NLS-1$ //$NON-NLS-2$
                     + "' is not authorable. Use groupFields, selection, filter, or order."; //$NON-NLS-1$
@@ -2284,7 +2283,7 @@ public final class DcsSettingsWriter
     }
 
     private static String applyGroupFieldsPath(GroupingSettingsAccess owner, List<String> path,
-        JsonObject body, String action, DcsPresentationParser.LanguageContext languages, String where)
+        JsonObject body, String action, String where)
     {
         // A holder addressed directly starts empty on replace, like every other holder: copying it
         // meant the old group fields stayed and the replacement was appended behind them.
@@ -5458,8 +5457,7 @@ public final class DcsSettingsWriter
             }
             item.setUse(use.booleanValue());
         }
-        String scaffold = applyParameterScaffold(item, body, languages, path);
-        return scaffold;
+        return applyParameterScaffold(item, body, languages, path);
     }
 
     /** Every data-parameter value is built by its own untyped ValueSpec writer. */
@@ -7017,7 +7015,6 @@ public final class DcsSettingsWriter
         List<String> result = new ArrayList<>();
         for (int i = 0; i < items.size(); i++)
         {
-            StructureItem item = items.get(i);
             result.add(Integer.toString(i));
         }
         return result.isEmpty() ? "(none)" : String.join(", ", result); //$NON-NLS-1$ //$NON-NLS-2$

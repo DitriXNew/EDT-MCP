@@ -592,7 +592,7 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
     private static boolean migrateMutatingToolsIntoReadOnlyPresets(IPreferenceStore store,
         Set<String> disabled)
     {
-        return storedPreset(store).isReadOnly() ? disabled.addAll(READ_ONLY_V14_ADDITIONS) : false;
+        return storedPreset(store).isReadOnly() && disabled.addAll(READ_ONLY_V14_ADDITIONS);
     }
 
     /** One-shot v13 backfill; later preset migrations must use recorded provenance instead. */

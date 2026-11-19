@@ -122,9 +122,6 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
     /** Canonical English singular type name for the XDTOPackage object. */
     private static final String TYPE_XDTO_PACKAGE = "XDTOPackage"; //$NON-NLS-1$
 
-    /** Quoted, comma-separated list of CommonModule kinds for schema hints. */
-    private static final String COMMON_MODULE_KINDS = CommonModuleKind.quotedList();
-
     /** Schema / param key: extension event call type. */
     private static final String KEY_CALL_TYPE = "callType"; //$NON-NLS-1$
 
@@ -2279,7 +2276,6 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             return ctx.error;
         }
         IProject project = ctx.project;
-        Configuration config = ctx.config;
         MetadataScope scope = ctx.scope;
 
         final FormElementWriter.Kind fKind = kind;

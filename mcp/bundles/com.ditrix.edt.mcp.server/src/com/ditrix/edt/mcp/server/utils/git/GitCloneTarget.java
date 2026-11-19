@@ -324,7 +324,7 @@ public final class GitCloneTarget
             }
             catch (IOException | RuntimeException e) // NOSONAR walk further up: this ancestor is gone too
             {
-                continue;
+                // try the parent next
             }
         }
         return path;

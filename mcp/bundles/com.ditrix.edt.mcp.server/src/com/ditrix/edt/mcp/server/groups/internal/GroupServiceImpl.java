@@ -18,6 +18,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -396,7 +397,7 @@ public class GroupServiceImpl implements IGroupService, IResourceChangeListener 
                 return group;
             }
             return null;
-        }, changed -> changed != null);
+        }, Objects::nonNull);
         if (result != null) {
             fireGroupsChanged(project);
         }

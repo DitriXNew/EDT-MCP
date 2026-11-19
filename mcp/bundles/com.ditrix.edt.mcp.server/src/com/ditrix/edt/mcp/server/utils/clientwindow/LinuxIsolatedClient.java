@@ -78,7 +78,7 @@ public final class LinuxIsolatedClient implements IsolatedClientLauncher
                 xvfb.getInputStream(), java.nio.charset.StandardCharsets.US_ASCII)))
             {
                 String line = reader.readLine();
-                if (line == null || !line.matches("[0-9]+"))
+                if (line == null || !line.matches("\\d+"))
                 {
                     throw new IllegalStateException("Xvfb did not allocate a private display; verify the xvfb package supports -displayfd.");
                 }

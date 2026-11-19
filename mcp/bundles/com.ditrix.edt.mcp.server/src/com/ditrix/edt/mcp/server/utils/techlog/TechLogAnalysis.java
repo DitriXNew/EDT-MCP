@@ -41,7 +41,7 @@ public final class TechLogAnalysis
      */
     private static final Pattern SQL_TOKEN = Pattern.compile(
         "--[^\\r\\n]*|/\\*[\\s\\S]*?\\*/|"
-        + "\\$([A-Za-z_][A-Za-z_0-9]*|)\\$[\\s\\S]*?\\$\\1\\$|"
+        + "\\$([A-Za-z_]\\w*|)\\$[\\s\\S]*?\\$\\1\\$|"
         + "#t(?:t\\d+|[0-9a-f]{32})(?![\\w])|(?<![\\w])\\d+:[0-9a-f]{32}(?![\\w])|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|(?:@|&)\\w+|0x[0-9a-f]+|(?<![\\w])\\d+(?:\\.\\d+)?(?:[eE][-+]?\\d+)?(?![\\w])",
         Pattern.CASE_INSENSITIVE);
 
