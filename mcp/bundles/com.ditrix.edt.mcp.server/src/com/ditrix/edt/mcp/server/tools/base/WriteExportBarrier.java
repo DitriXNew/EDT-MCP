@@ -30,6 +30,17 @@ public final class WriteExportBarrier
             : DiskExportState.UNOBSERVABLE;
     };
 
+    /**
+     * {@link #PLATFORM} for a caller that waits less than {@link #DEADLINE_MS}: an export wait that never
+     * returns still holds its project's slot as long as a full-deadline wait would, so the shorter caller
+     * deadline never lets a wedged export pipeline collect jobs faster.
+     */
+    public static final Environment PLATFORM_FULL_HOLD = (projectName, timeoutMs) -> {
+        IProject project = ProjectContext.of(projectName).project();
+        return project != null && project.exists() ? BuildUtils.waitForDiskExport(project, timeoutMs, DEADLINE_MS)
+            : DiskExportState.UNOBSERVABLE;
+    };
+
     public record Outcome(boolean drained, String pendingProject) { }
 
     private WriteExportBarrier() { }
@@ -69,6 +80,12 @@ public final class WriteExportBarrier
         return notConfirmedResult(projectName).toJson();
     }
 
+    /** {@link #notConfirmed(String)} for a caller that awaited the export within its own {@code budgetMs}. */
+    public static String notConfirmed(String projectName, long budgetMs)
+    {
+        return notConfirmedResult(projectName, budgetMs).toJson();
+    }
+
     public static String notConfirmedAfterMutation(String projectName, DiskExportState state)
     {
         return notConfirmedResult(projectName).put("mutationCommitted", true)
@@ -77,8 +94,13 @@ public final class WriteExportBarrier
 
     private static ToolResult notConfirmedResult(String projectName)
     {
+        return notConfirmedResult(projectName, DEADLINE_MS);
+    }
+
+    private static ToolResult notConfirmedResult(String projectName, long budgetMs)
+    {
         return ToolResult.error("The operation completed, but its export to disk was not confirmed "
-            + "within a " + (DEADLINE_MS / 1000) + "s budget, so the files of project '"
+            + "within a " + Math.max(1L, budgetMs / 1000) + "s budget, so the files of project '"
             + projectName + "' may not be consistent on disk: an object's own .mdo can already be "
             + "written or deleted while Configuration.mdo still holds the old collection. Nothing was "
             + "rolled back. Do not commit the working tree in this state. Check the project with "

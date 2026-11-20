@@ -98,15 +98,44 @@ public class DcsWriteValidationTest
     }
 
     @Test
-    public void testTheValidationBudgetIsWhatIsLeftOfTheCallBudgetButNeverBelowTheFloor()
+    public void testTheValidationBudgetIsWhatIsLeftOfTheCallBudget()
     {
         assertEquals(45_000L, DcsTool.CALL_BUDGET_MS);
         assertEquals(45_000L, DcsTool.validationBudgetMs(1_000L, 1_000L));
         assertEquals(43_000L, DcsTool.validationBudgetMs(1_000L, 3_000L));
-        assertEquals(DcsTool.MIN_VALIDATION_BUDGET_MS, DcsTool.validationBudgetMs(0L, 44_000L));
-        assertEquals(DcsTool.MIN_VALIDATION_BUDGET_MS, DcsTool.validationBudgetMs(0L, 70_000L));
         assertEquals("a clock that went back never extends the budget", 45_000L, //$NON-NLS-1$
             DcsTool.validationBudgetMs(5_000L, 1_000L));
+    }
+
+    @Test
+    public void testASpentCallBudgetLeavesNoValidationBudget()
+    {
+        // #662 review: the export is part of the call budget, so a slow export leaves nothing to wait with.
+        assertEquals(1_000L, DcsTool.validationBudgetMs(0L, 44_000L));
+        assertEquals(-25_000L, DcsTool.validationBudgetMs(0L, 70_000L));
+    }
+
+    @Test
+    public void testASpentCallBudgetDoesNotWaitForValidationAndSaysSo()
+    {
+        Scripted env = new Scripted();
+        String result = DcsTool.appendValidation("**Export drained:** `true`", schema(), env, 8_999L); //$NON-NLS-1$
+
+        assertEquals("nothing is asked of EDT when what is left cannot hold the marker reads", 0, env.calls); //$NON-NLS-1$
+        assertTrue(result, result.contains("**Validation:** `incomplete` (validationPending)")); //$NON-NLS-1$
+        assertTrue(result, result.contains("was not awaited because the call's time budget was spent")); //$NON-NLS-1$
+        assertTrue(result, result.contains("get_project_errors objectFqns=[" + ROOT + "]")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse(result, result.contains("no markers")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testABudgetThatHoldsTheMarkerReadsStillAsksForValidation()
+    {
+        Scripted env = new Scripted();
+        // 9 s left: 4 s for the two marker reads, 5 s - the floor the metadata write tools use - for the wait.
+        String result = DcsTool.appendValidation("**Export drained:** `true`", schema(), env, 9_000L); //$NON-NLS-1$
+        assertEquals("EDT is asked to validate, not just looked up", 1, env.waitBudgets.size()); //$NON-NLS-1$
+        assertFalse(result, result.contains("was not awaited")); //$NON-NLS-1$
     }
 
     /** A scripted marker platform that records what it was asked. */
@@ -181,7 +210,8 @@ public class DcsWriteValidationTest
                 + CONTENT + " |")); //$NON-NLS-1$
         assertTrue(result, result.endsWith("**Validated objects:** `" + CONTENT + "`")); //$NON-NLS-1$ //$NON-NLS-2$
         assertEquals("only the schema's own top object is validated", List.of(List.of(CONTENT)), env.resolved); //$NON-NLS-1$
-        assertTrue("the wait stays inside the budget", env.waitBudgets.get(0).longValue() <= 30_000L); //$NON-NLS-1$
+        assertTrue("the wait leaves room for the two marker reads inside the budget", //$NON-NLS-1$
+            env.waitBudgets.get(0).longValue() <= 26_000L);
     }
 
     @Test
@@ -189,7 +219,8 @@ public class DcsWriteValidationTest
     {
         Scripted env = new Scripted();
         env.state = ValidationState.PENDING;
-        String result = DcsTool.appendValidation("**Export drained:** `true`", schema(), env, 5_000L); //$NON-NLS-1$
+        // 9 s left: the two 2 s marker-read floors are reserved, so the validation wait gets 5 s.
+        String result = DcsTool.appendValidation("**Export drained:** `true`", schema(), env, 9_000L); //$NON-NLS-1$
 
         assertTrue(result, result.contains("**Validation:** `incomplete` (validationPending)")); //$NON-NLS-1$
         assertTrue(result, result.contains("had not finished within 5s")); //$NON-NLS-1$
@@ -202,7 +233,7 @@ public class DcsWriteValidationTest
     {
         Scripted env = new Scripted();
         env.resolveFailure = new IllegalStateException("model gone"); //$NON-NLS-1$
-        String result = DcsTool.appendValidation("**Export drained:** `true`", schema(), env, 5_000L); //$NON-NLS-1$
+        String result = DcsTool.appendValidation("**Export drained:** `true`", schema(), env, 9_000L); //$NON-NLS-1$
         assertTrue(result, result.contains("**Validation:** `incomplete` (readFailed)")); //$NON-NLS-1$
         assertFalse(result, result.contains("no markers")); //$NON-NLS-1$
     }

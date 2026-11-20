@@ -218,7 +218,7 @@ public class DcsToolTest
             AtomicReference<String> result = new AtomicReference<>();
             String response = DcsTool.dispatchResult(action, target, null, result, () -> {
                 throw new IllegalStateException("Display disposed between check and syncExec"); //$NON-NLS-1$
-            });
+            }, DcsTool.monotonicMs());
 
             JsonObject error = JsonParser.parseString(response).getAsJsonObject();
             assertFalse(error.get("success").getAsBoolean()); //$NON-NLS-1$

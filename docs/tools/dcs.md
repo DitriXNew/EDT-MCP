@@ -119,7 +119,7 @@ concrete fields (including union/folder fields), schema parameters, and variants
 re-serialized and compared asymmetrically with the submitted document: EDT-added defaults and
 namespace-prefix/formatting changes are allowed. A model difference or a lost submitted XML path
 refuses and rolls back. All writes await export off the UI thread, outside the BM transaction,
-within a shared 60s budget, then EDT's validation (see "Validation after the write"). `Export scheduled` means submission; `Export drained: true` confirms
+within what is left of the call's 45s budget (at least 5s), then EDT's validation (see "Validation after the write"). `Export scheduled` means submission; `Export drained: true` confirms
 queue completion, not byte correctness. Pending/unobservable export returns an error with
 `mutationCommitted:true`; nothing is rolled back. Check `list_projects`, save/resync, then re-read
 before retrying. XML replacement also reports `xml=wholesale` and those model counts.
@@ -451,8 +451,9 @@ the edit; never guess an index. Read back the result and new hash.
 After the commit and the disk export, the call waits for EDT to validate what it wrote and
 returns `**Validation:**` (`complete`, or `incomplete` with the reason), `**Markers:**`, one
 sentence, and a `Severity | Check | Message | Location` table of every marker (at most 20,
-most severe first). The whole call is held about 45 s at most, export included. `incomplete`
-is never "no problems": re-read them with the `get_project_errors objectFqns` call it names.
+most severe first). The whole call, export and validation, shares one 45 s budget; the export always gets
+at least 5 s, and a validation the budget no longer covers is not awaited and reported `incomplete`.
+`incomplete` is never "no problems": re-read them with the `get_project_errors objectFqns` call it names.
 A schema reports its DCS content; a form's conditional appearance reports that appearance; a
 dynamic list reports its form and list settings, because EDT validates the list with its form.
 

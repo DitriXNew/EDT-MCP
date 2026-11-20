@@ -456,6 +456,30 @@ public final class WrittenObjectMarkers
         return new Report(Reason.READ_FAILED, 0, new ArrayList<>(), new ArrayList<>(objects), budgetMs);
     }
 
+    /**
+     * The {@link #collect} budget under which a whole collection ends within {@code totalMs}: each of its two
+     * bounded BM reads may take up to {@link #MIN_READ_MS} past the collect deadline, so both are reserved.
+     *
+     * @param totalMs the time the caller can give the whole collection
+     * @return the budget to pass to {@link #collect}; below a second there is no useful wait
+     */
+    public static long collectBudgetWithin(long totalMs)
+    {
+        return totalMs - 2 * MIN_READ_MS;
+    }
+
+    /**
+     * The report for a validation the call did not wait for because its time budget was already spent:
+     * incomplete ({@link Reason#VALIDATION_PENDING}), nothing read, and its sentence says it was not awaited.
+     *
+     * @param objects the objects that were to be reported
+     * @return the report
+     */
+    public static Report notAwaited(List<String> objects)
+    {
+        return new Report(Reason.VALIDATION_PENDING, 0, new ArrayList<>(), new ArrayList<>(objects), 0L);
+    }
+
     private static boolean checksDisabled(Environment env)
     {
         try
@@ -626,7 +650,8 @@ public final class WrittenObjectMarkers
         switch (report.reason)
         {
         case VALIDATION_PENDING:
-            return "had not finished within " + Math.max(1L, report.budgetMs / 1000) + "s"; //$NON-NLS-1$ //$NON-NLS-2$
+            return report.budgetMs <= 0 ? "was not awaited because the call's time budget was spent" //$NON-NLS-1$
+                : "had not finished within " + Math.max(1L, report.budgetMs / 1000) + "s"; //$NON-NLS-1$ //$NON-NLS-2$
         case VALIDATION_UNOBSERVABLE:
             return "could not be observed"; //$NON-NLS-1$
         case OBJECT_UNRESOLVED:

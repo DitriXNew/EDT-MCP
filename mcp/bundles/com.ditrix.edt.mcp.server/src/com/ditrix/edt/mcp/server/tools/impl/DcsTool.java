@@ -187,7 +187,7 @@ public class DcsTool implements IMcpTool
     @Override
     public String execute(Map<String, String> params)
     {
-        long startedAtMs = System.currentTimeMillis();
+        long startedAtMs = monotonicMs();
         // Keep all ten reads explicit: SchemaExecuteParamParityTest checks both directions.
         String projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
         String rawFqn = JsonUtils.extractStringArgument(params, KEY_FQN);
@@ -315,10 +315,10 @@ public class DcsTool implements IMcpTool
                 + "' has no handler. Use one of: " + String.join(", ", ACTION_SET) //$NON-NLS-1$ //$NON-NLS-2$
                 + "; no model changes were made.").toJson(); //$NON-NLS-1$
         }
-        String dispatched = dispatchResult(action, parsed.address(), scope, result, handoff);
+        String dispatched = dispatchResult(action, parsed.address(), scope, result, handoff, startedAtMs);
         // After the export barrier, on the calling thread: outside SWT and every BM transaction.
         return appendValidation(dispatched, validation.get(), WrittenObjectMarkers.PLATFORM,
-            validationBudgetMs(startedAtMs, System.currentTimeMillis()));
+            validationBudgetMs(startedAtMs, monotonicMs()));
     }
 
     /**
@@ -358,21 +358,46 @@ public class DcsTool implements IMcpTool
     /** The whole dcs write call is held at most this long, export included (the #803 transport budget). */
     static final long CALL_BUDGET_MS = 45_000L;
 
-    /** The least the validation wait gets after a slow export, so it is still asked once. */
-    static final long MIN_VALIDATION_BUDGET_MS = 5_000L;
+    /**
+     * The least the export barrier waits even when the mutation itself used up the call budget: below it a
+     * healthy export could not be confirmed at all, and the committed write would be reported as unconfirmed.
+     */
+    static final long MIN_EXPORT_BUDGET_MS = 5_000L;
 
     /**
-     * The validation budget left of {@link #CALL_BUDGET_MS} once the write and its export are done,
-     * never below {@link #MIN_VALIDATION_BUDGET_MS}.
+     * Below this {@link WrittenObjectMarkers#collect} budget - what the call has left less the floors of
+     * the marker reads ({@link WrittenObjectMarkers#collectBudgetWithin}) - the validation is not waited for.
+     * It is the lower bound the metadata write tools give the same wait: the platform wait's slot hold is
+     * sized by its timeout, so a shorter wait would let a wedged validation collect jobs faster, and the
+     * object lookup before it would leave the wait no time to start.
+     */
+    static final long MIN_USEFUL_VALIDATION_MS = 5_000L;
+
+    /**
+     * The export-barrier budget of one dcs write: what is left of {@link #CALL_BUDGET_MS} after the mutation,
+     * never below {@link #MIN_EXPORT_BUDGET_MS}. It replaces the shared {@link WriteExportBarrier#DEADLINE_MS}
+     * for dcs only, so the export and the validation wait share the one call budget.
      *
-     * @param startedAtMs when the call started
-     * @param nowMs the current time
+     * @param startedAtMs when the call started, on {@link #monotonicMs()}
+     * @param nowMs the current {@link #monotonicMs()}
      * @return the budget in milliseconds
+     */
+    static long exportBudgetMs(long startedAtMs, long nowMs)
+    {
+        return Math.max(MIN_EXPORT_BUDGET_MS, CALL_BUDGET_MS - Math.max(0L, nowMs - startedAtMs));
+    }
+
+    /**
+     * The validation budget: what is left of {@link #CALL_BUDGET_MS} once the write and its export are done.
+     * No floor - a call whose export used the budget up does not wait for validation and says so.
+     *
+     * @param startedAtMs when the call started, on {@link #monotonicMs()}
+     * @param nowMs the current {@link #monotonicMs()}
+     * @return the budget in milliseconds, zero or negative when spent
      */
     static long validationBudgetMs(long startedAtMs, long nowMs)
     {
-        long elapsed = Math.max(0L, nowMs - startedAtMs);
-        return Math.max(MIN_VALIDATION_BUDGET_MS, CALL_BUDGET_MS - elapsed);
+        return CALL_BUDGET_MS - Math.max(0L, nowMs - startedAtMs);
     }
 
     /**
@@ -411,8 +436,12 @@ public class DcsTool implements IMcpTool
         WrittenObjectMarkers.Report report;
         try
         {
-            report = WrittenObjectMarkers.collect(environment,
-                Map.of(validation.projectName(), validation.topObjects()), budgetMs);
+            // The whole collection, its read floors included, ends within budgetMs; a budget too short for it
+            // does not wait, and an unawaited validation is reported as such, never as clean.
+            long collectMs = WrittenObjectMarkers.collectBudgetWithin(budgetMs);
+            report = collectMs < MIN_USEFUL_VALIDATION_MS ? WrittenObjectMarkers.notAwaited(validation.topObjects())
+                : WrittenObjectMarkers.collect(environment,
+                    Map.of(validation.projectName(), validation.topObjects()), collectMs);
         }
         catch (RuntimeException e)
         {
@@ -430,9 +459,56 @@ public class DcsTool implements IMcpTool
         return section.toString();
     }
 
-    /** Converts a failed SWT handoff into the tool's structured error contract for every action. */
+    /**
+     * The top objects a committed schema write exports: the resolved owner, and the schema content the
+     * write transaction actually wrote. The descriptor's schema content is dropped once the write names
+     * its own - a report pointed at another main template meanwhile must not export the former one.
+     *
+     * @param targets the resolved export targets
+     * @param writtenContentFqn the content FQN the write transaction wrote, or {@code null}
+     * @return the FQNs, in stable order, without duplicates
+     */
+    static List<String> schemaWriteExports(List<DcsTargetResolver.ExportTarget> targets, String writtenContentFqn)
+    {
+        boolean written = writtenContentFqn != null && !writtenContentFqn.isEmpty();
+        Set<String> fqns = new LinkedHashSet<>();
+        for (DcsTargetResolver.ExportTarget target : targets)
+        {
+            if (target.fqn() != null && !target.fqn().isEmpty()
+                && !(written && target.role() == DcsTargetResolver.ExportRole.DCS_CONTENT))
+            {
+                fqns.add(target.fqn());
+            }
+        }
+        if (written)
+        {
+            fqns.add(writtenContentFqn);
+        }
+        return new ArrayList<>(fqns);
+    }
+
+    /** The clock of the call budget: monotonic, so a wall-clock change neither grants nor takes time. */
+    static long monotonicMs()
+    {
+        return System.nanoTime() / 1_000_000L;
+    }
+
+    /**
+     * Converts a failed SWT handoff into the tool's structured error contract for every action; a write's
+     * export barrier then waits only what is left of the call budget ({@link #exportBudgetMs}).
+     *
+     * @param startedAtMs when the call started, on {@link #monotonicMs()}
+     */
     static String dispatchResult(String action, DcsAddress address, WriteScope scope,
-        AtomicReference<String> result, Runnable handoff)
+        AtomicReference<String> result, Runnable handoff, long startedAtMs)
+    {
+        return dispatchResult(action, address, scope, result, handoff, startedAtMs,
+            WriteExportBarrier.PLATFORM_FULL_HOLD);
+    }
+
+    /** The dispatch with the export platform as a seam. */
+    static String dispatchResult(String action, DcsAddress address, WriteScope scope,
+        AtomicReference<String> result, Runnable handoff, long startedAtMs, WriteExportBarrier.Environment exports)
     {
         try
         {
@@ -446,7 +522,9 @@ public class DcsTool implements IMcpTool
                 + address + "': " + message + ". Ensure EDT is open, re-open or clean the project, " //$NON-NLS-1$ //$NON-NLS-2$
                 + "then retry action='" + action + "'.").toJson()); //$NON-NLS-1$ //$NON-NLS-2$
         }
-        return scope == null ? result.get() : finalizeWriteResult(scope, result.get());
+        if (scope == null) return result.get();
+        // Measured after the handoff: the mutation's own time is spent from the same call budget.
+        return finalizeWriteResult(scope, result.get(), exports, exportBudgetMs(startedAtMs, monotonicMs()));
     }
 
     /** Completes exports off the UI thread before returning a mutation result. */
@@ -457,13 +535,20 @@ public class DcsTool implements IMcpTool
 
     static String finalizeWriteResult(WriteScope scope, String result, WriteExportBarrier.Environment environment)
     {
+        return finalizeWriteResult(scope, result, environment, WriteExportBarrier.DEADLINE_MS);
+    }
+
+    /** Completes exports within {@code budgetMs}; a pending export names that budget. */
+    static String finalizeWriteResult(WriteScope scope, String result, WriteExportBarrier.Environment environment,
+        long budgetMs)
+    {
         if (ToolResult.isErrorPayload(result)) return scope.markErrorAfterRecordedWrite(result);
         try
         {
-            WriteExportBarrier.Outcome export = WriteExportBarrier.await(scope,
-                WriteExportBarrier.DEADLINE_MS, environment);
+            WriteExportBarrier.Outcome export = WriteExportBarrier.await(scope, budgetMs, environment);
             if (export.pendingProject() != null)
-                return scope.markErrorAfterRecordedWrite(WriteExportBarrier.notConfirmed(export.pendingProject()));
+                return scope.markErrorAfterRecordedWrite(
+                    WriteExportBarrier.notConfirmed(export.pendingProject(), budgetMs));
             if (!export.drained())
                 return scope.markErrorAfterRecordedWrite(ToolResult.error(
                     "DCS changes committed, but EDT's export queue could not be observed. Nothing was rolled back. "
@@ -1029,12 +1114,7 @@ public class DcsTool implements IMcpTool
                 return e.errorJson;
             }
 
-            List<String> exports = new ArrayList<>(target.forceExportFqns());
-            if (outcome.contentFqn != null && !outcome.contentFqn.isEmpty()
-                && !exports.contains(outcome.contentFqn))
-            {
-                exports.add(outcome.contentFqn);
-            }
+            List<String> exports = schemaWriteExports(target.exportTargets(), outcome.contentFqn);
             WriteScope.recordWrite(context.project());
             boolean persisted = !exports.isEmpty()
                 && BmTransactions.forceExportToDisk(context.project(), exports);
@@ -1834,16 +1914,18 @@ public class DcsTool implements IMcpTool
     private static String vendorSupportRefusal(IBmTransaction tx, ProjectContext.ConfigurationResult context,
         DcsTargetResolver.Target target, DcsAddress address)
     {
-        Long id = target.bmId(DcsTargetResolver.BmRole.TEMPLATE);
-        if (id == null)
+        // The template the write will touch, read now: a report's main template is asked of the report.
+        EObject owner = target.kind() == TargetKind.DYNAMIC_LIST || target.kind() == TargetKind.FORM ? null
+            : DcsRootReader.currentTemplate(tx, target);
+        if (owner == null)
         {
-            id = target.bmId(DcsTargetResolver.BmRole.MD_FORM);
+            Long id = target.bmId(DcsTargetResolver.BmRole.MD_FORM);
+            if (id == null)
+            {
+                id = target.bmId(DcsTargetResolver.BmRole.ROOT_OWNER);
+            }
+            owner = id == null ? null : tx.getObjectById(id.longValue());
         }
-        if (id == null)
-        {
-            id = target.bmId(DcsTargetResolver.BmRole.ROOT_OWNER);
-        }
-        EObject owner = id == null ? null : tx.getObjectById(id.longValue());
         return VendorSupportGuard.refusalFor(owner, com.ditrix.edt.mcp.server.HostKind.current()
             == com.ditrix.edt.mcp.server.HostKind.HEADLESS
                 ? com.ditrix.edt.mcp.server.utils.MetadataScope.of(context.project(), configurationInTransaction(context, tx))
