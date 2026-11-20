@@ -61,13 +61,27 @@ public final class DcsRootReader
     private static Result readSchema(IBmTransaction transaction, Target target)
     {
         Long id = target.bmId(BmRole.TEMPLATE);
+        EObject object;
         if (id == null)
         {
-            // A Report or ExternalReport may not have materialized its main DCS template yet. This
-            // is a valid empty root whose hash must still be returned, rather than a not-found error.
-            return Result.success(null);
+            // The descriptor was taken when the report had no main DCS template, and a write may have
+            // created it since. Ask the owner in THIS transaction: answering "absent" from the stale
+            // descriptor would let a write that the owner's current schema needs a hash for pass as
+            // its creation (#662).
+            Long ownerId = target.kind() == TargetKind.REPORT_MAIN_DCS ? target.bmId(BmRole.ROOT_OWNER) : null;
+            EObject owner = ownerId == null ? null : transaction.getObjectById(ownerId.longValue());
+            object = DcsMainSchemaOwner.get(owner);
+            if (object == null)
+            {
+                // A Report or ExternalReport may not have materialized its main DCS template yet. This
+                // is a valid empty root whose hash must still be returned, rather than a not-found error.
+                return Result.success(null);
+            }
         }
-        EObject object = transaction.getObjectById(id.longValue());
+        else
+        {
+            object = transaction.getObjectById(id.longValue());
+        }
         if (!(object instanceof BasicTemplate))
         {
             return Result.failure("DCS template for '" + target.normalizedRootFqn() //$NON-NLS-1$

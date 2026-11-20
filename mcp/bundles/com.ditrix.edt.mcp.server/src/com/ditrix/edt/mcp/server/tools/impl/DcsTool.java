@@ -75,6 +75,7 @@ import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.ditrix.edt.mcp.server.utils.VendorSupportGuard;
 import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
+import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.WrittenObjectMarkers;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -374,6 +375,22 @@ public class DcsTool implements IMcpTool
         return Math.max(MIN_VALIDATION_BUDGET_MS, CALL_BUDGET_MS - elapsed);
     }
 
+    /**
+     * The metadata address a later {@code get_project_errors objectFqns} call reads this root's markers
+     * by, in the caller-facing all-English singular spelling EDT presents markers under ({@code .Form.},
+     * {@code .Template.}) rather than the internal {@code Type.Object.forms.Name} path or a plural or
+     * Russian token the caller typed. A form root and a dynamic list are named by the PARSED form path,
+     * so an address the form parser accepted with a trailing dot still names the form; a dynamic list's
+     * markers lie on its form's top object.
+     *
+     * @param normalizedRootFqn the resolved root
+     * @param formPath the parsed form path of a form root or a dynamic list, else {@code null}
+     * @return the re-check address
+     */
+    static String recheckAddress(String normalizedRootFqn, String formPath)
+    {
+        return MetadataTypeUtils.toCanonicalEnglishFqn(formPath != null ? formPath : normalizedRootFqn);
+    }
     /**
      * Waits, within {@code budgetMs}, for EDT to validate the written schema and renders every marker of
      * it through the shared post-write marker report. Never claims "no problems" for a validation that
@@ -1030,7 +1047,7 @@ public class DcsTool implements IMcpTool
                     + "action='get'.").toJson(); //$NON-NLS-1$
             }
             validation.set(new ValidationScope(context.project().getName(), List.of(outcome.contentFqn),
-                List.of(target.normalizedRootFqn()), null));
+                List.of(recheckAddress(target.normalizedRootFqn(), null)), null));
             DcsWriter.Result counts = outcome.applied;
             String countsText = outcome.storedCounts != null
                 ? (counts == null ? "xml=wholesale, " : "autoFill=completed, ") + outcome.storedCounts //$NON-NLS-1$ //$NON-NLS-2$
@@ -1237,7 +1254,7 @@ public class DcsTool implements IMcpTool
         if (written.settingsFqn != null) validated.add(written.settingsFqn);
         validated.remove(null);
         validation.set(new ValidationScope(context.project().getName(), new ArrayList<>(validated),
-            List.of(ref.formPath), "A dynamic list is validated with the form that holds it, so these " //$NON-NLS-1$
+            List.of(recheckAddress(target.normalizedRootFqn(), ref.formPath)), "A dynamic list is validated with the form that holds it, so these " //$NON-NLS-1$
                 + "are the markers of that form and of the list settings.")); //$NON-NLS-1$
         return "**Action:** `" + action + "`\n\n**Target:** `" + address //$NON-NLS-1$ //$NON-NLS-2$
             + "`\n\n**Hash:** `" + verified.modelHash //$NON-NLS-1$
@@ -1416,7 +1433,7 @@ public class DcsTool implements IMcpTool
         // index their markers under it; removing the last rule leaves none to validate.
         validation.set(new ValidationScope(context.project().getName(),
             written.appearanceFqn == null ? List.of() : List.of(written.appearanceFqn),
-            List.of(target.formPath()), null));
+            List.of(recheckAddress(target.normalizedRootFqn(), target.formPath())), null));
         return "**Action:** `" + action + "`\n\n**Target:** `" + address //$NON-NLS-1$ //$NON-NLS-2$
             + "`\n\n**Hash:** `" + verified.hash //$NON-NLS-1$
             + "`\n\n**Form.form export scheduled:** `true`\n\n**Applied:** " //$NON-NLS-1$
