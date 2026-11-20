@@ -71,6 +71,7 @@ public class GeneralTab
     private Button showTagsCheck;
     private Combo tagStyleCombo;
     private Combo consentLevelCombo;
+    private Spinner consentWaitSpinner;
     private Combo updateCheckCombo;
     private Label statusLabel;
     private Label endpointLabel;
@@ -358,6 +359,17 @@ public class GeneralTab
         }
         consentLevelCombo.select(levelIndex);
         consentLevelCombo.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, false, false));
+        createLabel(""); //$NON-NLS-1$
+
+        // How long a confirmation dialog waits before the call is refused
+        createLabel(Messages.GeneralTab_ConsentWait);
+        consentWaitSpinner = new Spinner(composite, SWT.BORDER);
+        consentWaitSpinner.setMinimum(PreferenceConstants.MIN_DESTRUCTIVE_CONSENT_WAIT_SECONDS);
+        consentWaitSpinner.setMaximum(PreferenceConstants.MAX_DESTRUCTIVE_CONSENT_WAIT_SECONDS);
+        consentWaitSpinner.setSelection(ConsentSettingsService.clampPromptWaitSeconds(
+            store.getString(PreferenceConstants.PREF_DESTRUCTIVE_CONSENT_WAIT_SECONDS)));
+        consentWaitSpinner.setToolTipText(Messages.GeneralTab_ConsentWait_Tooltip);
+        consentWaitSpinner.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, false, false));
         createLabel(""); //$NON-NLS-1$
 
         // The PII redaction master toggle lives on the dedicated Privacy tab
@@ -814,6 +826,7 @@ public class GeneralTab
         {
             store.setValue(PreferenceConstants.PREF_DESTRUCTIVE_CONSENT_LEVEL, CONSENT_LEVELS[consentIdx][1]);
         }
+        store.setValue(PreferenceConstants.PREF_DESTRUCTIVE_CONSENT_WAIT_SECONDS, consentWaitSpinner.getSelection());
     }
 
     /**
@@ -862,6 +875,7 @@ public class GeneralTab
                 break;
             }
         }
+        consentWaitSpinner.setSelection(PreferenceConstants.DEFAULT_DESTRUCTIVE_CONSENT_WAIT_SECONDS);
     }
 
     /**

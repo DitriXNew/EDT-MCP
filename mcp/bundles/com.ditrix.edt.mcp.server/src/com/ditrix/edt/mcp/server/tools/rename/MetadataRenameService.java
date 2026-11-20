@@ -3149,7 +3149,7 @@ public class MetadataRenameService
         // read from RenameMetadataObjectTool.NAME, so this domain service in tools.rename does not
         // take a reverse dependency on the tool adapter in tools.impl.
         // Entered immediately around the gate and nowhere wider: the gate can block for as long as
-        // the consent policy allows (an ASK dialog, bounded at 120s by #277), and a timed-out caller
+        // the consent policy allows (an ASK dialog, bounded by the confirmation wait, #277/#997), and a timed-out caller
         // told "it was waiting for consent" must not in fact have been counting items.
         progress.enter(RenameProgress.Phase.AWAITING_CONSENT);
         DestructiveConsentGate.ConsentDecision consentDecision =

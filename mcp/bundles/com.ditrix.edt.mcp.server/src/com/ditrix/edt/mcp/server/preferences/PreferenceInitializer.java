@@ -62,6 +62,8 @@ public class PreferenceInitializer extends AbstractPreferenceInitializer
             PreferenceConstants.DEFAULT_DESTRUCTIVE_CONSENT_LEVEL);
         store.setDefault(PreferenceConstants.PREF_DESTRUCTIVE_ALLOWED_TOOLS,
             PreferenceConstants.DEFAULT_DESTRUCTIVE_ALLOWED_TOOLS);
+        store.setDefault(PreferenceConstants.PREF_DESTRUCTIVE_CONSENT_WAIT_SECONDS,
+            PreferenceConstants.DEFAULT_DESTRUCTIVE_CONSENT_WAIT_SECONDS);
 
         // MCP request/response history recorder (record ON by default; file log OFF for privacy)
         HistoryConfig.initializeDefaults(store);

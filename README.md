@@ -141,7 +141,8 @@ Codex and Claude Code already load MCP tools on demand, so it saves them nothing
 
 HTTP binds to `127.0.0.1` unless remote access is configured; remote access requires an auth token.
 Treat connected clients as trusted: tools can edit files, update databases and execute debug expressions.
-Windowed EDT asks for human consent before gated destructive operations by default.
+Windowed EDT asks for human consent before gated destructive operations by default; the dialog waits 45 s,
+below common client timeouts ([request timeouts](docs/clients.md#request-timeouts)).
 **Explicit stdio `-headless` allows everything:** per-tool disabling, read-only presets and the consent window do not apply.
 Preview/confirm steps and tool preconditions still apply. See the [security and trust model](docs/security.md).
 

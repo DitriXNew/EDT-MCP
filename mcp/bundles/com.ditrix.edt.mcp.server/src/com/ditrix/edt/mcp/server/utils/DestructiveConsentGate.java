@@ -57,7 +57,7 @@ import com.ditrix.edt.mcp.server.ui.DestructiveConsentDialog;
  *       allow; otherwise ({@code ASK_ALWAYS}, or {@code PER_TOOL} + not allowed) →
  *       prompt.</li>
  *   <li><b>Dialog</b>: open {@link DestructiveConsentDialog}, time-bounded to
- *       {@link #CONSENT_PROMPT_TIMEOUT_SECONDS} on BOTH threading paths. Allow = OK,
+ *       {@link #promptWaitSeconds()} on BOTH threading paths. Allow = OK,
  *       Reject = CANCEL, "Allow for session" adds the tool to the session set.
  *       Already on the UI thread ({@code Display.getCurrent() != null}) — the NORMAL
  *       path for the gated tools whose whole {@code execute()} is marshalled onto the
@@ -86,7 +86,7 @@ import com.ditrix.edt.mcp.server.ui.DestructiveConsentDialog;
  * returns immediately, and nothing can deadlock. Asked from a worker it posts the question and
  * waits at most {@link #SHELL_PROBE_TIMEOUT_MS} ms — the non-ASK paths included, because the
  * probe deliberately precedes the policy (see step 2). Beyond the probe the dialog paths wait at
- * most {@link #CONSENT_PROMPT_TIMEOUT_SECONDS} (issue #277); and a non-
+ * most {@link #promptWaitSeconds()} (issue #277); and a non-
  * {@link ConsentDecision#ALLOW} verdict ({@link ConsentDecision#REJECT},
  * {@link ConsentDecision#TIMEOUT}, {@link ConsentDecision#UNATTENDED} or
  * {@link ConsentDecision#UI_UNRESPONSIVE}) mutates nothing
@@ -108,17 +108,21 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
     private static final String ENV_VALUE_ALLOW = "allow"; //$NON-NLS-1$
 
     /**
-     * How long the gate waits for a human to answer the consent dialog before
-     * auto-rejecting with {@link ConsentDecision#TIMEOUT} — on both prompt paths (the
-     * worker's latch await in {@link #promptWithTimeout} and the {@code timerExec}
-     * closer in {@link #promptOnUiThread}). Chosen below common MCP client request
-     * budgets (many default around 300 s) so the caller gets an actionable timeout
-     * error instead of its OWN transport timing out first, while still long enough
-     * for a human actually at the keyboard to read the preview and click a button.
-     * See issue #277: before this bound, an unanswered dialog blocked the MCP call
-     * indefinitely.
+     * How long the gate waits for a human to answer the consent dialog before auto-rejecting with
+     * {@link ConsentDecision#TIMEOUT} - on both prompt paths (the worker's latch await in
+     * {@link #promptWithTimeout} and the {@code timerExec} closer in {@link #promptOnUiThread}). It is
+     * the "Confirmation wait" preference ({@link ConsentSettingsService#getPromptWaitSeconds()}, 45 s
+     * by default): below the request budget of common MCP clients, so the caller receives the
+     * actionable TIMEOUT text instead of its own transport giving up first (issue #997), and still
+     * long enough for a human at the keyboard to read the preview and press a button. Before any
+     * bound an unanswered dialog blocked the call indefinitely (issue #277). Read once per prompt.
+     *
+     * @return the wait in seconds
      */
-    static final int CONSENT_PROMPT_TIMEOUT_SECONDS = 120;
+    static int promptWaitSeconds()
+    {
+        return ConsentSettingsService.getInstance().getPromptWaitSeconds();
+    }
 
     /**
      * Custom JFace button id for the dialog's "Allow for session" button (mirrors
@@ -190,7 +194,7 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
      * How long the headless probe waits for the UI thread before giving up on it.
      * <p>
      * Short on purpose. This is not the human's thinking time - that is
-     * {@link #CONSENT_PROMPT_TIMEOUT_SECONDS}, and it starts later. This is only "is there a
+     * {@link #promptWaitSeconds()}, and it starts later. This is only "is there a
      * workbench able to answer at all", a question a healthy UI thread answers in microseconds.
      * A wedged one never answers, and the wait for it used to be unbounded: the gate is called
      * from a worker thread that holds the caller's lock, so every later call for the same
@@ -229,7 +233,7 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
         REJECT,
         /**
          * Nobody answered the dialog within
-         * {@link DestructiveConsentGate#CONSENT_PROMPT_TIMEOUT_SECONDS} — a
+         * {@link DestructiveConsentGate#promptWaitSeconds()} — a
          * REJECT-like verdict (the caller returns an error and mutates nothing) but
          * with its own actionable error text built by
          * {@link DestructiveConsentGate#consentDeniedMessage(ConsentDecision, String)},
@@ -244,7 +248,7 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
          *
          * <p>Separate from {@link #TIMEOUT} because the remedies differ: that verdict means a
          * dialog WAS shown and nobody answered it within
-         * {@link DestructiveConsentGate#CONSENT_PROMPT_TIMEOUT_SECONDS}, so "answer it promptly"
+         * {@link DestructiveConsentGate#promptWaitSeconds()}, so "answer it promptly"
          * and "allow the tool in Preferences" are the right advice. Here they are not: the probe
          * runs BEFORE the policy is read, so a preference allowance cannot get through a wedged
          * UI either — only freeing the UI thread, or the launch-time bypass, does.</p>
@@ -350,10 +354,10 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
      * call through and the workbench that could confirm it;
      * {@link ConsentDecision#REJECT} keeps the original, unchanged
      * {@code "Operation declined by user"} text; {@link ConsentDecision#TIMEOUT} gets
-     * its own actionable text naming the tool, the {@link #CONSENT_PROMPT_TIMEOUT_SECONDS}
-     * budget and the three remedies (allow via Preferences, the
-     * {@link #ENV_DESTRUCTIVE_CONSENT} launch bypass, or re-running and answering
-     * promptly) so an unattended caller can self-diagnose instead of retrying blind
+     * its own actionable text ({@link #timeoutMessage}) naming the tool, the
+     * {@link #promptWaitSeconds()} budget and the ways on (repeat the call while the user
+     * watches EDT, allow via Preferences, or the {@link #ENV_DESTRUCTIVE_CONSENT} launch
+     * bypass) so an unattended caller can self-diagnose instead of retrying blind
      * against the same wall.
      *
      * @param decision the verdict from {@link #requireConsent}; must not be
@@ -386,14 +390,32 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
         }
         if (decision == ConsentDecision.TIMEOUT)
         {
-            return "Destructive operation '" + toolName + "' was not confirmed within " //$NON-NLS-1$ //$NON-NLS-2$
-                + CONSENT_PROMPT_TIMEOUT_SECONDS + " s at the EDT workbench, so it was auto-rejected " //$NON-NLS-1$
-                + "and nothing was changed. To proceed: (1) Preferences -> MCP Server -> Destructive " //$NON-NLS-1$
-                + "operations, set 'Allow all' or allow '" + toolName + "' per-tool; (2) set " //$NON-NLS-1$ //$NON-NLS-2$
-                + ENV_DESTRUCTIVE_CONSENT + "=allow on the EDT process at launch for unattended runs; " //$NON-NLS-1$
-                + "or (3) re-run the call and answer the confirmation dialog promptly."; //$NON-NLS-1$
+            return timeoutMessage(toolName, promptWaitSeconds());
         }
         return "Operation declined by user"; //$NON-NLS-1$
+    }
+
+    /**
+     * The {@link ConsentDecision#TIMEOUT} text: nobody answered and nothing was applied - a click
+     * after the timeout cannot apply the operation any more, because the timeout already won the
+     * {@link ConsentArbiter} and the dialog is closed or never opens - followed by the two ways on:
+     * repeat the call while the user watches EDT, or allow the tool without a dialog. Worded to be true
+     * also when the dialog never got to open because EDT's UI thread stayed busy for the whole wait.
+     *
+     * @param toolName the gated tool's name
+     * @param waitSeconds the wait that elapsed, in seconds
+     * @return the message text
+     */
+    static String timeoutMessage(String toolName, int waitSeconds)
+    {
+        return "Destructive operation '" + toolName + "' was not confirmed within " + waitSeconds //$NON-NLS-1$ //$NON-NLS-2$
+            + " s: nobody answered the confirmation dialog in EDT, so the call was refused, the dialog " //$NON-NLS-1$
+            + "does not stay open, and nothing was changed. " //$NON-NLS-1$
+            + "Ask the user to watch the EDT window, then repeat the same call - the dialog opens " //$NON-NLS-1$
+            + "again. To proceed without the dialog: Preferences -> MCP Server -> Destructive " //$NON-NLS-1$
+            + "operations ('Allow all', or allow '" + toolName + "' per tool), or " //$NON-NLS-1$ //$NON-NLS-2$
+            + ENV_DESTRUCTIVE_CONSENT + "=allow on the EDT process at launch. The wait itself is " //$NON-NLS-1$
+            + "'Confirmation wait' on the same page; keep it below your MCP client's request timeout."; //$NON-NLS-1$
     }
 
     /**
@@ -473,9 +495,10 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
     private ConsentDecision promptForConsent(String toolName, ConsentPreview preview, Display display,
         Shell shell)
     {
+        int waitSeconds = promptWaitSeconds();
         if (Display.getCurrent() != null)
         {
-            return promptOnUiThread(toolName, preview, display, shell);
+            return promptOnUiThread(toolName, preview, display, shell, waitSeconds);
         }
 
         // Windowed shutdown can dispose the display after admission; it still refuses.
@@ -484,12 +507,12 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
         {
             return refuseOnDisposedDisplay(toolName);
         }
-        return promptWithTimeout(toolName, preview, display, shell);
+        return promptWithTimeout(toolName, preview, display, shell, waitSeconds);
     }
 
     /**
      * The bounded UI-thread prompt (issue #277): schedules a {@link Display#timerExec}
-     * closer for {@link #CONSENT_PROMPT_TIMEOUT_SECONDS} BEFORE opening the dialog,
+     * closer for {@link #promptWaitSeconds()} BEFORE opening the dialog,
      * then opens it and blocks in {@code open()}'s nested {@code readAndDispatch}
      * loop. That nested loop DOES dispatch {@code timerExec} runnables, so the closer
      * fires INSIDE {@code open()}: it publishes {@link ConsentDecision#TIMEOUT}
@@ -510,18 +533,18 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
      * interleaving too — the cancel is an optimisation, not a correctness need.
      */
     private ConsentDecision promptOnUiThread(String toolName, ConsentPreview preview, Display display,
-        Shell shell)
+        Shell shell, int waitSeconds)
     {
         ConsentArbiter arbiter = new ConsentArbiter();
-        DestructiveConsentDialog dialog = new DestructiveConsentDialog(shell, toolName, preview);
+        DestructiveConsentDialog dialog = new DestructiveConsentDialog(shell, toolName, preview, waitSeconds);
         Runnable closer = () -> {
             if (arbiter.tryDecide(ConsentDecision.TIMEOUT))
             {
-                logTimeoutWin(toolName);
+                logTimeoutWin(toolName, waitSeconds);
                 closeOnUiThread(dialog);
             }
         };
-        display.timerExec((int)TimeUnit.SECONDS.toMillis(CONSENT_PROMPT_TIMEOUT_SECONDS), closer);
+        display.timerExec((int)TimeUnit.SECONDS.toMillis(waitSeconds), closer);
         int code = dialog.open();
         // Cancel the closer if it is still pending (negative delay = SWT's cancel idiom);
         // harmless when it already fired or the display is shutting down.
@@ -542,7 +565,7 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
      * via {@code display.asyncExec} (never {@code syncExec} — the UI thread must stay
      * free to keep pumping its event loop while this thread waits) and blocks the
      * CALLING (worker) thread on a {@link ConsentArbiter} for at most
-     * {@link #CONSENT_PROMPT_TIMEOUT_SECONDS}. The dialog's eventual answer (UI thread,
+     * {@link #promptWaitSeconds()}. The dialog's eventual answer (UI thread,
      * inside the async runnable, mapped by {@link #recordDialogAnswer}) and this
      * method's timeout (worker thread) race to decide first via
      * {@link ConsentArbiter#tryDecide}; whichever side wins is final, the other is
@@ -551,23 +574,38 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
      * the timeout already won (a human who eventually clicks it should not be
      * re-prompted on the next call). On a worker-side timeout win, the dialog shell is
      * closed best-effort so it does not linger answering nobody.
+     *
+     * <p>The open runnable may run LATE: when the UI thread was busy for the whole wait, the
+     * worker has already timed out, found no dialog to close, and returned. Such a dialog would
+     * answer nobody (a click on it could no longer change the verdict), so the runnable asks
+     * {@link #mayOpenDialog} before creating the dialog and again after publishing it to
+     * {@code dialogRef}: the worker publishes TIMEOUT before it reads {@code dialogRef}, so either
+     * the worker sees the dialog and closes it, or the second check sees the verdict.</p>
      */
     private ConsentDecision promptWithTimeout(String toolName, ConsentPreview preview, Display display,
-        Shell shell)
+        Shell shell, int waitSeconds)
     {
         ConsentArbiter arbiter = new ConsentArbiter();
         AtomicReference<DestructiveConsentDialog> dialogRef = new AtomicReference<>();
+        // The wait starts now; a dialog that opens late (a busy UI queue) shows only what is left.
+        long deadlineNanos = System.nanoTime() + TimeUnit.SECONDS.toNanos(waitSeconds);
         Runnable openDialog = () -> {
-            if (shell.isDisposed())
+            int secondsLeft = remainingSeconds(deadlineNanos, System.nanoTime());
+            if (secondsLeft <= 0 || !mayOpenDialog(shell.isDisposed(), arbiter))
             {
                 return;
             }
-            DestructiveConsentDialog dialog = new DestructiveConsentDialog(shell, toolName, preview);
+            DestructiveConsentDialog dialog = new DestructiveConsentDialog(shell, toolName, preview, secondsLeft);
             // create() BEFORE open() so dialogRef is populated before open()'s blocking nested event
             // loop starts — a close request queued while that loop is pumping is what lets the
             // worker's timeout close the shell (see closeDialogIfOpen).
             dialog.create();
             dialogRef.set(dialog);
+            if (!mayOpenDialog(shell.isDisposed(), arbiter))
+            {
+                closeOnUiThread(dialog);
+                return;
+            }
             int code = dialog.open();
             recordDialogAnswer(arbiter, toolName, code);
         };
@@ -583,7 +621,7 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
         boolean decidedInTime;
         try
         {
-            decidedInTime = arbiter.await(CONSENT_PROMPT_TIMEOUT_SECONDS);
+            decidedInTime = arbiter.await(waitSeconds);
         }
         catch (InterruptedException e)
         {
@@ -599,7 +637,7 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
         // CAS, so if the dialog answers in this same instant exactly one side wins.
         if (arbiter.tryDecide(ConsentDecision.TIMEOUT))
         {
-            logTimeoutWin(toolName);
+            logTimeoutWin(toolName, waitSeconds);
             closeDialogIfOpen(display, dialogRef.get());
             return ConsentDecision.TIMEOUT;
         }
@@ -696,14 +734,48 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
     }
 
     /**
+     * Whether the worker path's open runnable may still show the dialog: not when the parent shell
+     * is gone, and not when the verdict is already decided - after a timeout the call has returned,
+     * so the dialog would answer nobody (see {@link #promptWithTimeout}).
+     *
+     * @param parentDisposed whether the parent shell is disposed
+     * @param arbiter the arbiter of this prompt
+     * @return {@code true} when the dialog may be shown
+     */
+    static boolean mayOpenDialog(boolean parentDisposed, ConsentArbiter arbiter)
+    {
+        return !parentDisposed && arbiter.peek() == null;
+    }
+
+    /**
+     * The whole seconds left until {@code deadlineNanos}, rounded up, never negative: what the worker
+     * path's dialog shows when the UI thread opens it after part of the wait has passed.
+     *
+     * @param deadlineNanos the {@link System#nanoTime()} at which the worker stops waiting
+     * @param nowNanos the current {@link System#nanoTime()}
+     * @return the seconds left, {@code 0} when the wait is over
+     */
+    static int remainingSeconds(long deadlineNanos, long nowNanos)
+    {
+        long left = deadlineNanos - nowNanos;
+        if (left <= 0)
+        {
+            return 0;
+        }
+        long perSecond = TimeUnit.SECONDS.toNanos(1);
+        return (int)((left + perSecond - 1) / perSecond);
+    }
+
+    /**
      * Logs the timeout-win line shared by both prompt paths.
      *
      * @param toolName the gated tool that timed out
+     * @param waitSeconds the wait that elapsed, in seconds
      */
-    private static void logTimeoutWin(String toolName)
+    private static void logTimeoutWin(String toolName, int waitSeconds)
     {
         Activator.logInfo("Destructive-consent gate: '" + toolName + "' timed out after " //$NON-NLS-1$ //$NON-NLS-2$
-            + CONSENT_PROMPT_TIMEOUT_SECONDS + " s waiting for a human to confirm; auto-rejecting."); //$NON-NLS-1$
+            + waitSeconds + " s waiting for a human to confirm; auto-rejecting."); //$NON-NLS-1$
     }
 
     /** Refuse windowed shutdown races; explicit headless admission happened before shell probing. */

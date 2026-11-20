@@ -332,10 +332,33 @@ public class EdtDialogs
         {
             return null;
         }
-        String title = current.get(0).get("title").getAsString();
+        return noticeFor(current);
+    }
+
+    /**
+     * The notice line for the listed dialogs: names a dialog only the user can answer (a consent
+     * dialog, for one) when there is one, and says so, so that the agent asks the user instead of
+     * trying {@code edt_dialog}; otherwise names the first dialog.
+     *
+     * @param dialogs the dialogs as {@link #cachedDialogs()} lists them, at least one
+     * @return the notice line
+     */
+    static String noticeFor(List<JsonObject> dialogs)
+    {
+        JsonObject dialog = dialogs.stream().filter(d -> !answerableEntry(d)).findFirst().orElse(dialogs.get(0));
+        String title = dialog.get("title").getAsString();
         title = title.replace('\r', ' ').replace('\n', ' ');
-        return "EDT dialog open: \"" + title.substring(0, Math.min(title.length(), 160))
-            + "\". Call edt_dialog with action=list.";
+        String quoted = "EDT dialog open: \"" + title.substring(0, Math.min(title.length(), 160)) + "\"";
+        if (!answerableEntry(dialog))
+        {
+            return quoted + " - only the user can answer it in EDT; ask them. Details: edt_dialog action=list.";
+        }
+        return quoted + ". Call edt_dialog with action=list.";
+    }
+
+    private static boolean answerableEntry(JsonObject dialog)
+    {
+        return !dialog.has("answerable") || dialog.get("answerable").getAsBoolean();
     }
 
     public String list()

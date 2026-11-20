@@ -54,6 +54,7 @@ import com._1c.g5.v8.dt.compare.model.ComparisonNode;
 import com._1c.g5.v8.dt.compare.model.MergeRule;
 import com._1c.g5.v8.dt.compare.model.TopComparisonNode;
 
+import com.ditrix.edt.mcp.server.preferences.ConsentSettingsService;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 import com.ditrix.edt.mcp.server.tools.impl.MergeRulesTool.EngineRuleAuthority;
 import com.ditrix.edt.mcp.server.tools.impl.MergeRulesTool.MergeRuleAuthority;
@@ -4965,7 +4966,9 @@ public class MergeRulesToolTest
 
         // The gate's own text, unmodified: an unattended caller has to be able to tell a timeout
         // from a human's Reject, and to read the budget it ran out of.
-        assertErrorNaming(result, "merge_rules", "120"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertErrorNaming(result, "merge_rules", "not confirmed within " //$NON-NLS-1$ //$NON-NLS-2$
+            + ConsentSettingsService.getInstance().getPromptWaitSeconds() + " s", //$NON-NLS-1$
+            "nobody answered the confirmation dialog"); //$NON-NLS-1$
         assertEquals("an unanswered prompt may not have touched the file", FIXTURE, read(target)); //$NON-NLS-1$
     }
 
@@ -5056,7 +5059,7 @@ public class MergeRulesToolTest
 
     // ======== ALLOW authorizes replacing the file that was READ, and no other ========
     //
-    // The gate can hold for up to 120 seconds, and ASK_ALWAYS is the default level, so the prompt
+    // The gate can hold for the whole confirmation wait, and ASK_ALWAYS is the default level, so the prompt
     // is the ordinary case. Everything the operator is shown, and every decision the replacement
     // carries, came from ONE reading taken before it opened. An editor or a second workbench that
     // saves the file in the meantime is not serialised against this call - the path mutex is a

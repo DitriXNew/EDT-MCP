@@ -46,6 +46,7 @@ public class DestructiveConsentDialog extends Dialog
 
     private final String toolName;
     private final ConsentPreview preview;
+    private final int waitSeconds;
 
     /**
      * Creates the dialog.
@@ -54,12 +55,14 @@ public class DestructiveConsentDialog extends Dialog
      *            opens the dialog on a live UI session)
      * @param toolName the gated tool's name
      * @param preview the compact preview to render (may be {@code null})
+     * @param waitSeconds how long the gate keeps the dialog open without an answer, in seconds
      */
-    public DestructiveConsentDialog(Shell parentShell, String toolName, ConsentPreview preview)
+    public DestructiveConsentDialog(Shell parentShell, String toolName, ConsentPreview preview, int waitSeconds)
     {
         super(parentShell);
         this.toolName = toolName;
         this.preview = preview;
+        this.waitSeconds = waitSeconds;
     }
 
     @Override
@@ -90,6 +93,11 @@ public class DestructiveConsentDialog extends Dialog
         Label toolLabel = new Label(container, SWT.WRAP);
         toolLabel.setText("Requested by MCP tool: " + toolName); //$NON-NLS-1$
         toolLabel.setLayoutData(new GridData(SWT.FILL, SWT.TOP, true, false));
+
+        // The bound the gate enforces, so the human knows the window will not wait for ever.
+        Label waitLabel = new Label(container, SWT.WRAP);
+        waitLabel.setText(waitText(waitSeconds));
+        waitLabel.setLayoutData(new GridData(SWT.FILL, SWT.TOP, true, false));
 
         // Subtitle: a one-line effect description.
         if (preview != null && preview.getSubtitle() != null)
@@ -158,6 +166,18 @@ public class DestructiveConsentDialog extends Dialog
             sb.append("\n  … and ").append(remainder).append(" more"); //$NON-NLS-1$ //$NON-NLS-2$
         }
         return sb.toString();
+    }
+
+    /**
+     * The line that tells the human the dialog closes by itself.
+     *
+     * @param waitSeconds the gate's wait, in seconds
+     * @return the line text
+     */
+    static String waitText(int waitSeconds)
+    {
+        return "Closes by itself after " + waitSeconds //$NON-NLS-1$
+            + " s without an answer; the tool call is then refused."; //$NON-NLS-1$
     }
 
     @Override

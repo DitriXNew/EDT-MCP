@@ -56,12 +56,17 @@ Preview/confirm protocols and tool preconditions still apply; autosort remains t
 The decision uses `HostKind`, not display availability: a headless client attached to windowed EDT
 keeps every windowed gate, and a windowed EDT without a live shell still refuses.
 
-**The prompt is time-bounded.** A confirmation dialog waits at most **120 seconds** for a human to
-answer (below common MCP client request budgets, so a caller gets an actionable error instead of its
-own transport timing out first). If nobody answers in time, the operation auto-rejects — nothing is
-changed — with an error naming the tool, the 120 s budget, and the three ways to proceed: allow the
-tool via Preferences (*Allow all* or per-tool), set `EDT_MCP_DESTRUCTIVE_CONSENT=allow` for unattended
-runs, or re-run the call and answer the dialog promptly.
+**The prompt is time-bounded.** A confirmation dialog waits for an answer for the **Confirmation
+wait** (General tab, next to the consent level): **45 seconds** by default, 15–600 s. The default sits
+below the request timeout of common MCP clients (Claude Code gives an HTTP server about 60 s), so the
+caller receives the gate's own error instead of a bare client timeout; keep the setting below your
+client's timeout. The dialog says when it closes by itself. If nobody answers in time, the call is
+refused and the dialog does not stay open — nothing is changed, and a later click cannot apply it — with an error
+naming the tool, the wait, and the ways on: ask the user to watch the EDT window and repeat the same
+call (the dialog opens again), allow the tool via Preferences (*Allow all* or per-tool), or set
+`EDT_MCP_DESTRUCTIVE_CONSENT=allow` for unattended runs. The wait is the gate's alone: work a tool does
+before it asks comes on top. While the dialog is open, `edt_dialog` lists it with `answerable:false`
+and other tool responses carry a notice that only the user can answer it.
 
 ## Vendor support
 

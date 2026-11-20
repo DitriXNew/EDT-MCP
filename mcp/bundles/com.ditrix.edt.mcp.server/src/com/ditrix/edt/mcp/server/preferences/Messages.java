@@ -51,6 +51,8 @@ public class Messages extends NLS {
     public static String GeneralTab_TagDecorationStyle; // NOSONAR Eclipse NLS field: value injected by NLS.initializeMessages, cannot be final; Eclipse NLS field name must equal its .properties key
     public static String GeneralTab_DestructiveOperations; // NOSONAR Eclipse NLS field: value injected by NLS.initializeMessages, cannot be final; Eclipse NLS field name must equal its .properties key
     public static String GeneralTab_DestructiveOperations_Tooltip; // NOSONAR Eclipse NLS field: value injected by NLS.initializeMessages, cannot be final; Eclipse NLS field name must equal its .properties key
+    public static String GeneralTab_ConsentWait;
+    public static String GeneralTab_ConsentWait_Tooltip;
     public static String GeneralTab_CheckForUpdates; // NOSONAR Eclipse NLS field: value injected by NLS.initializeMessages, cannot be final; Eclipse NLS field name must equal its .properties key
     public static String GeneralTab_CheckNow; // NOSONAR Eclipse NLS field: value injected by NLS.initializeMessages, cannot be final; Eclipse NLS field name must equal its .properties key
     public static String GeneralTab_Checking; // NOSONAR Eclipse NLS field: value injected by NLS.initializeMessages, cannot be final; Eclipse NLS field name must equal its .properties key

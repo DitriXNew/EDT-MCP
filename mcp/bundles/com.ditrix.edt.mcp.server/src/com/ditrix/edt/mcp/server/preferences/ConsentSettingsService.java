@@ -151,6 +151,45 @@ public final class ConsentSettingsService // NOSONAR intentional singleton (Ecli
         return toolName != null && getAllowedTools().contains(toolName);
     }
 
+    /**
+     * Returns how long the consent dialog waits for an answer, in seconds - the "Confirmation wait"
+     * preference, clamped by {@link #clampPromptWaitSeconds(String)}. Defaults to
+     * {@link PreferenceConstants#DEFAULT_DESTRUCTIVE_CONSENT_WAIT_SECONDS} in a headless/test context
+     * with no Activator or preference store.
+     */
+    public int getPromptWaitSeconds()
+    {
+        IPreferenceStore store = getStore();
+        if (store == null)
+        {
+            return PreferenceConstants.DEFAULT_DESTRUCTIVE_CONSENT_WAIT_SECONDS;
+        }
+        return clampPromptWaitSeconds(store.getString(PreferenceConstants.PREF_DESTRUCTIVE_CONSENT_WAIT_SECONDS));
+    }
+
+    /**
+     * Parses a stored consent wait: a value outside
+     * {@link PreferenceConstants#MIN_DESTRUCTIVE_CONSENT_WAIT_SECONDS}..{@link PreferenceConstants#MAX_DESTRUCTIVE_CONSENT_WAIT_SECONDS}
+     * is moved to the nearer bound; a blank or non-numeric value means the default.
+     *
+     * @param rawValue the stored value (may be {@code null})
+     * @return the wait in seconds, always within the bounds
+     */
+    public static int clampPromptWaitSeconds(String rawValue)
+    {
+        long seconds;
+        try
+        {
+            seconds = Long.parseLong(rawValue == null ? "" : rawValue.trim()); //$NON-NLS-1$
+        }
+        catch (NumberFormatException e)
+        {
+            return PreferenceConstants.DEFAULT_DESTRUCTIVE_CONSENT_WAIT_SECONDS;
+        }
+        return (int)Math.max(PreferenceConstants.MIN_DESTRUCTIVE_CONSENT_WAIT_SECONDS,
+            Math.min(PreferenceConstants.MAX_DESTRUCTIVE_CONSENT_WAIT_SECONDS, seconds));
+    }
+
     private IPreferenceStore getStore()
     {
         Activator activator = Activator.getDefault();
