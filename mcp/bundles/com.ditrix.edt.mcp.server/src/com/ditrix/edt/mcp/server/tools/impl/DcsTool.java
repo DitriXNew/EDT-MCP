@@ -61,6 +61,7 @@ import com.ditrix.edt.mcp.server.utils.DcsTargetResolver;
 import com.ditrix.edt.mcp.server.utils.DcsTargetResolver.TargetKind;
 import com.ditrix.edt.mcp.server.utils.DcsTemplateProjection;
 import com.ditrix.edt.mcp.server.utils.DcsWriter;
+import com.ditrix.edt.mcp.server.utils.DcsXmlChunkUpload;
 import com.ditrix.edt.mcp.server.utils.DcsXmlCodec;
 import com.ditrix.edt.mcp.server.utils.DcsXmlRoundTripComparator;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
@@ -183,6 +184,15 @@ public class DcsTool implements IMcpTool
     @Override
     public String execute(Map<String, String> params)
     {
+        String result = executeCall(params);
+        // Any refused chunked-upload call ends its upload, including a refusal returned before the
+        // chunk reached the staging (bad action, type, fqn, format, language or limit/offset).
+        DcsXmlChunkUpload.SHARED.discardIfRefused(JsonUtils.extractStringArgument(params, KEY_BODY), result);
+        return result;
+    }
+
+    private String executeCall(Map<String, String> params)
+    {
         // Keep all ten reads explicit: SchemaExecuteParamParityTest checks both directions.
         String projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
         String rawFqn = JsonUtils.extractStringArgument(params, KEY_FQN);
@@ -257,6 +267,10 @@ public class DcsTool implements IMcpTool
         {
             return formatError;
         }
+        if (DcsXmlChunkUpload.isChunkBody(body))
+        {
+            return executeChunk(params, projectName, parsed.address(), action, type, body, expectedHash, language);
+        }
         String shapeError = validateActionShape(params, action, type, body, expectedHash, parsed.address());
         if (shapeError != null)
         {
@@ -310,6 +324,46 @@ public class DcsTool implements IMcpTool
                 + "; no model changes were made.").toJson(); //$NON-NLS-1$
         }
         return dispatchResult(action, parsed.address(), scope, result, handoff);
+    }
+
+    /**
+     * One part of a chunked {@code replace type='schema'}: staged without writing anything, or, for the
+     * part that completes the document, committed by re-entering {@link #execute(Map)} as the
+     * whole-document {@code body.xml} call - the one replace path with its hash, loss and export checks.
+     */
+    private String executeChunk(Map<String, String> params, String projectName, DcsAddress address,
+        String action, String type, String body, String expectedHash, String language)
+    {
+        var step = DcsXmlChunkUpload.SHARED.accept(
+            new DcsXmlChunkUpload.Request(projectName, address.toString(),
+                action, type, address.hasPointer(), expectedHash,
+                params.containsKey(McpKeys.LIMIT) || params.containsKey(KEY_OFFSET),
+                JsonParser.parseString(body).getAsJsonObject()),
+            () -> probeCurrentHash(projectName, address, language));
+        return step.isComplete() ? commitAssembled(step.wholeDocumentParams(params)) : step.response();
+    }
+
+    /** Commits an assembled chunked upload; a seam for tests, always the whole-document call. */
+    String commitAssembled(Map<String, String> wholeDocumentParams)
+    {
+        return execute(wholeDocumentParams);
+    }
+
+    /** Reads the root's current hash the way a Markdown get does, before a first chunk is staged. */
+    DcsXmlChunkUpload.ProbeResult probeCurrentHash(String projectName,
+        DcsAddress address, String language)
+    {
+        var display = ReadToolExecution.defaultDisplayExecutor();
+        if (display == null)
+        {
+            return DcsXmlChunkUpload.ProbeResult.error(ToolResult.error(
+                "EDT workbench display is not available for dcs target '" + address //$NON-NLS-1$
+                + "'. Open the project in EDT and retry the chunk at body.offset=0.").toJson()); //$NON-NLS-1$
+        }
+        AtomicReference<String> read = new AtomicReference<>();
+        String failure = dispatchResult(ACTION_GET, address, null, read, () -> display.accept(() -> read.set(
+            executeGet(projectName, address, "schema", language, FORMAT_MD, Integer.valueOf(1), 0)))); //$NON-NLS-1$
+        return DcsXmlChunkUpload.ProbeResult.fromRootRead(failure);
     }
 
     /** Converts a failed SWT handoff into the tool's structured error contract for every action. */
