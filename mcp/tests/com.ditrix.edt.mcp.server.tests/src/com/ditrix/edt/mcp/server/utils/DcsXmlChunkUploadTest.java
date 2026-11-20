@@ -588,6 +588,48 @@ public class DcsXmlChunkUploadTest
         assertEquals(-1, uploads.receivedChars(id));
     }
 
+    /** #989 P2-A: a restart keeps the upload's project and target; switching either ends the upload. */
+    @Test
+    public void testARestartToAnotherTargetOrProjectIsRefusedAndEndsTheUpload()
+    {
+        String[][] switches = {
+            {PROJECT, "Report.Other", "fqn 'Report.Other' differs from 'Report.Sales'"}, //$NON-NLS-1$ //$NON-NLS-2$
+            {"Other", TARGET, "projectName 'Other' differs from 'Project'"}}; //$NON-NLS-1$ //$NON-NLS-2$
+        for (String[] change : switches)
+        {
+            for (boolean completing : new boolean[] {true, false})
+            {
+                String id = begin(10);
+                int probesBefore = probes.get();
+                String text = completing ? DOC : DOC.substring(0, 4);
+                DcsXmlChunkUpload.Step step = uploads.accept(request(change[0], change[1], HASH,
+                    chunk(id, text, 0, DOC.length())), probe(HASH));
+                String ctx = change[2] + (completing ? " (completing)" : " (staged)"); //$NON-NLS-1$ //$NON-NLS-2$
+                String message = error(step);
+                assertTrue(ctx + ": " + message, message.contains(change[2] + ", which started upload '" + id + "'")); //$NON-NLS-1$ //$NON-NLS-2$
+                assertTrue(ctx + ": " + message, message.contains("Upload '" + id + "' was discarded")); //$NON-NLS-1$ //$NON-NLS-2$
+                assertEquals(ctx, -1, uploads.receivedChars(id));
+                assertEquals(ctx + ": refused before the hash read", probesBefore, probes.get()); //$NON-NLS-1$
+            }
+        }
+    }
+
+    /** #989 P2-A: a restart is a new document of the same target - its hash and length may change. */
+    @Test
+    public void testARestartMayCarryANewHashAndANewLength()
+    {
+        String id = begin(10);
+        String other = DOC + "<!-- longer -->"; //$NON-NLS-1$
+        DcsXmlChunkUpload.Step staged = uploads.accept(request(PROJECT, TARGET, OTHER_HASH,
+            chunk(id, other.substring(0, 5), 0, other.length())), probe(OTHER_HASH));
+        assertEquals(id, issued(staged));
+        assertTrue(staged.response(), staged.response().contains("of `" + other.length() + "` characters")); //$NON-NLS-1$ //$NON-NLS-2$
+        DcsXmlChunkUpload.Step done = uploads.accept(request(PROJECT, TARGET, HASH,
+            chunk(id, DOC, 0, DOC.length())), probe(HASH));
+        assertTrue(done.isComplete());
+        assertEquals(DOC, done.xml());
+    }
+
     @Test
     public void testIsChunkBodyRecognizesOnlyAnObjectWithXmlChunk()
     {

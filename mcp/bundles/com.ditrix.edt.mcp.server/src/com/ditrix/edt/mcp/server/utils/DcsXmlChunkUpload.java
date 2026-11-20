@@ -332,12 +332,10 @@ public final class DcsXmlChunkUpload
         boolean completes = chunk.text().length() == chunk.totalChars();
         if (completes)
         {
-            // Claim and remove in one step: of two simultaneous completing restarts only one commits.
-            if (chunk.uploadId() != null && !claim(chunk.uploadId()))
-            {
-                return unknownUpload(chunk);
-            }
-            return new Step(null, chunk.text());
+            // Claim and remove in one step: of two simultaneous completing restarts only one commits,
+            // and only to the target the upload is bound to.
+            Step refused = chunk.uploadId() == null ? null : claimRestart(request, chunk);
+            return refused != null ? refused : new Step(null, chunk.text());
         }
         long observedVersion = -1;
         Staging observedStaging = null;
@@ -350,6 +348,12 @@ public final class DcsXmlChunkUpload
                 if (observedStaging == null)
                 {
                     return unknownUpload(chunk);
+                }
+                // The target binding is final; the identity and version check below keeps it the same staging.
+                String switched = targetMismatch(observedStaging, request, chunk.uploadId());
+                if (switched != null)
+                {
+                    return boundElsewhere(chunk.uploadId(), switched);
                 }
                 observedVersion = observedStaging.version;
             }
@@ -425,9 +429,7 @@ public final class DcsXmlChunkUpload
         String mismatch = mismatch(staging, request, chunk);
         if (mismatch != null)
         {
-            uploads.remove(chunk.uploadId());
-            return new Step(ToolResult.error(mismatch + " Upload '" + chunk.uploadId() //$NON-NLS-1$
-                + "' was discarded; " + RESTART + " Nothing was written.").toJson(), null); //$NON-NLS-1$ //$NON-NLS-2$
+            return boundElsewhere(chunk.uploadId(), mismatch);
         }
         staging.received.append(chunk.text());
         staging.lastTouched = now;
@@ -449,11 +451,54 @@ public final class DcsXmlChunkUpload
             + "action='get' first: a changed hash means that replace was applied.").toJson(), null); //$NON-NLS-1$
     }
 
-    /** @return whether {@code uploadId} was active and is now removed by this call alone */
-    private synchronized boolean claim(String uploadId)
+    /**
+     * Claims a completing restart: the upload must be active and bound to this call's project and
+     * target; it is removed in the same step, so it commits at most once.
+     *
+     * @return {@code null} when claimed, else the refusal
+     */
+    private synchronized Step claimRestart(Request request, Chunk chunk)
     {
         sweep(clock.getAsLong());
-        return uploads.remove(uploadId) != null;
+        Staging staging = uploads.get(chunk.uploadId());
+        if (staging == null)
+        {
+            return unknownUpload(chunk);
+        }
+        String switched = targetMismatch(staging, request, chunk.uploadId());
+        if (switched != null)
+        {
+            return boundElsewhere(chunk.uploadId(), switched);
+        }
+        uploads.remove(chunk.uploadId());
+        return null;
+    }
+
+    /** Ends {@code uploadId} because a call disagreed with what it is bound to. Caller holds the lock. */
+    private Step boundElsewhere(String uploadId, String mismatch)
+    {
+        uploads.remove(uploadId);
+        return new Step(ToolResult.error(mismatch + " Upload '" + uploadId //$NON-NLS-1$
+            + "' was discarded; " + RESTART + " Nothing was written.").toJson(), null); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * What a restart must keep: the project and target the upload was started for. A restart is a
+     * new document of that target, so its expectedHash and totalChars may change.
+     */
+    private static String targetMismatch(Staging staging, Request request, String uploadId)
+    {
+        if (!staging.projectName.equals(request.projectName()))
+        {
+            return "projectName '" + request.projectName() + "' differs from '" + staging.projectName //$NON-NLS-1$ //$NON-NLS-2$
+                + "', which started upload '" + uploadId + "'."; //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        if (!staging.target.equals(request.target()))
+        {
+            return "fqn '" + request.target() + "' differs from '" + staging.target //$NON-NLS-1$ //$NON-NLS-2$
+                + "', which started upload '" + uploadId + "'."; //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return null;
     }
 
     private static String uploadIdOf(JsonObject body)
@@ -465,15 +510,10 @@ public final class DcsXmlChunkUpload
 
     private static String mismatch(Staging staging, Request request, Chunk chunk)
     {
-        if (!staging.projectName.equals(request.projectName()))
+        String switched = targetMismatch(staging, request, chunk.uploadId());
+        if (switched != null)
         {
-            return "projectName '" + request.projectName() + "' differs from '" + staging.projectName //$NON-NLS-1$ //$NON-NLS-2$
-                + "', which started upload '" + chunk.uploadId() + "'."; //$NON-NLS-1$ //$NON-NLS-2$
-        }
-        if (!staging.target.equals(request.target()))
-        {
-            return "fqn '" + request.target() + "' differs from '" + staging.target //$NON-NLS-1$ //$NON-NLS-2$
-                + "', which started upload '" + chunk.uploadId() + "'."; //$NON-NLS-1$ //$NON-NLS-2$
+            return switched;
         }
         if (!staging.expectedHash.equals(request.expectedHash()))
         {

@@ -185,6 +185,21 @@ public class DcsToolChunkedReplaceTest
         assertEquals(0, tool.commits.size());
     }
 
+    /** #989 P2-A: a completing restart that switches the target never reaches the commit. */
+    @Test
+    public void testACompletingRestartToAnotherTargetIsRefusedWithoutCommitting()
+    {
+        Recording tool = new Recording();
+        String id = issued(tool.execute(chunkCall(null, DOC.substring(0, 20), 0, DOC.length())));
+        Map<String, String> restart = chunkCall(id, DOC, 0, DOC.length());
+        restart.put("fqn", "Report.Other"); //$NON-NLS-1$ //$NON-NLS-2$
+        String result = tool.execute(restart);
+        assertTrue(result, ToolResult.isErrorPayload(result));
+        assertTrue(result, result.contains("fqn 'Report.Other' differs from 'Report.Sales'")); //$NON-NLS-1$
+        assertEquals("nothing may be committed to the new target", 0, tool.commits.size()); //$NON-NLS-1$
+        assertEquals(-1, DcsXmlChunkUpload.SHARED.receivedChars(id));
+    }
+
     @Test
     public void testXmlAndXmlChunkTogetherAreRefusedWithoutWriting()
     {
