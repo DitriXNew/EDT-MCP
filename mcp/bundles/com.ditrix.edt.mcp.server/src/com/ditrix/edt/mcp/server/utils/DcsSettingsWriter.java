@@ -3701,6 +3701,186 @@ public final class DcsSettingsWriter
         return appearance(body, current, languages, available, Version.LATEST, "appearance"); //$NON-NLS-1$
     }
 
+    /**
+     * The typed appearance grammar for an area-template cell or field (#662): the same
+     * merge-on-update builder conditional appearance uses, run against detached copies of
+     * {@code current} and returned as a detached item list. An item this call wrote - one with no
+     * stored item at its parameter path, or one that replaced it - becomes the core
+     * {@link DataCompositionParameterValue} EDT's template designer writes into a cell (the builder
+     * creates a plain {@link SettingsParameterValue} holder for a new dotted key). A stored item keeps
+     * its class even when a dotted key changed a value below it, so a patch never rewrites what it
+     * did not address. A written item that carries a settings member is refused: a template cell has
+     * no place for it.
+     *
+     * @param body the appearance body (keyed map or {@code {items:[...]}})
+     * @param current the items to merge into, or {@code null}/empty for a fresh appearance
+     * @param languages the mutation's language context
+     * @param available the platform appearance catalogue
+     * @param version the project platform version
+     * @param namedColors the named-color resolver, or {@code null}
+     * @param path where an error says the body came from
+     * @return the built items, or the writer's error
+     */
+    static AppearanceItemsResult buildAppearanceItems(JsonObject body,
+        List<DataCompositionParameterValue> current, DcsPresentationParser.LanguageContext languages,
+        DcsAvailableParameterCollection available, Version version,
+        StyleValueBuilder.NamedColorResolver namedColors, String path)
+    {
+        try (var scope = ThreadLocalScope.openIfAbsent(PARSE_SCRATCH, ParseScratch::new))
+        {
+            DataCompositionAppearance holder = com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE
+                .createDataCompositionAppearance();
+            List<DataCompositionParameterValue> inputs = new ArrayList<>();
+            if (current != null)
+            {
+                for (DataCompositionParameterValue item : current)
+                {
+                    inputs.add(EcoreUtil.copy(item));
+                    holder.getItems().add(EcoreUtil.copy(item));
+                }
+            }
+            AppearanceResult built = withNamedColors(namedColors,
+                () -> appearance(body, holder, languages, available, version, path));
+            if (built.error != null) return AppearanceItemsResult.failure(built.error);
+            List<DataCompositionParameterValue> items = new ArrayList<>();
+            List<DataCompositionParameterValue> builtItems = new ArrayList<>(built.value.getItems());
+            for (int i = 0; i < builtItems.size(); i++)
+            {
+                DataCompositionParameterValue item = builtItems.get(i);
+                DataCompositionParameterValue result = templateAppearanceItem(item, storedAt(inputs, i));
+                if (result == null)
+                {
+                    return AppearanceItemsResult.failure("Appearance item '" //$NON-NLS-1$
+                        + (item.getParameter() == null ? "" : item.getParameter().getValue()) //$NON-NLS-1$
+                        + "' at '" + path + "' carries viewMode, userSettingID or " //$NON-NLS-1$ //$NON-NLS-2$
+                        + "userSettingPresentation, which an area template cannot store. Remove them."); //$NON-NLS-1$
+                }
+                items.add(result);
+            }
+            return AppearanceItemsResult.success(items);
+        }
+    }
+
+    /**
+     * Decides one built item by the stored item at the same position, not by whether the whole
+     * subtree still equals its input: a dotted key changes a nested value in place, so the holder
+     * above it is unequal to its input although this call did not write the holder. A node equal to
+     * its stored counterpart is the stored node; a node whose own members (class, use, parameter,
+     * values, settings members) equal the stored one's is the stored node changed only below, so it
+     * keeps its class and each child is decided the same way; anything else - a node with no stored
+     * counterpart, or one that replaced it - was written by this call.
+     *
+     * <p>The pairing is by position, not by parameter name: a stored list may carry two items of
+     * one name (EDT's Template.dcs reader keeps both), and pairing by name would judge the second by
+     * the first. Position is exact because the builder keeps every stored item at its index - it
+     * copies the list, replaces an item in place and appends a new one ({@code putAppearanceItem},
+     * {@code putAppearanceParameter}), and never removes or inserts before a stored item.
+     *
+     * @param item the built item
+     * @param stored the stored item at the same position in the same list, or {@code null}
+     * @return the item to store, or {@code null} when a written item carries settings members
+     */
+    private static DataCompositionParameterValue templateAppearanceItem(DataCompositionParameterValue item,
+        DataCompositionParameterValue stored)
+    {
+        if (stored != null && EcoreUtil.equals(stored, item))
+        {
+            return item;
+        }
+        if (stored == null || !EcoreUtil.equals(withoutNested(stored), withoutNested(item)))
+        {
+            return coreAppearanceItem(item);
+        }
+        List<DataCompositionParameterValue> children = new ArrayList<>(item.getNestedParameterValues());
+        item.getNestedParameterValues().clear();
+        for (int i = 0; i < children.size(); i++)
+        {
+            DataCompositionParameterValue child = children.get(i);
+            DataCompositionParameterValue decided =
+                templateAppearanceItem(child, storedAt(stored.getNestedParameterValues(), i));
+            if (decided == null)
+            {
+                return null;
+            }
+            item.getNestedParameterValues().add(decided);
+        }
+        return item;
+    }
+
+    /** The stored item at {@code index}, or {@code null} for an item the builder appended. */
+    private static DataCompositionParameterValue storedAt(List<DataCompositionParameterValue> stored, int index)
+    {
+        return index < stored.size() ? stored.get(index) : null;
+    }
+
+    /** A detached copy of an item without its nested values, to compare its own members only. */
+    private static DataCompositionParameterValue withoutNested(DataCompositionParameterValue item)
+    {
+        DataCompositionParameterValue copy = EcoreUtil.copy(item);
+        copy.getNestedParameterValues().clear();
+        return copy;
+    }
+
+    /** The core item EDT writes into a template cell, or {@code null} when settings members would be lost. */
+    private static DataCompositionParameterValue coreAppearanceItem(DataCompositionParameterValue item)
+    {
+        if (item instanceof SettingsParameterValue)
+        {
+            SettingsParameterValue settings = (SettingsParameterValue)item;
+            if (!java.util.Objects.equals(settings.getViewMode(),
+                DcsPackage.Literals.SETTINGS_PARAMETER_VALUE__VIEW_MODE.getDefaultValue())
+                || settings.getUserSettingID() != null
+                || settings.getUserSettingPresentation() != null)
+            {
+                return null;
+            }
+        }
+        DataCompositionParameterValue result = com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE
+            .createDataCompositionParameterValue();
+        result.setUse(item.isUse());
+        result.setParameter(item.getParameter() == null ? null : EcoreUtil.copy(item.getParameter()));
+        result.getValues().addAll(EcoreUtil.copyAll(item.getValues()));
+        for (DataCompositionParameterValue child : item.getNestedParameterValues())
+        {
+            DataCompositionParameterValue converted = coreAppearanceItem(child);
+            if (converted == null) return null;
+            result.getNestedParameterValues().add(converted);
+        }
+        return result;
+    }
+
+    /** The untyped ValueSpec parser every untyped slot uses, for an area-template field value (#662). */
+    static ValueResult untypedValue(JsonElement raw, String path)
+    {
+        try (var scope = ThreadLocalScope.openIfAbsent(PARSE_SCRATCH, ParseScratch::new))
+        {
+            return value(raw, path);
+        }
+    }
+
+    /** Built template appearance items, or the writer's error. */
+    static final class AppearanceItemsResult
+    {
+        final List<DataCompositionParameterValue> items;
+        final String error;
+
+        private AppearanceItemsResult(List<DataCompositionParameterValue> items, String error)
+        {
+            this.items = items;
+            this.error = error;
+        }
+
+        static AppearanceItemsResult success(List<DataCompositionParameterValue> items)
+        {
+            return new AppearanceItemsResult(items, null);
+        }
+
+        static AppearanceItemsResult failure(String error)
+        {
+            return new AppearanceItemsResult(null, error);
+        }
+    }
+
     private static AppearanceResult appearance(JsonObject body, DataCompositionAppearance current,
         DcsPresentationParser.LanguageContext languages, DcsAvailableParameterCollection available,
         Version version, String path)
@@ -3974,7 +4154,7 @@ public final class DcsSettingsWriter
         return body;
     }
 
-    private static JsonObject appearanceItemBody(DataCompositionParameterValue item)
+    static JsonObject appearanceItemBody(DataCompositionParameterValue item)
     {
         if (item.getParameter() == null) return null;
         JsonObject body = new JsonObject();

@@ -444,7 +444,11 @@ def test_assignable_names_the_form_root_properties_at_the_model_default():
     r = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [fqn], "assignable": True})
     assert_ok(r, "assignable schema for the managed-form model root")
     marker = "At the model default (not written to the source file): "
-    lines = [l for l in r.text.splitlines() if l.startswith(marker)]
+    # The form's metadata object has its own table first (issue #995); this test reads the content root's.
+    content_heading = "## Form content root assignable properties: " + fqn
+    assert_contains(r.text, content_heading, "the content root's table has its own heading")
+    root_section = r.text[r.text.index(content_heading):]
+    lines = [l for l in root_section.splitlines() if l.startswith(marker)]
     assert len(lines) == 1, "the form root must name its defaulted properties once: %s" % r.text[:1500]
     named = [n.strip() for n in lines[0][len(marker):].rstrip(".").split(",") if n.strip()]
     assert named, "the fixture form leaves properties at their default: %r" % lines[0]

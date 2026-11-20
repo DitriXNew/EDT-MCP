@@ -23,6 +23,8 @@ public class ActiveToolCall
     private final Object requestId;
     private final long startTime;
     private final AtomicBoolean responded = new AtomicBoolean(false);
+    /** Set once a response was actually written to the transport; read without the monitor. */
+    private volatile boolean delivered;
     private final CallCapture historyCapture;
     private final AtomicReference<UserSignal> userSignal = new AtomicReference<>();
 
@@ -116,6 +118,19 @@ public class ActiveToolCall
         return responded.get();
     }
     
+    /**
+     * Whether a response was written to the client, read without this call's monitor. The signal
+     * path holds the monitor while it writes to the socket, so a status reader that asked
+     * {@link #hasResponded} could wait on a slow client. Unlike {@link #hasResponded}, which turns true
+     * when a response is selected, this stays false while that write is in progress and when it fails.
+     *
+     * @return true once a normal or signal response was sent successfully
+     */
+    public boolean isResponseDelivered()
+    {
+        return delivered;
+    }
+
     /** Sends the signal immediately if no response has been selected, returning control to the agent. */
     public synchronized boolean sendSignalResponse(UserSignal signal)
     {
@@ -130,6 +145,7 @@ public class ActiveToolCall
             String jsonResponse = buildSignalResponse(signal);
             
             responder.send(jsonResponse);
+            delivered = true;
 
             recordResponse(jsonResponse, true);
             
@@ -164,6 +180,7 @@ public class ActiveToolCall
         try
         {
             responder.send(response);
+            delivered = true;
             recordResponse(response, false);
             return true;
         }

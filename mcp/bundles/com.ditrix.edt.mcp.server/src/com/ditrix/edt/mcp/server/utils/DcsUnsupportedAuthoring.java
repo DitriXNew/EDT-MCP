@@ -36,6 +36,19 @@ final class DcsUnsupportedAuthoring
             + "body={xml:...} on a bare schema root."; //$NON-NLS-1$
     }
 
+    /**
+     * Field templates and resource templates ({@code fieldTemplates}, {@code totalFieldsTemplates})
+     * are not authored by the typed API (#662 covers area templates and grouping bindings only).
+     */
+    static String templateCollectionRefusal(String collection, String address)
+    {
+        return "'" + address + "' is in " + collection //$NON-NLS-1$ //$NON-NLS-2$
+            + ": field and resource templates are not authorable through the typed API, so nothing was " //$NON-NLS-1$
+            + "written. Change them through the lossless XML channel: read the schema with action='get', " //$NON-NLS-1$
+            + "type='schema', format='xml' on the bare root, edit it, and send action='replace', " //$NON-NLS-1$
+            + "type='schema', body={xml:...} with that read's expectedHash."; //$NON-NLS-1$
+    }
+
     static boolean isNestedDataSetKind(String kind)
     {
         return kind != null && ("nestedDataSet".equalsIgnoreCase(kind) //$NON-NLS-1$
