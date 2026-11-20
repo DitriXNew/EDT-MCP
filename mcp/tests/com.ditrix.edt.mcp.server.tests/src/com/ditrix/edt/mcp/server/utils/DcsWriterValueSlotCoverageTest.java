@@ -31,6 +31,7 @@ public class DcsWriterValueSlotCoverageTest
         com._1c.g5.v8.dt.dcs.model.core.DcsPackage.eINSTANCE,
         com._1c.g5.v8.dt.dcs.model.settings.DcsPackage.eINSTANCE,
         com._1c.g5.v8.dt.dcs.model.schema.DcsPackage.eINSTANCE,
+        com._1c.g5.v8.dt.dcs.model.areaTemplate.DcsPackage.eINSTANCE,
         McorePackage.eINSTANCE
     };
 
@@ -67,7 +68,8 @@ public class DcsWriterValueSlotCoverageTest
             "DataCompositionGroupField.periodAdditionEnd", "DataCompositionGroupField.field",
             "DataCompositionSelectedField.field", "DataCompositionSelectedFieldGroup.field",
             "DataCompositionOrderItem.field", "DataCompositionAppearanceField.field",
-            "DataCompositionParameterValue.parameter", "DataCompositionParameterValue.values")));
+            "DataCompositionParameterValue.parameter", "DataCompositionParameterValue.values",
+            "DataCompositionAreaTemplateField.value", "DataCompositionSchemaGroupTemplate.groupFields")));
     }
 
     private static Set<EReference> writerSlots() throws Exception
@@ -75,7 +77,7 @@ public class DcsWriterValueSlotCoverageTest
         Set<EReference> result = new LinkedHashSet<>();
         for (Class<?> writer : new Class<?>[] {DcsSettingsWriter.class, DcsWriter.class,
             DcsSchemaWriter.class, DcsDynamicListWriter.class, DcsFormAppearanceContent.class,
-            DcsPresentationParser.class})
+            DcsPresentationParser.class, DcsTemplateBody.class, DcsTemplateWriter.class})
         {
             discover(writer, result);
         }

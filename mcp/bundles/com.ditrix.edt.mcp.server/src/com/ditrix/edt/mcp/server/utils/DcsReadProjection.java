@@ -401,6 +401,15 @@ public final class DcsReadProjection
     private static void collectUnmodellable(EObject object, String address, String collection,
         DcsWriterCatalogues catalogues, Set<EObject> outsideScope, List<Unmodellable> result)
     {
+        if (object.eContainer() instanceof DataCompositionSchema
+            && DcsTemplateProjection.isCollection(collection) && DcsTemplateProjection.isNode(object))
+        {
+            // A template or a binding is judged as a unit by the template writer's own dry run;
+            // descending would send its cell appearance to the settings catalogues (#662).
+            String reason = DcsTemplateBody.restatementRefusal(object, catalogues);
+            if (reason != null) result.add(new Unmodellable(object.eClass().getName(), address, reason));
+            return;
+        }
         boolean unsupported = object instanceof DataSet
             && !(object instanceof DataCompositionSchemaDataSetQuery)
             && !(object instanceof DataCompositionSchemaDataSetObject)
@@ -410,9 +419,8 @@ public final class DcsReadProjection
                 && !(object instanceof DataCompositionSchemaDataSetFieldFolder)
             || object instanceof StructureItem && !(object instanceof DataCompositionGroup)
                 && !(object instanceof DataCompositionTable) && !(object instanceof DataCompositionChart)
-            || "nestedSchemas".equals(collection) || "templates".equals(collection) //$NON-NLS-1$ //$NON-NLS-2$
-            || "fieldTemplates".equals(collection) || "groupTemplates".equals(collection) //$NON-NLS-1$ //$NON-NLS-2$
-            || "groupHeaderTemplates".equals(collection) //$NON-NLS-1$
+            || "nestedSchemas".equals(collection) //$NON-NLS-1$
+            || "fieldTemplates".equals(collection) //$NON-NLS-1$
             || "totalFieldsTemplates".equals(collection); //$NON-NLS-1$
         String reason = unsupported ? "this node is outside the writer's model" : null; //$NON-NLS-1$
         if (reason == null && object instanceof Value)
@@ -497,6 +505,18 @@ public final class DcsReadProjection
                 ? "duplicate resolved appearance parameter '" + declared.key(0) //$NON-NLS-1$
                     + "'; an appearance body can write it only once" : null; //$NON-NLS-1$
         }
+        if (owner instanceof DataCompositionSchema && DcsTemplateProjection.TEMPLATES.equals(collection))
+        {
+            // The template writer keys a template by a unique name that does not read as an index.
+            String name = stringFeature(item, "name"); //$NON-NLS-1$
+            String key = name.toLowerCase(Locale.ROOT);
+            if (name.isEmpty() || DcsAddress.isZeroBasedIndex(name) || !seen.add(key))
+            {
+                return "template name '" + name + "' cannot key a body: the writer keys a template by " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "a unique (case-insensitive), non-numeric name"; //$NON-NLS-1$
+            }
+            return null;
+        }
         String member = null;
         if (owner instanceof Structure && "property".equals(collection) //$NON-NLS-1$
             || owner instanceof DataCompositionSchema && NATURAL_NAME_COLLECTIONS.contains(collection)
@@ -546,12 +566,16 @@ public final class DcsReadProjection
             .AVAILABLE_VALUE__VALUE, ValueSlot.REQUIRED_DECLARED),
         Map.entry(McorePackage.Literals.STRUCTURE_PROPERTY__VALUE, ValueSlot.REQUIRED_UNTYPED),
         Map.entry(McorePackage.Literals.LINE__STYLE, ValueSlot.LINE_STYLE),
-        Map.entry(McorePackage.Literals.TYPED_VALUE_LIST_ITEM__VALUE, ValueSlot.UNTYPED));
+        Map.entry(McorePackage.Literals.TYPED_VALUE_LIST_ITEM__VALUE, ValueSlot.UNTYPED),
+        Map.entry(com._1c.g5.v8.dt.dcs.model.areaTemplate.DcsPackage.Literals
+            .DATA_COMPOSITION_AREA_TEMPLATE_FIELD__VALUE, ValueSlot.TEMPLATE),
+        Map.entry(com._1c.g5.v8.dt.dcs.model.schema.DcsPackage.Literals
+            .DATA_COMPOSITION_SCHEMA_GROUP_TEMPLATE__GROUP_FIELDS, ValueSlot.TEMPLATE));
 
     enum ValueSlot
     {
         UNTYPED, FIELD, PERIOD_BOUND, DECLARED, PARAMETER, PRESENTATION, UNREGISTERED,
-        REQUIRED_UNTYPED, REQUIRED_DECLARED, LINE_STYLE;
+        REQUIRED_UNTYPED, REQUIRED_DECLARED, LINE_STYLE, TEMPLATE;
 
         boolean requiresValue()
         {
@@ -571,6 +595,9 @@ public final class DcsReadProjection
         {
             // The containing LineValue is checked as one value, including the enum's type and literal.
             case LINE_STYLE -> null;
+            // A template field value or a binding's group field is judged with its whole node by the
+            // template writer's dry run.
+            case TEMPLATE -> null;
             case UNTYPED, REQUIRED_UNTYPED -> DcsSettingsWriter.untypedValueRefusal(stored);
             case FIELD -> DcsSettingsWriter.fieldValueRefusal(stored);
             case PERIOD_BOUND -> DcsSettingsWriter.periodBoundRefusal(stored);
@@ -747,6 +774,10 @@ public final class DcsReadProjection
             {
                 result.add(address);
             }
+        }
+        if ("template".equals(kind) && sameIdentity(identity, templateReference(object))) //$NON-NLS-1$
+        {
+            result.add(address);
         }
         if ("dataSource".equals(kind)) //$NON-NLS-1$
         {
@@ -1217,6 +1248,18 @@ public final class DcsReadProjection
                 result.add(address);
             }
         }
+    }
+
+    /** The template name a grouping binding, field template or resource template names, else null. */
+    private static String templateReference(EObject object)
+    {
+        if (object instanceof DataCompositionSchemaGroupTemplate)
+            return ((DataCompositionSchemaGroupTemplate)object).getTemplate();
+        if (object instanceof com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaFieldTemplate)
+            return ((com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaFieldTemplate)object).getTemplate();
+        if (object instanceof com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaTotalFieldsTemplate)
+            return ((com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaTotalFieldsTemplate)object).getTemplate();
+        return null;
     }
 
     /**

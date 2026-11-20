@@ -19,19 +19,15 @@ import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaGroupTemplate;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaTemplateDescription;
 
 /**
- * Read-only projection of a schema's area templates ({@code templates}) and the grouping
- * bindings that point at them ({@code groupTemplates}, {@code groupHeaderTemplates}) for
- * {@link DcsReadProjection} (#662).
+ * Projection of a schema's area templates ({@code templates}) and the grouping bindings that point
+ * at them ({@code groupTemplates}, {@code groupHeaderTemplates}) for {@link DcsReadProjection} (#662).
  *
- * <p>They are read under {@code type='schema'}, as data-set links are: the typed write vocabulary
- * has no template type, and the lossless XML channel is the only way to author them. A template is
- * addressed by its {@code name} when that name is unique and not numeric, otherwise by its index
- * (see {@link #templateSelector}); a binding by its zero-based index. A template page summarises the
- * area body instead of expanding it, because its rows, cells and appearance have no addressable read
- * type; the body itself is read with {@code format='xml'}.
- *
- * <p>The area-template classes live in a package this bundle does not import, so the body is read
- * through the model's features rather than its typed accessors.
+ * <p>They are read under {@code type='schema'}, as data-set links are, and written the same way
+ * through {@link DcsTemplateWriter}. A template is addressed by its {@code name} when that name is
+ * unique and not numeric, otherwise by its index (see {@link #templateSelector}); a binding by its
+ * zero-based index. A template page summarises the area body and prints it as the JSON body the
+ * writer accepts ({@link DcsTemplateBody#restate}), because its rows, cells and appearance have no
+ * addressable read type of their own.
  */
 public final class DcsTemplateProjection
 {
@@ -44,32 +40,6 @@ public final class DcsTemplateProjection
     private DcsTemplateProjection()
     {
         // utility class
-    }
-
-    /**
-     * Refuses a typed write addressed at a template or a grouping binding, before any model work:
-     * the reads print these addresses, and without this a write there would fall through to a
-     * writer that does not model them.
-     *
-     * @param action the requested write action
-     * @param address the parsed target address
-     * @return the refusal text, or {@code null} when the address is not a template address
-     */
-    public static String writeRefusal(String action, DcsAddress address)
-    {
-        if (address == null || !address.hasPointer() || !isCollection(address.segments().get(0))
-            || !isSchemaRoot(address))
-        {
-            // Only a schema root has templates; any other root keeps its own validation path.
-            return null;
-        }
-        String root = DcsAddress.render(address.rootFqn(), Collections.<String> emptyList());
-        return "Template address '" + address + "' is read-only: the typed API does not author " //$NON-NLS-1$ //$NON-NLS-2$
-            + "templates or grouping bindings, so action='" + action + "' was not run and nothing " //$NON-NLS-1$ //$NON-NLS-2$
-            + "was written. Read it with action='get', type='schema'. To change it, read the whole " //$NON-NLS-1$
-            + "schema with action='get', type='schema', format='xml' on '" + root //$NON-NLS-1$
-            + "', edit the XML, and send it back with action='replace', type='schema', " //$NON-NLS-1$
-            + "body={xml:...} and the expectedHash of that read."; //$NON-NLS-1$
     }
 
     /** @return whether {@code collection} is one of the schema's template collections */
@@ -86,7 +56,8 @@ public final class DcsTemplateProjection
             || value instanceof DataCompositionSchemaGroupTemplate;
     }
 
-    private static boolean isSchemaRoot(DcsAddress address)
+    /** @return whether the address's root is a DataCompositionSchema (only a schema has templates) */
+    static boolean isSchemaRoot(DcsAddress address)
     {
         DcsTargetResolver.RootClassification root = DcsTargetResolver.classifyRoot(address);
         return root.isSuccess() && (root.kind == DcsTargetResolver.TargetKind.REPORT_MAIN_DCS
@@ -205,9 +176,9 @@ public final class DcsTemplateProjection
     {
         Body body = Body.of(template);
         result.append("## Template\n\n") //$NON-NLS-1$
-            .append("Read-only: the typed API does not author templates. The area body (rows, cells, ") //$NON-NLS-1$
-            .append("their items and appearance) is summarised, not expanded; read it with ") //$NON-NLS-1$
-            .append("format='xml' on the bare schema root `").append(schemaAddress).append("`.\n\n") //$NON-NLS-1$ //$NON-NLS-2$
+            .append("The area body (rows, cells, their items and appearance) is summarised here and ") //$NON-NLS-1$
+            .append("printed under Body; the stored XML is read with format='xml' on the bare schema ") //$NON-NLS-1$
+            .append("root `").append(schemaAddress).append("`.\n\n") //$NON-NLS-1$ //$NON-NLS-2$
             .append(MarkdownUtils.tableHeader("Property", "Value")) //$NON-NLS-1$ //$NON-NLS-2$
             .append(MarkdownUtils.tableRow("Body", //$NON-NLS-1$
                 body.node == null ? "(none)" : body.node.eClass().getName())) //$NON-NLS-1$
@@ -235,6 +206,8 @@ public final class DcsTemplateProjection
             }
             result.append('\n');
         }
+
+        appendBody(result, template);
 
         result.append("## Grouping bindings\n\n"); //$NON-NLS-1$
         List<String> bound = new ArrayList<>();
@@ -273,20 +246,49 @@ public final class DcsTemplateProjection
         bound.forEach(result::append);
     }
 
+    /**
+     * The node's body as the writer accepts it: what {@code replace} restates and what
+     * {@code rows}/{@code parameters} replace. A member with no body form is shown as
+     * {@code {"unsupported": ...}}; the write that would discard it is refused.
+     */
+    private static void appendBody(StringBuilder result, EObject node)
+    {
+        DcsTemplateBody.Restatement restated = DcsTemplateBody.restate(node);
+        String json = DcsTemplateBody.json(restated.body);
+        String fence = fence(json);
+        result.append("## Body\n\n") //$NON-NLS-1$
+            .append("The body action='replace' accepts here, and the form rows/parameters take in ") //$NON-NLS-1$
+            .append("an update. A value shown as {\"unsupported\": ...} has no body form.\n\n") //$NON-NLS-1$
+            .append(fence).append("json\n").append(json).append('\n').append(fence).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** A code fence longer than any backtick run inside {@code text}. */
+    private static String fence(String text)
+    {
+        int longest = 0;
+        int run = 0;
+        for (int i = 0; i < text.length(); i++)
+        {
+            run = text.charAt(i) == '`' ? run + 1 : 0;
+            longest = Math.max(longest, run);
+        }
+        return "`".repeat(Math.max(3, longest + 1)); //$NON-NLS-1$
+    }
+
     private static void appendBinding(StringBuilder result,
         DataCompositionSchemaGroupTemplate binding, DataCompositionSchema schema,
         String nodeAddress, String schemaAddress)
     {
         String fields = groupFields(binding);
         result.append("## Grouping binding\n\n") //$NON-NLS-1$
-            .append("Read-only: the typed API does not author grouping bindings; read them with ") //$NON-NLS-1$
-            .append("format='xml' on the bare schema root `").append(schemaAddress).append("`.\n\n") //$NON-NLS-1$ //$NON-NLS-2$
             .append(MarkdownUtils.tableHeader("Property", "Value")) //$NON-NLS-1$ //$NON-NLS-2$
             .append(MarkdownUtils.tableRow("Group fields", //$NON-NLS-1$
                 DcsReadProjection.boundedTableCell(fields.isEmpty() ? "(none)" : fields, nodeAddress))) //$NON-NLS-1$
             .append(MarkdownUtils.tableRow("Template address", //$NON-NLS-1$
                 DcsReadProjection.boundedTableCell(templateAddress(binding.getTemplate(), schema,
-                    schemaAddress), nodeAddress)));
+                    schemaAddress), nodeAddress)))
+            .append('\n');
+        appendBody(result, binding);
     }
 
     /** The area body of one template and the counts a read reports for it. */

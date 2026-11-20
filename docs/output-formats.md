@@ -69,8 +69,10 @@ detected. The server measures each escaped JSON envelope and shrinks its XML chu
 returning if necessary, so the 100000-character content guard never truncates XML. Each
 page request re-serializes the whole schema, making transfer cost O(pages × schema size);
 raise `limit` when the client tolerates larger results to reduce the page count. Concatenate
-all chunks, then send the WHOLE document in ONE `replace` as `body.xml`; writes are not chunked. See
-[`dcs`](tools/dcs.md) for the paging loop and replacement example.
+all chunks, then send the WHOLE document in ONE `replace` as `body.xml`, or in parts as
+`body.xmlChunk` with `offset`, `totalChars` and `uploadId` (nothing is written until the part
+that reaches `totalChars`). See [`dcs`](tools/dcs.md) for the paging loop, the chunked upload
+and the replacement example.
 
 ## Error contract
 

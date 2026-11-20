@@ -18,7 +18,7 @@ One page per tool: what it does, every parameter, and how it works. Generated fr
 | [`get_metadata_details`](get_metadata_details.md) | Inspect metadata objects and members, including managed-form root properties and structure, and a section's command interface. Parameters and examples: get_t… |
 | [`get_metadata_objects`](get_metadata_objects.md) | Discover metadata objects available in a 1C configuration. Parameters and examples: get_tool_guide('get_metadata_objects'). |
 | [`get_module_structure`](get_module_structure.md) | Discover procedures, functions, regions, and execution contexts in a BSL module. Parameters and examples: get_tool_guide('get_module_structure'). |
-| [`get_server_status`](get_server_status.md) | Diagnose the EDT MCP server and its feature configuration. Parameters and examples: get_tool_guide('get_server_status'). |
+| [`get_server_status`](get_server_status.md) | Diagnose the EDT MCP server: its configuration and the tool calls and background jobs running right now. Parameters and examples: get_tool_guide('get_server_… |
 | [`get_tool_guide`](get_tool_guide.md) | Retrieve detailed instructions for an MCP tool. mode=summary lists sections; section=<heading\|#anchor>; query=<text>. |
 | [`list_modules`](list_modules.md) | Discover BSL modules available in an EDT project. Parameters and examples: get_tool_guide('list_modules'). |
 | [`list_projects`](list_projects.md) | Discover projects available in the EDT workspace. Parameters and examples: get_tool_guide('list_projects'). |
