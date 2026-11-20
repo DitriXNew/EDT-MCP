@@ -87,9 +87,10 @@ public class GetToolGuideToolReviewTest
             assertTrue(result.contains("(#parameters): "));
             if ("type".equals(query))
             {
-                String unrelated = GuideSections.parse(full).find("Reverting (no undo)").text();
+                // "Reverting (no undo)" names the gated data type change since #997, so another section.
+                String unrelated = GuideSections.parse(full).find("Vendor support").text();
                 assertFalse("Chosen unrelated section must not match", unrelated.toLowerCase(Locale.ROOT).contains(query));
-                assertFalse(result.contains("There is no automatic undo"));
+                assertFalse(result.contains("A configuration on vendor support can lock objects"));
             }
         }
     }

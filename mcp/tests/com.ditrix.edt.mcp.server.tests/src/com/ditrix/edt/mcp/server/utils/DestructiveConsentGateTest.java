@@ -583,7 +583,7 @@ public class DestructiveConsentGateTest
 
     /**
      * The probe timeout and the dialog timeout are DIFFERENT failures and must not share a text:
-     * nothing was ever shown here, the wait was the probe's 5 s and not the prompt's 120 s, and a
+     * nothing was ever shown here, the wait was the probe's 5 s and not the prompt's wait, and a
      * Preferences allowance cannot rescue it because the probe runs BEFORE the policy is read.
      * Telling the operator to answer a dialog promptly sends them after a window that never opened.
      */
@@ -599,7 +599,7 @@ public class DestructiveConsentGateTest
         assertTrue("and say the workbench did not answer: " + message, //$NON-NLS-1$
             message.contains("wedged") || message.contains("did not answer")); //$NON-NLS-1$ //$NON-NLS-2$
         assertFalse("it must NOT quote the dialog budget: " + message, //$NON-NLS-1$
-            message.contains(DestructiveConsentGate.CONSENT_PROMPT_TIMEOUT_SECONDS + " s")); //$NON-NLS-1$
+            message.contains(DestructiveConsentGate.promptWaitSeconds() + " s")); //$NON-NLS-1$
         assertFalse("nor send them to a dialog that was never shown: " + message, //$NON-NLS-1$
             message.contains("answer the confirmation dialog")); //$NON-NLS-1$
     }
@@ -613,8 +613,8 @@ public class DestructiveConsentGateTest
     {
         String message = DestructiveConsentGate.consentDeniedMessage(ConsentDecision.TIMEOUT, TOOL);
 
-        assertTrue("the dialog verdict still names its 120 s budget: " + message, //$NON-NLS-1$
-            message.contains(String.valueOf(DestructiveConsentGate.CONSENT_PROMPT_TIMEOUT_SECONDS)));
+        assertTrue("the dialog verdict still names its wait: " + message, //$NON-NLS-1$
+            message.contains(DestructiveConsentGate.promptWaitSeconds() + " s")); //$NON-NLS-1$
         assertTrue("and still points at the dialog: " + message, //$NON-NLS-1$
             message.contains("confirmation dialog")); //$NON-NLS-1$
     }
@@ -633,13 +633,13 @@ public class DestructiveConsentGateTest
 
         assertTrue("must name the tool", message.contains(TOOL)); //$NON-NLS-1$
         assertTrue("must mention the timeout seconds", //$NON-NLS-1$
-            message.contains("120")); //$NON-NLS-1$
+            message.contains(DestructiveConsentGate.promptWaitSeconds() + " s")); //$NON-NLS-1$
         assertTrue("must mention the Preferences remedy", //$NON-NLS-1$
             message.contains("Preferences")); //$NON-NLS-1$
         assertTrue("must mention the env-bypass remedy", //$NON-NLS-1$
             message.contains("EDT_MCP_DESTRUCTIVE_CONSENT")); //$NON-NLS-1$
-        assertTrue("must mention re-running / answering promptly as the third remedy", //$NON-NLS-1$
-            message.contains("re-run")); //$NON-NLS-1$
+        assertTrue("must mention repeating the call as the third remedy", //$NON-NLS-1$
+            message.contains("repeat the same call")); //$NON-NLS-1$
     }
 
     // =====================================================================

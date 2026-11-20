@@ -96,6 +96,17 @@ Copy the bundled [stdio configuration](stdio.md) into `claude_desktop_config.jso
 }
 ```
 
+## Request timeouts
+
+MCP clients give up on a call that answers too late; Claude Code, for one, waits about 60 s for an
+HTTP server by default (`MCP_TIMEOUT` / `MCP_TOOL_TIMEOUT`, or the server's `timeout` in `.mcp.json`, change it).
+A destructive operation on windowed EDT may wait for the user's confirmation for the **Confirmation
+wait** — 45 s by default, set in **Window > Preferences > MCP Server > General** next to the consent
+level — so its refusal reaches the client in time. When a human needs longer, raise the client's
+timeout together with the wait rather than the wait alone. A call the client gave up on still runs
+to its end in EDT: before repeating it, check its outcome with `get_mcp_history` (`tool` filter).
+See [destructive-operation consent](security.md#destructive-operation-consent).
+
 ## Multi-EDT Proxy
 
 The proxy supports [client bearer authentication and separate tokens for each EDT](../proxy/README.md#client-and-backend-tokens).

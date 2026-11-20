@@ -191,6 +191,29 @@ public final class PreferenceConstants
     /** Default: no tools allowed without consent (empty string). */
     public static final String DEFAULT_DESTRUCTIVE_ALLOWED_TOOLS = ""; //$NON-NLS-1$
 
+    /**
+     * How long, in seconds, the consent dialog waits for an answer before the gated call is refused
+     * (see {@code DestructiveConsentGate}). Read through
+     * {@code ConsentSettingsService#getPromptWaitSeconds()}, which clamps it to
+     * {@link #MIN_DESTRUCTIVE_CONSENT_WAIT_SECONDS}..{@link #MAX_DESTRUCTIVE_CONSENT_WAIT_SECONDS}.
+     */
+    public static final String PREF_DESTRUCTIVE_CONSENT_WAIT_SECONDS = "mcpDestructiveConsentWaitSeconds"; //$NON-NLS-1$
+
+    /**
+     * Default consent wait: 45 s. A refusal is only useful when it reaches the caller, and many MCP
+     * clients give up on a call after about 60 s (Claude Code's default first-response budget for an
+     * HTTP server) - the same bound that limits a background job's {@code waitSeconds} to 45 s
+     * (issue #803). With the former 120 s the client timed out first and saw no reason at all
+     * (issue #997).
+     */
+    public static final int DEFAULT_DESTRUCTIVE_CONSENT_WAIT_SECONDS = 45;
+
+    /** Shortest accepted consent wait, in seconds: enough to read the preview and press a button. */
+    public static final int MIN_DESTRUCTIVE_CONSENT_WAIT_SECONDS = 15;
+
+    /** Longest accepted consent wait, in seconds. */
+    public static final int MAX_DESTRUCTIVE_CONSENT_WAIT_SECONDS = 600;
+
     // === PII redaction preferences ===
 
     /**
