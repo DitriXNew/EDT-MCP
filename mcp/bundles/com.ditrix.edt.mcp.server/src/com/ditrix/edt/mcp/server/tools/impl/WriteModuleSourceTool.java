@@ -609,6 +609,17 @@ public class WriteModuleSourceTool implements IMcpTool
                     {
                         return;
                     }
+                    // A replaceAll edits the text its plan read: checked once more right before the write, so a save
+                    // from outside Eclipse (the modify rule does not exclude it) landing after that read is refused,
+                    // not overwritten (local review of #999). The window between this read and the write remains:
+                    // IFile has no compare-and-swap.
+                    if (current.snapshot != null && !current.snapshot.equals(BslModuleUtils.readFileText(file)))
+                    {
+                        locked[0] = WritePlan.refused(ToolResult.error("The module changed while replaceAll was " //$NON-NLS-1$
+                            + "planning its edit (saved from outside EDT). Nothing was written. Read it again with " //$NON-NLS-1$
+                            + "read_module_source and repeat the call.").toJson()); //$NON-NLS-1$
+                        return;
+                    }
                     mutationEntered.set(true);
                     writtenHash.set(writeFile(file, current.newLines, current.hasBom, fileExists, current.lineDelimiter));
                     mutationCommitted.set(true);
@@ -677,6 +688,8 @@ public class WriteModuleSourceTool implements IMcpTool
         private String duplicateWarning;
         /** mode=replaceAll: the count, lines and other-case spellings of the text this plan rewrites (#996). */
         private BslWholeWordReplace.Result replaceAll;
+        /** mode=replaceAll: the exact text this plan read and edited, checked again before the write; else null. */
+        private String snapshot;
 
         WritePlan(String error, List<String> newLines, boolean hasBom, String lineDelimiter, int totalOriginal,
             List<String> stillCalled, List<String> deletedMethods)
@@ -704,6 +717,13 @@ public class WriteModuleSourceTool implements IMcpTool
             return this;
         }
 
+        /** Attaches the text a replaceAll edited, to be checked again before the write, and returns this plan. */
+        WritePlan withSnapshot(String text)
+        {
+            this.snapshot = text;
+            return this;
+        }
+
         static WritePlan refused(String error)
         {
             return new WritePlan(error, null, false, null, 0, null, null);
@@ -721,6 +741,7 @@ public class WriteModuleSourceTool implements IMcpTool
         List<String> originalLines;
         boolean hasBom;
         String lineDelimiter;
+        String currentText = null;
         if (fileExists)
         {
             originalLines = BslModuleUtils.readFileLines(file);
@@ -728,7 +749,8 @@ public class WriteModuleSourceTool implements IMcpTool
             // Preserve the module's OWN line separator (issue #305): EDT writes BSL modules with CRLF,
             // and the raw \n write flipped every line to LF, marking the whole module changed. Detect
             // from the raw text (readFileText keeps the original separators; readFileLines strips them).
-            lineDelimiter = resolveLineDelimiter(file.getProject(), BslModuleUtils.readFileText(file));
+            currentText = BslModuleUtils.readFileText(file);
+            lineDelimiter = resolveLineDelimiter(file.getProject(), currentText);
         }
         else
         {
@@ -737,7 +759,9 @@ public class WriteModuleSourceTool implements IMcpTool
             lineDelimiter = resolveLineDelimiter(file.getProject(), null);
         }
 
-        String hashError = checkExpectedHashGuard(req, file, fileExists);
+        // A replaceAll edits the text this plan read, so its guard vouches for that very text; every other mode reads
+        // the module again for the guard, as before (local review of #999).
+        String hashError = checkExpectedHashGuard(req, file, fileExists, req.isReplaceAll() ? currentText : null);
         if (hashError != null)
         {
             return WritePlan.refused(hashError);
@@ -745,7 +769,7 @@ public class WriteModuleSourceTool implements IMcpTool
 
         // Compute new content based on mode
         int totalOriginal = originalLines.size();
-        NewLinesResult computed = computeNewLines(req, file, fileExists, originalLines);
+        NewLinesResult computed = computeNewLines(req, file, fileExists, originalLines, currentText);
         if (computed.error != null)
         {
             return WritePlan.refused(computed.error);
@@ -755,6 +779,11 @@ public class WriteModuleSourceTool implements IMcpTool
         if (tooLarge != null)
         {
             return WritePlan.refused(tooLarge);
+        }
+        String unchanged = replaceAllNoChangeRefusal(computed.replaceAll, newLines, lineDelimiter, currentText);
+        if (unchanged != null)
+        {
+            return WritePlan.refused(unchanged);
         }
         List<String> stillCalled = computed.stillCalled;
         List<String> deletedMethods = computed.deletedMethods;
@@ -777,7 +806,8 @@ public class WriteModuleSourceTool implements IMcpTool
             return WritePlan.refused(duplicates.error);
         }
         return new WritePlan(null, newLines, hasBom, lineDelimiter, totalOriginal, stillCalled, deletedMethods)
-            .withDuplicateWarning(duplicates.warning).withReplaceAll(computed.replaceAll);
+            .withDuplicateWarning(duplicates.warning).withReplaceAll(computed.replaceAll)
+            .withSnapshot(computed.replaceAll == null ? null : currentText);
     }
 
     /**
@@ -801,6 +831,27 @@ public class WriteModuleSourceTool implements IMcpTool
         return ToolResult.error("replaceAll would write a module of " + written //$NON-NLS-1$
             + " characters (its line delimiters included), more than the " + BslWholeWordReplace.MAX_RESULT_LENGTH //$NON-NLS-1$
             + " allowed. Nothing was written.").toJson(); //$NON-NLS-1$
+    }
+
+    /**
+     * A replaceAll whose write would put back exactly the text the module holds (#999 review): the write re-applies
+     * the module's own line delimiter and final line break and drops a blank last line, so replacements that only
+     * touch those are erased by the write itself. Judged on the text the write produces against the text the module
+     * holds - the bytes that change - not on the request's strings or the line lists - and without building it.
+     *
+     * @return the refusal JSON, or {@code null} when the request is not a replaceAll or the write changes the module
+     */
+    private static String replaceAllNoChangeRefusal(BslWholeWordReplace.Result replaceAll, List<String> newLines,
+        String lineDelimiter, String currentText)
+    {
+        if (replaceAll == null || currentText == null || !writesExactly(newLines, lineDelimiter, currentText))
+        {
+            return null;
+        }
+        return ToolResult.error("replaceAll would write the module exactly as it is: the " //$NON-NLS-1$
+            + replaceAll.replacements() + " replacement(s) only touch line breaks the write puts back as they were " //$NON-NLS-1$
+            + "(the module's own line delimiter, its final line break). Nothing was written. Every write keeps them: " //$NON-NLS-1$
+            + "to change a line break, change the lines around it (join or split them).").toJson(); //$NON-NLS-1$
     }
 
     /** The outcome of {@link #checkDuplicateMethods}: a ready refusal, or a warning for the response, or neither. */
@@ -977,12 +1028,14 @@ public class WriteModuleSourceTool implements IMcpTool
      * @return a ready {@link ToolResult#error} JSON payload to return verbatim, or {@code null}
      *         when the guard passes (or is disabled)
      */
-    private static String checkExpectedHashGuard(WriteRequest req, IFile file, boolean fileExists)
+    private static String checkExpectedHashGuard(WriteRequest req, IFile file, boolean fileExists, String currentText)
         throws Exception
     {
+        // The text the plan already read, when given (replaceAll, local review of #999): the guard then vouches for the
+        // very text that is edited, not for a later read another writer could have changed in between.
         String currentTextForHash =
             (req.expectedHash != null && !req.expectedHash.isEmpty() && fileExists)
-                ? BslModuleUtils.readFileText(file).replace("\r\n", "\n") //$NON-NLS-1$ //$NON-NLS-2$
+                ? (currentText != null ? currentText : BslModuleUtils.readFileText(file)).replace("\r\n", "\n") //$NON-NLS-1$ //$NON-NLS-2$
                 : null;
         return evaluateExpectedHash(currentTextForHash, req.expectedHash, fileExists);
     }
@@ -1274,7 +1327,7 @@ public class WriteModuleSourceTool implements IMcpTool
      *         when the caller must return that JSON payload, otherwise the lines to write
      */
     private NewLinesResult computeNewLines(WriteRequest req, IFile file, boolean fileExists,
-        List<String> originalLines) throws Exception
+        List<String> originalLines, String currentText) throws Exception
     {
         if (req.copy != null)
         {
@@ -1363,7 +1416,9 @@ public class WriteModuleSourceTool implements IMcpTool
                         + "no-break space and the soft hyphen): nothing to replace. Nothing was written. Pass " //$NON-NLS-1$
                         + "normalizeInvalidCharacters=false to write the characters as sent.").toJson(), null); //$NON-NLS-1$
                 }
-                String currentContent = BslModuleUtils.readFileText(file).replace("\r\n", "\n"); //$NON-NLS-1$ //$NON-NLS-2$
+                // The text planWrite read (local review of #999): the match and the "nothing would change" verdict
+                // are judged on ONE read, never on two reads another writer could save between.
+                String currentContent = currentText.replace("\r\n", "\n"); //$NON-NLS-1$ //$NON-NLS-2$
                 BslWholeWordReplace.Result replaced = BslWholeWordReplace.replace(currentContent, oldText, source);
                 if (!replaced.replaced())
                 {
@@ -2278,6 +2333,39 @@ public class WriteModuleSourceTool implements IMcpTool
         String last = lines.get(lines.size() - 1);
         String tail = lines.size() > 1 && last.length() < lineDelimiter.length() ? lineDelimiter + last : last;
         return tail.endsWith(lineDelimiter) ? length : length + lineDelimiter.length();
+    }
+
+    /**
+     * Whether {@link #fileContent} of these lines equals {@code text}, decided without building it (local review of
+     * #999): the lengths first, then the lines and delimiters in place, stopping at the first difference.
+     * Package-visible for tests.
+     */
+    static boolean writesExactly(List<String> lines, String lineDelimiter, String text)
+    {
+        if (fileContentLength(lines, lineDelimiter) != text.length())
+        {
+            return false;
+        }
+        int offset = 0;
+        for (int index = 0; index < lines.size(); index++)
+        {
+            String line = lines.get(index);
+            if (!text.startsWith(line, offset))
+            {
+                return false;
+            }
+            offset += line.length();
+            if (index < lines.size() - 1)
+            {
+                if (!text.startsWith(lineDelimiter, offset))
+                {
+                    return false;
+                }
+                offset += lineDelimiter.length();
+            }
+        }
+        // The lengths agree, so what is left is the final delimiter the writer adds, or nothing.
+        return offset == text.length() || text.startsWith(lineDelimiter, offset);
     }
 
     /**

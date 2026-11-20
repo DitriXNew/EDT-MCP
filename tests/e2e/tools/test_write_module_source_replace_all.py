@@ -125,3 +125,18 @@ def test_replace_all_that_creates_a_duplicate_method_is_refused():
     assert_contains(read_disk("src/" + CALC), "Процедура Test()",  # Процедура Test()
                     "the module keeps its procedure Test")
     assert_tree_unchanged(before, "a refused replaceAll must not touch the project")
+
+
+@e2e_test(tool="write_module_source", kind="write-metadata")
+def test_replace_all_that_the_write_would_erase_is_refused():
+    """Removing the final line break of a one-line module: the write puts it back, so nothing would change."""
+    _seed("E2E996Line = 1;\n")
+    before = tree_snapshot()
+    r = call("write_module_source", {
+        "projectName": PROJECT, "modulePath": MODULE, "mode": "replaceAll", "oldSource": "\n", "source": "",
+    })
+    err = assert_error(r, "replaceAll whose only effect the write undoes")
+    assert_contains(err, "replaceAll would write the module exactly as it is", "the refusal says nothing would change")
+    assert_error_quality(err, suggests=["join or split"], ctx="the refusal says how to change a line break")
+    assert_contains(err, "Nothing was written", "the refusal says nothing was written")
+    assert_tree_unchanged(before, "a refused replaceAll must not touch the project")

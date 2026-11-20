@@ -6,10 +6,8 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
+import java.util.Arrays;
 import java.util.List;
-import java.util.Map;
 
 /**
  * Replaces EVERY whole-word occurrence of a fragment in a module's text - the matching rule of
@@ -24,11 +22,18 @@ import java.util.Map;
  * with a punctuation edge ({@code Old.Run(}) is checked on its identifier edge only.</li>
  * <li>Left to right, non-overlapping; the replacement text is never scanned again.</li>
  * <li>Comments and string literals are text like any other and are replaced.</li>
+ * <li>A match never starts or ends between the two halves of a surrogate pair: a lone surrogate in the fragment
+ * cannot cut a letter outside the BMP in two.</li>
  * </ul>
  * BSL ignores letter case, so a whole-word spelling that differs from the fragment only by case is the
  * same identifier: it is REPORTED ({@link Result#caseVariantWarning()}), never replaced - a literal
  * replace would otherwise leave it behind silently. Occurrences inside longer identifiers are counted for
- * the refusal when nothing matched.
+ * the refusal when nothing matched. What is written depends only on the exact, case-sensitive matches; the
+ * case folding feeds the report alone.
+ * <p>
+ * Memory is bounded whatever the number of matches: the scans read the module in place, keep no offset per
+ * match - they count and list lines as they go - and the text is built in a separate pass once it is known to fit.
+ * </p>
  */
 public final class BslWholeWordReplace
 {
@@ -68,50 +73,37 @@ public final class BslWholeWordReplace
         int width = oldText.length();
         boolean checkLeft = BslModuleUtils.isIdentifierCharacter(oldText.codePointAt(0));
         boolean checkRight = BslModuleUtils.isIdentifierCharacter(oldText.codePointBefore(width));
+        char[] pattern = oldText.toCharArray();
+        // One failure table for every scan of the fragment (local review of #999): a long fragment costs its table once.
+        int[] failure = failureTable(pattern);
 
-        List<Integer> exact = new ArrayList<>();
-        List<Integer> inside = new ArrayList<>();
-        int insideEnd = 0;
-        int acceptedEnd = 0;
-        // Every occurrence in one linear pass (#999 review): String.indexOf compares the fragment afresh at each
-        // offset, which is quadratic for a long fragment that nearly matches a repetitive module.
-        Occurrences occurrences = new Occurrences(content, oldText.toCharArray(), false);
-        for (int index = occurrences.next(); index >= 0; index = occurrences.next())
+        // Pass 1 counts the matches and lists their lines as it goes, holding no offset per match (#999 review).
+        Lines replaced = new Lines(content);
+        Lines inside = new Lines(content);
+        ExactScan exact = new ExactScan(content, pattern, failure, checkLeft, checkRight, inside);
+        for (int start = exact.next(); start >= 0; start = exact.next())
         {
-            if (index < acceptedEnd)
-            {
-                continue;
-            }
-            if (isWholeWord(content, index, index + width, checkLeft, checkRight))
-            {
-                exact.add(index);
-                acceptedEnd = index + width;
-            }
-            else if (index >= insideEnd)
-            {
-                inside.add(index);
-                insideEnd = index + width;
-            }
+            replaced.add(start);
         }
+        Variants variants = caseVariants(content, oldText, pattern, failure, checkLeft, checkRight,
+            replaced.occurrences() > 0);
 
-        Map<String, List<Integer>> variants = new LinkedHashMap<>();
-        List<Integer> variantStarts = caseVariants(content, oldText, exact, checkLeft, checkRight, variants);
-
-        LineIndex lines = new LineIndex(content);
-        Result result = new Result(exact.size(), lines.distinctLines(exact), inside.size(), lines.distinctLines(inside),
-            variantStarts.size(), linesBySpelling(variants, lines));
-        if (exact.isEmpty())
+        Result result = new Result(replaced, inside, variants);
+        int replacements = replaced.occurrences();
+        if (replacements == 0)
         {
             return result;
         }
-        long resultLength = content.length() + (long) exact.size() * (newText.length() - width);
+        long resultLength = content.length() + (long) replacements * (newText.length() - width);
         if (resultLength > maxResultLength)
         {
             return result.tooLarge(resultLength, maxResultLength);
         }
+        // Pass 2 builds the text from the same matches, found again.
         StringBuilder sb = new StringBuilder((int) resultLength);
+        ExactScan again = new ExactScan(content, pattern, failure, checkLeft, checkRight, null);
         int copied = 0;
-        for (int start : exact)
+        for (int start = again.next(); start >= 0; start = again.next())
         {
             sb.append(content, copied, start).append(newText);
             copied = start + width;
@@ -122,49 +114,59 @@ public final class BslWholeWordReplace
 
     /**
      * The whole-word matches of {@code oldText} that differ from it only by letter case and overlap no exact
-     * match, left to right, non-overlapping. Fills {@code spellings} with each distinct spelling's starts.
+     * match, left to right, non-overlapping. Always scanned: whether a fragment "has a case" is not a property of
+     * its own characters - the small sharp s maps to no other character, yet the capital sharp s lowercases to it
+     * (#999 review). A fragment with no case partner simply finds only its exact matches here, which are skipped.
      */
-    private static List<Integer> caseVariants(String content, String oldText, List<Integer> exact, boolean checkLeft,
-        boolean checkRight, Map<String, List<Integer>> spellings)
+    private static Variants caseVariants(String content, String oldText, char[] pattern, int[] failure,
+        boolean checkLeft, boolean checkRight, boolean anyExact)
     {
-        List<Integer> starts = new ArrayList<>();
-        if (!hasCasedLetter(oldText))
-        {
-            return starts;
-        }
+        Variants variants = new Variants(content);
         int width = oldText.length();
-        int next = 0;
+        // The exact matches, found again in step with this scan: an other-case candidate that overlaps one is not
+        // reported (an occurrence spelled exactly like oldText is, when it is a whole word, an exact match or
+        // overlaps one, so it never gets here).
+        // With no exact match there is nothing to overlap, and no second walk of the module (local review of #999).
+        ExactScan exact = anyExact ? new ExactScan(content, pattern, failure, checkLeft, checkRight, null) : null;
+        int nextExact = exact == null ? -1 : exact.next();
         int acceptedEnd = 0;
-        // The case-insensitive candidates come from one linear pass over the case-folded texts (#999 review), not
-        // from a comparison of the whole fragment at every offset. An occurrence spelled exactly like oldText is
-        // never a candidate here: when it is a whole word it is an exact match or overlaps one.
-        Occurrences occurrences = new Occurrences(content, fold(oldText), true);
+        char[] folded = fold(oldText);
+        int[] foldedFailure = Arrays.equals(folded, pattern) ? failure : failureTable(folded);
+        Occurrences occurrences = new Occurrences(content, folded, foldedFailure, true);
         for (int index = occurrences.next(); index >= 0; index = occurrences.next())
         {
-            if (index < acceptedEnd || !isWholeWord(content, index, index + width, checkLeft, checkRight))
+            int end = index + width;
+            if (index < acceptedEnd || splitsPair(content, index, end)
+                || !isWholeWord(content, index, end, checkLeft, checkRight))
             {
                 continue;
             }
-            while (next < exact.size() && exact.get(next) + width <= index)
+            while (nextExact >= 0 && nextExact + width <= index)
             {
-                next++;
+                nextExact = exact.next();
             }
-            if (next < exact.size() && exact.get(next) < index + width)
+            if (nextExact >= 0 && nextExact < end)
             {
                 continue;
             }
-            starts.add(index);
-            spellings.computeIfAbsent(content.substring(index, index + width), key -> new ArrayList<>()).add(index);
-            acceptedEnd = index + width;
+            variants.add(index, end);
+            acceptedEnd = end;
         }
-        return starts;
+        variants.release();
+        return variants;
     }
 
-    /** Whether the text holds a letter that has another case - by code point, so a letter outside the BMP counts. */
-    private static boolean hasCasedLetter(String text)
+    /** Whether the span starts or ends between the two halves of a surrogate pair of the text. */
+    private static boolean splitsPair(String content, int start, int end)
     {
-        return text.codePoints().anyMatch(codePoint -> Character.toUpperCase(codePoint) != codePoint
-            || Character.toLowerCase(codePoint) != codePoint);
+        return isPairBoundary(content, start) || isPairBoundary(content, end);
+    }
+
+    /** Whether the offset falls between a high surrogate and the low surrogate that completes it. */
+    private static boolean isPairBoundary(String content, int offset)
+    {
+        return offset > 0 && offset < content.length() && Character.isHighSurrogate(content.charAt(offset - 1))
+            && Character.isLowSurrogate(content.charAt(offset));
     }
 
     /** The fragment case-folded char by char with {@link #foldedAt}. */
@@ -210,6 +212,57 @@ public final class BslWholeWordReplace
     }
 
     /**
+     * The accepted exact matches, left to right and non-overlapping: whole words that cut no surrogate pair. The
+     * occurrences inside longer identifiers, counted once per non-overlapping span, go to {@code inside} when given.
+     */
+    private static final class ExactScan
+    {
+        private final String content;
+        private final int width;
+        private final boolean checkLeft;
+        private final boolean checkRight;
+        private final Lines inside;
+        private final Occurrences occurrences;
+        private int acceptedEnd;
+        private int insideEnd;
+
+        ExactScan(String content, char[] pattern, int[] failure, boolean checkLeft, boolean checkRight, Lines inside)
+        {
+            this.content = content;
+            this.width = pattern.length;
+            this.checkLeft = checkLeft;
+            this.checkRight = checkRight;
+            this.inside = inside;
+            // Every occurrence in one linear pass (#999 review): String.indexOf compares the fragment afresh at each
+            // offset, which is quadratic for a long fragment that nearly matches a repetitive module.
+            this.occurrences = new Occurrences(content, pattern, failure, false);
+        }
+
+        /** The start of the next accepted match, or -1. */
+        int next()
+        {
+            for (int index = occurrences.next(); index >= 0; index = occurrences.next())
+            {
+                if (index < acceptedEnd || splitsPair(content, index, index + width))
+                {
+                    continue;
+                }
+                if (isWholeWord(content, index, index + width, checkLeft, checkRight))
+                {
+                    acceptedEnd = index + width;
+                    return index;
+                }
+                if (inside != null && index >= insideEnd)
+                {
+                    inside.add(index);
+                    insideEnd = index + width;
+                }
+            }
+            return -1;
+        }
+    }
+
+    /**
      * Every start offset of a pattern in a text, ascending, overlapping ones included - Knuth-Morris-Pratt, linear in
      * the text and the pattern whatever their content.
      */
@@ -223,25 +276,12 @@ public final class BslWholeWordReplace
         private int position;
         private int matched;
 
-        Occurrences(String text, char[] pattern, boolean folded)
+        Occurrences(String text, char[] pattern, int[] failure, boolean folded)
         {
             this.text = text;
             this.pattern = pattern;
+            this.failure = failure;
             this.folded = folded;
-            this.failure = new int[pattern.length];
-            int length = 0;
-            for (int index = 1; index < pattern.length; index++)
-            {
-                while (length > 0 && pattern[index] != pattern[length])
-                {
-                    length = failure[length - 1];
-                }
-                if (pattern[index] == pattern[length])
-                {
-                    length++;
-                }
-                failure[index] = length;
-            }
         }
 
         /** The next start offset, or -1 when there is none. */
@@ -269,6 +309,26 @@ public final class BslWholeWordReplace
         }
     }
 
+    /** The Knuth-Morris-Pratt failure table of a pattern: read-only, shared by every scan of that pattern. */
+    private static int[] failureTable(char[] pattern)
+    {
+        int[] failure = new int[pattern.length];
+        int length = 0;
+        for (int index = 1; index < pattern.length; index++)
+        {
+            while (length > 0 && pattern[index] != pattern[length])
+            {
+                length = failure[length - 1];
+            }
+            if (pattern[index] == pattern[length])
+            {
+                length++;
+            }
+            failure[index] = length;
+        }
+        return failure;
+    }
+
     private static boolean isWholeWord(String content, int start, int end, boolean checkLeft, boolean checkRight)
     {
         if (checkLeft && start > 0 && BslModuleUtils.isIdentifierCharacter(content.codePointBefore(start)))
@@ -277,16 +337,6 @@ public final class BslWholeWordReplace
         }
         return !(checkRight && end < content.length()
             && BslModuleUtils.isIdentifierCharacter(content.codePointAt(end)));
-    }
-
-    private static Map<String, List<Integer>> linesBySpelling(Map<String, List<Integer>> starts, LineIndex lines)
-    {
-        Map<String, List<Integer>> byLine = new LinkedHashMap<>();
-        for (Map.Entry<String, List<Integer>> entry : starts.entrySet())
-        {
-            byLine.put(entry.getKey(), lines.distinctLines(entry.getValue()));
-        }
-        return byLine;
     }
 
     /**
@@ -298,42 +348,12 @@ public final class BslWholeWordReplace
      */
     static String collapse(List<Integer> lines)
     {
-        StringBuilder sb = new StringBuilder();
-        int entries = 0;
-        int index = 0;
-        while (index < lines.size())
+        Listing listing = new Listing();
+        for (int line : lines)
         {
-            if (entries == MAX_LISTED_LINES)
-            {
-                sb.append(" (+").append(lines.size() - index).append(" more)"); //$NON-NLS-1$ //$NON-NLS-2$
-                break;
-            }
-            int first = lines.get(index);
-            int last = first;
-            while (index + 1 < lines.size() && lines.get(index + 1) == last + 1)
-            {
-                index++;
-                last = lines.get(index);
-            }
-            if (entries > 0)
-            {
-                sb.append(", "); //$NON-NLS-1$
-            }
-            sb.append(first);
-            if (last != first)
-            {
-                sb.append('-').append(last);
-            }
-            entries++;
-            index++;
+            listing.add(line);
         }
-        return sb.toString();
-    }
-
-    /** "line 7" or "lines 3, 5-6": the word agrees with the count. */
-    private static String linesPhrase(List<Integer> lines)
-    {
-        return (lines.size() == 1 ? "line " : "lines ") + collapse(lines); //$NON-NLS-1$ //$NON-NLS-2$
+        return listing.text();
     }
 
     /** A spelling quoted for a one-line message: line breaks shown as {@code \n}, a long one shortened. */
@@ -348,61 +368,198 @@ public final class BslWholeWordReplace
     }
 
     /**
-     * Character offsets to 1-based line numbers of one text. A line ends at {@code \r\n}, {@code \n} or a bare
+     * Distinct ascending line numbers rendered as {@link #collapse}: the first {@link #MAX_LISTED_LINES} entries are
+     * kept, every later line is only counted - bounded whatever the number of lines.
+     */
+    private static final class Listing
+    {
+        private final int[] firsts = new int[MAX_LISTED_LINES];
+        private final int[] lasts = new int[MAX_LISTED_LINES];
+        private int entries;
+        private int beyond;
+        private int lines;
+
+        void add(int line)
+        {
+            lines++;
+            if (beyond == 0 && entries > 0 && line == lasts[entries - 1] + 1)
+            {
+                lasts[entries - 1] = line;
+            }
+            else if (beyond == 0 && entries < MAX_LISTED_LINES)
+            {
+                firsts[entries] = line;
+                lasts[entries] = line;
+                entries++;
+            }
+            else
+            {
+                beyond++;
+            }
+        }
+
+        int lines()
+        {
+            return lines;
+        }
+
+        String text()
+        {
+            StringBuilder sb = new StringBuilder();
+            for (int entry = 0; entry < entries; entry++)
+            {
+                if (entry > 0)
+                {
+                    sb.append(", "); //$NON-NLS-1$
+                }
+                sb.append(firsts[entry]);
+                if (lasts[entry] != firsts[entry])
+                {
+                    sb.append('-').append(lasts[entry]);
+                }
+            }
+            if (beyond > 0)
+            {
+                sb.append(" (+").append(beyond).append(" more)"); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            return sb.toString();
+        }
+
+        /** "line 7" or "lines 3, 5-6": the word agrees with the count. */
+        String phrase()
+        {
+            return (lines == 1 ? "line " : "lines ") + text(); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+    }
+
+    /**
+     * The occurrences at ascending offsets of one text and their lines: a count and a {@link Listing}, the line of
+     * each offset found by walking the text forward once. A line ends at {@code \r\n}, {@code \n} or a bare
      * {@code \r} - the separators read_module_source and the write split on (#999 review).
      */
-    private static final class LineIndex
+    private static final class Lines
     {
-        private final int[] lineStarts;
+        private String content;
+        private int cursor;
+        private int line = 1;
+        private int lastLine;
+        private int occurrences;
+        private final Listing listing = new Listing();
 
-        LineIndex(String content)
+        Lines(String content)
         {
-            List<Integer> starts = new ArrayList<>();
-            starts.add(0);
-            for (int offset = 0; offset < content.length(); offset++)
+            this.content = content;
+        }
+
+        void add(int offset)
+        {
+            occurrences++;
+            while (cursor < offset)
             {
-                char ch = content.charAt(offset);
-                boolean crlf = ch == '\r' && offset + 1 < content.length() && content.charAt(offset + 1) == '\n';
+                char ch = content.charAt(cursor);
+                boolean crlf = ch == '\r' && cursor + 1 < content.length() && content.charAt(cursor + 1) == '\n';
                 if ((ch == '\n' || ch == '\r') && !crlf)
                 {
-                    starts.add(offset + 1);
+                    line++;
                 }
+                cursor++;
             }
-            lineStarts = starts.stream().mapToInt(Integer::intValue).toArray();
+            if (line != lastLine)
+            {
+                listing.add(line);
+                lastLine = line;
+            }
         }
 
-        int lineOf(int offset)
+        /** Drops the text: a result keeps only the counts and the listing, not the module. */
+        void release()
         {
-            int low = 0;
-            int high = lineStarts.length - 1;
-            while (low < high)
-            {
-                int middle = (low + high + 1) >>> 1;
-                if (lineStarts[middle] <= offset)
-                {
-                    low = middle;
-                }
-                else
-                {
-                    high = middle - 1;
-                }
-            }
-            return low + 1;
+            content = null;
         }
 
-        /** The distinct lines of ascending offsets. */
-        List<Integer> distinctLines(List<Integer> offsets)
+        int occurrences()
         {
-            List<Integer> lines = new ArrayList<>();
-            for (int offset : offsets)
+            return occurrences;
+        }
+
+        Listing listing()
+        {
+            return listing;
+        }
+    }
+
+    /**
+     * The other-case occurrences: their count, the first {@link #MAX_LISTED_SPELLINGS} distinct spellings with their
+     * lines, and how many occurrences are in further spellings.
+     */
+    private static final class Variants
+    {
+        private final String content;
+        /** The recorded spellings and their lines, in order of first appearance - arrays, no per-hit allocation. */
+        private final String[] spellings = new String[MAX_LISTED_SPELLINGS];
+        private final Lines[] lines = new Lines[MAX_LISTED_SPELLINGS];
+        private int recorded;
+        private int occurrences;
+        private int otherOccurrences;
+
+        Variants(String content)
+        {
+            this.content = content;
+        }
+
+        /**
+         * Records the occurrence at {@code [start, end)}. Its spelling is compared in place with the ones recorded
+         * (at most {@link #MAX_LISTED_SPELLINGS}); the text is copied only for a new one (local review of #999), so a
+         * million hits of one spelling allocate nothing.
+         */
+        void add(int start, int end)
+        {
+            occurrences++;
+            int width = end - start;
+            for (int index = 0; index < recorded; index++)
             {
-                int line = lineOf(offset);
-                if (lines.isEmpty() || lines.get(lines.size() - 1) != line)
+                if (spellings[index].length() == width && content.regionMatches(start, spellings[index], 0, width))
                 {
-                    lines.add(line);
+                    lines[index].add(start);
+                    return;
                 }
             }
-            return lines;
+            if (recorded < MAX_LISTED_SPELLINGS)
+            {
+                spellings[recorded] = content.substring(start, end);
+                lines[recorded] = new Lines(content);
+                lines[recorded].add(start);
+                recorded++;
+                return;
+            }
+            otherOccurrences++;
+        }
+
+        void release()
+        {
+            for (int index = 0; index < recorded; index++)
+            {
+                lines[index].release();
+            }
+        }
+
+        /** {@code 'Spelling' at lines 3, 7, 'other' at line 9}, then how many occurrences are in other spellings. */
+        String text()
+        {
+            StringBuilder sb = new StringBuilder();
+            for (int index = 0; index < recorded; index++)
+            {
+                if (index > 0)
+                {
+                    sb.append(", "); //$NON-NLS-1$
+                }
+                sb.append(quoted(spellings[index])).append(" at ").append(lines[index].listing().phrase()); //$NON-NLS-1$
+            }
+            if (otherOccurrences > 0)
+            {
+                sb.append(" and ").append(otherOccurrences).append(" more in other spellings"); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            return sb.toString();
         }
     }
 
@@ -410,24 +567,25 @@ public final class BslWholeWordReplace
     public static final class Result
     {
         private final int replacements;
-        private final List<Integer> replacedLines;
+        private final Listing replacedLines;
         private final int insideIdentifiers;
-        private final List<Integer> insideLines;
+        private final Listing insideLines;
         private final int caseVariants;
-        private final Map<String, List<Integer>> caseVariantLines;
+        private final String caseVariantText;
         private String newContent;
         private long tooLargeLength = -1;
         private int maxResultLength;
 
-        Result(int replacements, List<Integer> replacedLines, int insideIdentifiers, List<Integer> insideLines,
-            int caseVariants, Map<String, List<Integer>> caseVariantLines)
+        Result(Lines replaced, Lines inside, Variants variants)
         {
-            this.replacements = replacements;
-            this.replacedLines = replacedLines;
-            this.insideIdentifiers = insideIdentifiers;
-            this.insideLines = insideLines;
-            this.caseVariants = caseVariants;
-            this.caseVariantLines = caseVariantLines;
+            replaced.release();
+            inside.release();
+            this.replacements = replaced.occurrences();
+            this.replacedLines = replaced.listing();
+            this.insideIdentifiers = inside.occurrences();
+            this.insideLines = inside.listing();
+            this.caseVariants = variants.occurrences;
+            this.caseVariantText = variants.occurrences == 0 ? "" : variants.text(); //$NON-NLS-1$
         }
 
         Result withNewContent(String text)
@@ -464,7 +622,7 @@ public final class BslWholeWordReplace
         /** The 1-based lines of the original text where a replaced occurrence starts, collapsed into ranges. */
         public String replacedLinesText()
         {
-            return collapse(replacedLines);
+            return replacedLines.text();
         }
 
         /** How many occurrences inside longer identifiers were left. */
@@ -498,13 +656,13 @@ public final class BslWholeWordReplace
             if (insideIdentifiers > 0)
             {
                 sb.append(" It occurs ").append(insideIdentifiers) //$NON-NLS-1$
-                    .append(" time(s) inside longer identifiers (").append(linesPhrase(insideLines)) //$NON-NLS-1$
+                    .append(" time(s) inside longer identifiers (").append(insideLines.phrase()) //$NON-NLS-1$
                     .append("); replaceAll never rewrites part of an identifier - use searchReplace for those."); //$NON-NLS-1$
             }
             if (caseVariants > 0)
             {
                 sb.append(' ').append(caseVariants).append(" occurrence(s) differ only by letter case: ") //$NON-NLS-1$
-                    .append(spellings()).append(". BSL ignores case: repeat replaceAll with that spelling if it is " //$NON-NLS-1$
+                    .append(caseVariantText).append(". BSL ignores case: repeat replaceAll with that spelling if it is " //$NON-NLS-1$
                         + "the same identifier."); //$NON-NLS-1$
             }
             if (insideIdentifiers == 0 && caseVariants == 0)
@@ -526,30 +684,8 @@ public final class BslWholeWordReplace
                 return null;
             }
             return caseVariants + " whole-word occurrence(s) of the old text in another letter case were left " //$NON-NLS-1$
-                + "(BSL ignores case): " + spellings() //$NON-NLS-1$
+                + "(BSL ignores case): " + caseVariantText //$NON-NLS-1$
                 + ". Repeat replaceAll with that spelling if it is the same identifier."; //$NON-NLS-1$
-        }
-
-        /** {@code 'Spelling' (lines 3, 7), 'other' (line 9)}, at most {@link #MAX_LISTED_SPELLINGS} spellings. */
-        private String spellings()
-        {
-            StringBuilder sb = new StringBuilder();
-            int listed = 0;
-            for (Map.Entry<String, List<Integer>> entry : caseVariantLines.entrySet())
-            {
-                if (listed == MAX_LISTED_SPELLINGS)
-                {
-                    sb.append(" and ").append(caseVariantLines.size() - listed).append(" more spelling(s)"); //$NON-NLS-1$ //$NON-NLS-2$
-                    break;
-                }
-                if (listed > 0)
-                {
-                    sb.append(", "); //$NON-NLS-1$
-                }
-                sb.append(quoted(entry.getKey())).append(" at ").append(linesPhrase(entry.getValue())); //$NON-NLS-1$
-                listed++;
-            }
-            return sb.toString();
         }
     }
 }

@@ -275,6 +275,164 @@ public class BslWholeWordReplaceTest
         assertTrue("a no-match scan allocated " + used + " bytes", used < 2_000_000); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
+    /**
+     * Review #999 round 2 (1): many short matches are counted and listed in bounded memory - no boxed offset per match,
+     * no line table of the module. 5,000,000 matches in a 10,000,000-character module; the result itself is 10 MB.
+     */
+    @Test
+    public void manyMatchesAreCountedWithoutAnOffsetPerMatch() throws Exception
+    {
+        Object threads = java.lang.management.ManagementFactory.getThreadMXBean();
+        Class<?> extended;
+        try
+        {
+            extended = ClassLoader.getPlatformClassLoader().loadClass("com.sun.management.ThreadMXBean"); //$NON-NLS-1$
+        }
+        catch (ClassNotFoundException e)
+        {
+            org.junit.Assume.assumeNoException("no per-thread allocation counter in this JVM", e); //$NON-NLS-1$
+            return;
+        }
+        org.junit.Assume.assumeTrue("no per-thread allocation counter in this JVM", extended.isInstance(threads)); //$NON-NLS-1$
+        java.lang.reflect.Method allocated = extended.getMethod("getCurrentThreadAllocatedBytes"); //$NON-NLS-1$
+        String content = "a\n".repeat(5_000_000); //$NON-NLS-1$
+        BslWholeWordReplace.replace("a\na\n", "a", "b"); // warm up outside the measurement //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        long before = (Long) allocated.invoke(threads);
+        BslWholeWordReplace.Result result = BslWholeWordReplace.replace(content, "a", "b"); //$NON-NLS-1$ //$NON-NLS-2$
+        long used = (Long) allocated.invoke(threads) - before;
+        assertEquals(5_000_000, result.replacements());
+        assertEquals("1-5000000", result.replacedLinesText()); //$NON-NLS-1$
+        assertTrue("5,000,000 matches allocated " + used + " bytes", used < 64_000_000); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * Local review of #999: a long fragment builds its failure table once, shared by every scan - here 3,000,000
+     * characters, so one table is 12 MB and its two copies of the fragment 12 MB more.
+     */
+    @Test
+    public void aLongFragmentBuildsItsFailureTableOnce() throws Exception
+    {
+        Object threads = java.lang.management.ManagementFactory.getThreadMXBean();
+        Class<?> extended;
+        try
+        {
+            extended = ClassLoader.getPlatformClassLoader().loadClass("com.sun.management.ThreadMXBean"); //$NON-NLS-1$
+        }
+        catch (ClassNotFoundException e)
+        {
+            org.junit.Assume.assumeNoException("no per-thread allocation counter in this JVM", e); //$NON-NLS-1$
+            return;
+        }
+        org.junit.Assume.assumeTrue("no per-thread allocation counter in this JVM", extended.isInstance(threads)); //$NON-NLS-1$
+        java.lang.reflect.Method allocated = extended.getMethod("getCurrentThreadAllocatedBytes"); //$NON-NLS-1$
+        String fragment = "y".repeat(3_000_000); //$NON-NLS-1$
+        BslWholeWordReplace.replace("x y", "y", "z"); // warm up outside the measurement //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        long before = (Long) allocated.invoke(threads);
+        BslWholeWordReplace.Result result = BslWholeWordReplace.replace("x = 1;", fragment, "z"); //$NON-NLS-1$ //$NON-NLS-2$
+        long used = (Long) allocated.invoke(threads) - before;
+        assertFalse(result.replaced());
+        assertTrue("a 3,000,000-character fragment allocated " + used + " bytes", used < 30_000_000); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+    /**
+     * The other-case scan has its own failure table when the folded fragment differs from it: "A-a" folds to "a-a",
+     * which overlaps itself, so the candidate after one rejected inside "xa-a" is still found.
+     */
+    @Test
+    public void anOtherCaseMatchOverlappingARejectedOneIsFound()
+    {
+        BslWholeWordReplace.Result result = BslWholeWordReplace.replace("xa-a-A", "A-a", "Z");
+        assertFalse(result.replaced());
+        assertEquals(1, result.caseVariants());
+    }
+
+    /**
+     * Local review of #999: other-case hits are compared with the spellings already recorded in place - a copy is
+     * made only for a new spelling. 2,000,000 hits of one spelling in a 4,000,000-character module.
+     */
+    @Test
+    public void manyOtherCaseHitsOfOneSpellingAreNotCopied() throws Exception
+    {
+        Object threads = java.lang.management.ManagementFactory.getThreadMXBean();
+        Class<?> extended;
+        try
+        {
+            extended = ClassLoader.getPlatformClassLoader().loadClass("com.sun.management.ThreadMXBean"); //$NON-NLS-1$
+        }
+        catch (ClassNotFoundException e)
+        {
+            org.junit.Assume.assumeNoException("no per-thread allocation counter in this JVM", e); //$NON-NLS-1$
+            return;
+        }
+        org.junit.Assume.assumeTrue("no per-thread allocation counter in this JVM", extended.isInstance(threads)); //$NON-NLS-1$
+        java.lang.reflect.Method allocated = extended.getMethod("getCurrentThreadAllocatedBytes"); //$NON-NLS-1$
+        String content = "\u1E9E ".repeat(2_000_000); // capital sharp s
+        BslWholeWordReplace.replace("\u1E9E \u1E9E", "\u00DF", "x"); // warm up outside the measurement
+        long before = (Long) allocated.invoke(threads);
+        BslWholeWordReplace.Result result = BslWholeWordReplace.replace(content, "\u00DF", "x");
+        long used = (Long) allocated.invoke(threads) - before;
+        assertEquals(2_000_000, result.caseVariants());
+        assertTrue("2,000,000 other-case hits allocated " + used + " bytes", used < 8_000_000); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** Past five recorded spellings the further hits are counted, not named. */
+    @Test
+    public void hitsInSpellingsPastTheFifthAreCounted()
+    {
+        BslWholeWordReplace.Result result = BslWholeWordReplace.replace("Abc aBc abC ABc aBC AbC ABC ABC", "abc", "x"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertEquals(8, result.caseVariants());
+        assertTrue(result.caseVariantWarning(), result.caseVariantWarning().contains(
+            "'Abc' at line 1, 'aBc' at line 1, 'abC' at line 1, 'ABc' at line 1, 'aBC' at line 1 and 3 more in other spellings.")); //$NON-NLS-1$
+    }
+    /** Several spellings are still told apart, and those past the listed ones are counted. */
+    @Test
+    public void spellingsPastTheListedOnesAreCounted()
+    {
+        BslWholeWordReplace.Result result = BslWholeWordReplace.replace("aB Ab AB aB Ab", "ab", "x"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertEquals(5, result.caseVariants());
+        assertTrue(result.caseVariantWarning(), result.caseVariantWarning().contains("'aB' at line 1, 'Ab' at line 1, 'AB' at line 1.")); //$NON-NLS-1$
+    }
+    /** The listing stays capped while the count covers every line: 45 separate lines, 40 listed. */
+    @Test
+    public void theListingIsCappedWhileTheCountCoversEveryLine()
+    {
+        BslWholeWordReplace.Result result = BslWholeWordReplace.replace("Old\nx\n".repeat(45), "Old", "New"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertEquals(45, result.replacements());
+        assertTrue(result.replacedLinesText(), result.replacedLinesText().endsWith(", 79 (+5 more)")); //$NON-NLS-1$
+    }
+
+    /**
+     * Review #999 round 2 (2): a letter whose case pair maps only one way - the small sharp s has no single-character
+     * capital, the capital U+1E9E lowercases to it - is still reported in the other case.
+     */
+    @Test
+    public void aReverseOnlyCaseMappingIsReported()
+    {
+        BslWholeWordReplace.Result result = BslWholeWordReplace.replace("ẞ = 1;", "ß", "X"); // ẞ / ß
+        assertFalse(result.replaced());
+        assertEquals(1, result.caseVariants());
+    }
+
+    /** Review #999 round 2 (3): a lone surrogate in oldSource never matches half of a valid pair in the module. */
+    @Test
+    public void aLoneSurrogateNeverSplitsAPair()
+    {
+        String letter = "𐐀"; // U+10400, one identifier letter in two chars
+        BslWholeWordReplace.Result high = BslWholeWordReplace.replace(letter + " = 1;", "\uD801", "X");
+        assertFalse("a high surrogate alone must not match the first half of a pair", high.replaced());
+        BslWholeWordReplace.Result low = BslWholeWordReplace.replace(letter + " = 1;", "\uDC00", "X");
+        assertFalse("a low surrogate alone must not match the second half of a pair", low.replaced());
+        BslWholeWordReplace.Result ending = BslWholeWordReplace.replace("a" + letter + " = 1;", "a\uD801", "X");
+        assertFalse("a fragment must not end inside a pair", ending.replaced());
+        assertEquals(0, ending.insideIdentifiers() + ending.caseVariants());
+    }
+
+    /** An unpaired surrogate in the MODULE is a char like any other and can still be replaced. */
+    @Test
+    public void anUnpairedSurrogateInTheModuleIsReplaceable()
+    {
+        assertEquals("X = 1;", replaced("\uD801 = 1;", "\uD801", "X"));
+    }
+
     /** An occurrence that starts inside one rejected as part of an identifier is still found. */
     @Test
     public void aMatchStartingInsideARejectedOneIsFound()

@@ -367,6 +367,155 @@ public class WriteModuleSourceReplaceAllTest
         assertEquals(text, tree.text(module));
     }
 
+    /**
+     * Review #999 round 2 (4): a replacement the write itself erases - the final line break of a one-line module,
+     * which the write puts back - leaves the module's lines as they are; refused, nothing written, no false count.
+     */
+    @Test
+    public void aReplacementTheWriteErasesIsRefused() throws Exception
+    {
+        String text = "A = 1;\n"; //$NON-NLS-1$
+        IFile module = tree.module("src/" + MODULE, text); //$NON-NLS-1$
+        String error = refused(write(Map.of("mode", "replaceAll", "oldSource", "\n", "source", ""))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+        assertTrue(error, error.startsWith("replaceAll would write the module exactly as it is")); //$NON-NLS-1$
+        assertTrue(error, error.contains("Nothing was written.")); //$NON-NLS-1$
+        assertTrue(error, error.endsWith("change the lines around it (join or split them).")); //$NON-NLS-1$
+        assertEquals(text, tree.text(module));
+        org.mockito.Mockito.verify(module, org.mockito.Mockito.never()).setContents(any(InputStream.class), anyInt(), isNull());
+    }
+
+    /**
+     * Local review of #999: the write drops a blank last line, so adding one at the end is erased too - refused,
+     * although the module's lines and the planned lines differ.
+     */
+    @Test
+    public void aTrailingBlankLineTheWriteDropsIsRefused() throws Exception
+    {
+        String text = "A = 1;\n"; //$NON-NLS-1$
+        IFile module = tree.module("src/" + MODULE, text); //$NON-NLS-1$
+        String error = refused(write(Map.of("mode", "replaceAll", "oldSource", ";\n", "source", ";\n\n"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+        assertTrue(error, error.startsWith("replaceAll would write the module exactly as it is")); //$NON-NLS-1$
+        assertEquals(text, tree.text(module));
+    }
+
+    /**
+     * Local review of #999: the replacement and the "nothing would change" verdict are judged on ONE read of the
+     * module. Another writer saving between two reads of the first pass must not turn a real edit into a false
+     * "exactly as it is" refusal: the first pass matches the text it already read.
+     */
+    @Test
+    public void theNoChangeVerdictAndTheMatchShareOneRead() throws Exception
+    {
+        String ours = "A = 2;\n"; //$NON-NLS-1$
+        IFile module = tree.module("src/" + MODULE, ours); //$NON-NLS-1$
+        AtomicReference<byte[]> bytes = tree.contents.get(module);
+        AtomicBoolean saved = new AtomicBoolean();
+        when(module.getContents()).thenAnswer(call -> {
+            boolean fromMatcher = java.util.Arrays.stream(new Throwable().getStackTrace())
+                .anyMatch(frame -> "computeNewLines".equals(frame.getMethodName())); //$NON-NLS-1$
+            if (fromMatcher && saved.compareAndSet(false, true))
+            {
+                bytes.set("A = 1;\n".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$
+            }
+            return new ByteArrayInputStream(bytes.get());
+        });
+        String error = refused(write(Map.of("mode", "replaceAll", "oldSource", "1", "source", "2"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+        assertFalse(error, error.startsWith("replaceAll would write the module exactly as it is")); //$NON-NLS-1$
+        assertFalse("the matcher read the module a second time", saved.get()); //$NON-NLS-1$
+    }
+
+    /**
+     * Local review of #999: expectedHash is checked against the very text replaceAll edits. A module that reads as an
+     * older text for the edit and as the expected one only for the hash check must be refused, never edited.
+     */
+    @Test
+    public void theHashGuardChecksTheTextReplaceAllEdits() throws Exception
+    {
+        String older = "Procedure Run()\n\tOldName = 1;\nEndProcedure\n"; //$NON-NLS-1$
+        IFile module = tree.module("src/" + MODULE, ENGLISH); //$NON-NLS-1$
+        String expected = readHash();
+        AtomicReference<byte[]> bytes = tree.contents.get(module);
+        bytes.set(older.getBytes(StandardCharsets.UTF_8));
+        when(module.getContents()).thenAnswer(call -> {
+            boolean fromGuard = java.util.Arrays.stream(new Throwable().getStackTrace())
+                .anyMatch(frame -> "checkExpectedHashGuard".equals(frame.getMethodName())); //$NON-NLS-1$
+            return new ByteArrayInputStream(fromGuard ? ENGLISH.getBytes(StandardCharsets.UTF_8) : bytes.get());
+        });
+        String error = refused(write(Map.of("mode", "replaceAll", "oldSource", "OldName", "source", "NewName", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+            "expectedHash", expected))); //$NON-NLS-1$
+        assertTrue(error, error.startsWith("expectedHash does not match the current module content.")); //$NON-NLS-1$
+        assertEquals(older, new String(bytes.get(), StandardCharsets.UTF_8));
+    }
+    /**
+     * Local review of #999: the text replaceAll edited is checked once more right before the write. A save from
+     * outside Eclipse (the modify rule does not exclude it) landing after the locked plan read the module is not
+     * overwritten: refused, nothing written.
+     */
+    @Test
+    public void aSaveAfterTheLockedPlanIsNotOverwritten() throws Exception
+    {
+        String theirs = "Procedure Run()\n\tTheirs = 1;\nEndProcedure\n"; //$NON-NLS-1$
+        IFile module = tree.module("src/" + MODULE, ENGLISH); //$NON-NLS-1$
+        AtomicReference<byte[]> bytes = tree.contents.get(module);
+        when(module.getContents()).thenAnswer(call -> {
+            StackTraceElement[] stack = new Throwable().getStackTrace();
+            // The locked operation is a lambda of the tool (javac names it lambda$writeModule$N, ecj lambda$N).
+            boolean lockedWrite = java.util.Arrays.stream(stack)
+                .anyMatch(frame -> frame.getClassName().equals(WriteModuleSourceTool.class.getName())
+                    && frame.getMethodName().startsWith("lambda$")); //$NON-NLS-1$
+            boolean planning = java.util.Arrays.stream(stack)
+                .anyMatch(frame -> "planWrite".equals(frame.getMethodName())); //$NON-NLS-1$
+            if (lockedWrite && !planning)
+            {
+                bytes.set(theirs.getBytes(StandardCharsets.UTF_8));
+            }
+            return new ByteArrayInputStream(bytes.get());
+        });
+        String error = refused(write(Map.of("mode", "replaceAll", "oldSource", "OldName", "source", "NewName"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+        assertTrue(error, error.startsWith("The module changed while replaceAll was planning its edit")); //$NON-NLS-1$
+        assertEquals(theirs, new String(bytes.get(), StandardCharsets.UTF_8));
+        org.mockito.Mockito.verify(module, org.mockito.Mockito.never()).setContents(any(InputStream.class), anyInt(), isNull());
+    }
+    /** The "nothing would change" comparison agrees with the text the writer builds, without building it. */
+    @Test
+    public void theNoChangeComparisonAgreesWithTheWrittenText()
+    {
+        List<List<String>> shapes = List.of(List.of(), List.of("a"), List.of(""), List.of("a", ""), List.of("", ""), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+            List.of("a", "\n"), List.of("ab", "c"), List.of("a", "b")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+        List<String> texts = List.of("", "a", "a\n", "a\r\n", "\n", "ab\nc\n", "ab\nc", "a\nb\n", "a\r\nb\r\n", "a\nb", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$ //$NON-NLS-7$ //$NON-NLS-8$ //$NON-NLS-9$ //$NON-NLS-10$
+            "a\n\n", "x\n", "a\nc\n", "ax", "a\r", "a\nbc"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+        for (String delimiter : List.of("\n", "\r\n")) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            for (List<String> lines : shapes)
+            {
+                for (String text : texts)
+                {
+                    assertEquals(lines + " / " + delimiter.length() + " / " + text.replace("\n", "\\n"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+                        WriteModuleSourceTool.fileContent(lines, delimiter).equals(text),
+                        WriteModuleSourceTool.writesExactly(lines, delimiter, text));
+                }
+            }
+        }
+    }
+    /** Local review of #999: a bare carriage return replaced with a line feed changes the bytes - written. */
+    @Test
+    public void aBareCarriageReturnRepairIsWritten() throws Exception
+    {
+        IFile module = tree.module("src/" + MODULE, "A = 1;\rB = 2;\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        String response = write(Map.of("mode", "replaceAll", "oldSource", "\r", "source", "\n")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+        assertTrue(response, response.contains("\nreplacements: 1\n")); //$NON-NLS-1$
+        assertEquals("A = 1;\nB = 2;\n", tree.text(module)); //$NON-NLS-1$
+    }
+    /** Joining two lines is a real change and is written. */
+    @Test
+    public void joiningLinesIsWritten() throws Exception
+    {
+        IFile module = tree.module("src/" + MODULE, "A = 1;\nB = 2;\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        String response = write(Map.of("mode", "replaceAll", "oldSource", ";\n", "source", "; ")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+        assertTrue(response, response.contains("\nreplacements: 2\n")); //$NON-NLS-1$
+        assertEquals("A = 1; B = 2; \n", tree.text(module)); //$NON-NLS-1$
+    }
+
     /** The bound's length is the writer's text length, computed without building it - every trailing-line shape. */
     @Test
     public void theComputedLengthIsTheLengthOfTheTextTheWriterBuilds()
