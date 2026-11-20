@@ -103,11 +103,13 @@ public class PayloadMemberSchemaTest
     {
         JsonObject template = param("modify_metadata", "template"); //$NON-NLS-1$ //$NON-NLS-2$
         assertMembers(template, Set.of("text", "mode", "oldText", "expectedHash", "expectedSource", "overwrite", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
-            "cells", "merges", "areas", "columnWidths", "rowHeights"), Set.of(), true); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+            "cells", "merges", "areas", "columnWidths", "rowHeights", "unmerges", "removeAreas", "renameAreas"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$ //$NON-NLS-7$ //$NON-NLS-8$
+            Set.of(), true);
         JsonObject cells = items(member(template, "cells")); //$NON-NLS-1$
         assertMembers(cells, Set.of("row", "col", "replace", "text", "parameter", "bold", "fontSize", "hAlign", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$ //$NON-NLS-7$ //$NON-NLS-8$
-            "vAlign", "wrap", "textOrientation", "autoIndent", "autoMarkIncomplete"), Set.of("row", "col"), false); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$ //$NON-NLS-7$
-        for (String lenient : List.of("bold", "autoMarkIncomplete")) //$NON-NLS-1$ //$NON-NLS-2$
+            "vAlign", "wrap", "textOrientation", "autoIndent", "autoMarkIncomplete", "borders", "borderColor", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$ //$NON-NLS-7$
+            "backColor", "textColor"), Set.of("row", "col"), false); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        for (String lenient : List.of("bold", "autoMarkIncomplete", "borders", "borderColor", "backColor", "textColor")) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
         {
             assertFalse(lenient + " reads yes/1 too, so it stays untyped", member(cells, lenient).has("type")); //$NON-NLS-1$ //$NON-NLS-2$
         }
@@ -121,6 +123,11 @@ public class PayloadMemberSchemaTest
         assertFalse(member(columns, "autoWidthCalculation").has("type")); //$NON-NLS-1$ //$NON-NLS-2$
         assertMembers(items(member(template, "rowHeights")), Set.of("row", "height"), Set.of("row", "height"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
             false);
+        assertMembers(items(member(template, "unmerges")), Set.of("fromRow", "fromCol", "toRow", "toCol"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+            Set.of("fromRow", "fromCol", "toRow", "toCol"), true); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        assertEquals("string", items(member(template, "removeAreas")).get("type").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertMembers(items(member(template, "renameAreas")), Set.of("name", "newName"), Set.of("name", "newName"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+            true);
     }
 
     @Test
@@ -226,6 +233,8 @@ public class PayloadMemberSchemaTest
             + "\"toCol\":1,\"name\":\"M\"}]}}", "template.merges[0].name is not a known key"); //$NON-NLS-1$ //$NON-NLS-2$
         assertRefused("modify_metadata", "{\"template\":{\"rowHeights\":[{\"row\":0}]}}", //$NON-NLS-1$ //$NON-NLS-2$
             "template.rowHeights[0].height is required"); //$NON-NLS-1$
+        assertRefused("modify_metadata", "{\"template\":{\"renameAreas\":[{\"name\":\"A\",\"to\":\"B\"}]}}", //$NON-NLS-1$ //$NON-NLS-2$
+            "template.renameAreas[0].to is not a known key"); //$NON-NLS-1$
     }
 
     @Test
@@ -249,6 +258,11 @@ public class PayloadMemberSchemaTest
             + "\"areas\":[{\"name\":\"Header\",\"fromRow\":0,\"fromCol\":0,\"toRow\":0,\"toCol\":1}]," //$NON-NLS-1$
             + "\"columnWidths\":[{\"col\":0,\"autoWidthCalculation\":\"1\",\"widthWeightFactor\":2}]," //$NON-NLS-1$
             + "\"rowHeights\":[{\"row\":0,\"height\":20}]}}"); //$NON-NLS-1$
+        assertAccepted("modify_metadata", "{\"template\":{\"cells\":[{\"row\":0,\"col\":0,\"borders\":\"Solid\"," //$NON-NLS-1$ //$NON-NLS-2$
+            + "\"backColor\":{\"red\":1,\"green\":2,\"blue\":3},\"textColor\":\"Web.Red\"," //$NON-NLS-1$
+            + "\"borderColor\":\"auto\"},{\"row\":1,\"col\":0,\"borders\":{\"left\":{\"style\":\"Double\",\"width\":2}}}]," //$NON-NLS-1$
+            + "\"unmerges\":[{\"fromRow\":0,\"fromCol\":0,\"toRow\":0,\"toCol\":1}],\"removeAreas\":[\"Old\"]," //$NON-NLS-1$
+            + "\"renameAreas\":[{\"name\":\"Header\",\"newName\":\"Title\"}]}}"); //$NON-NLS-1$
         assertAccepted("create_metadata", "{\"properties\":[{\"name\":\"comment\",\"value\":\"Goods\"}]}"); //$NON-NLS-1$ //$NON-NLS-2$
         assertAccepted("merge_rules", "{\"decisions\":[{\"path\":[],\"rule\":\"GetFromOther\"}," //$NON-NLS-1$ //$NON-NLS-2$
             + "{\"path\":[\"commonModules\",\"A:A:A\"],\"rule\":\"DoNotMerge\"}]}"); //$NON-NLS-1$

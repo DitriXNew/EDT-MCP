@@ -329,7 +329,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     /**
      * Input schema of {@link #KEY_TEMPLATE}: the TextDocument and SpreadsheetDocument members. Cell, column
      * and row items stay open so {@code SpreadsheetTemplateWriter} names a misplaced key itself; bold,
-     * autoMarkIncomplete and autoWidthCalculation are untyped because the writer also reads "yes" / "1".
+     * autoMarkIncomplete and autoWidthCalculation are untyped because the writer also reads "yes" / "1";
+     * borders and the colours are untyped because each takes a string OR an object.
      */
     private static final String TEMPLATE_SCHEMA = "{\"type\":\"object\",\"properties\":{" //$NON-NLS-1$
         + "\"text\":{\"type\":\"string\"},\"mode\":{\"type\":\"string\"},\"oldText\":{\"type\":\"string\"}," //$NON-NLS-1$
@@ -343,7 +344,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         + "\"vAlign\":{\"type\":\"string\",\"enum\":[\"Center\",\"Top\",\"Bottom\"]}," //$NON-NLS-1$
         + "\"wrap\":{\"type\":[\"boolean\",\"string\"],\"enum\":[true,false,\"Auto\",\"Cut\",\"Block\",\"Wrap\"]}," //$NON-NLS-1$
         + "\"textOrientation\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":3600}," //$NON-NLS-1$
-        + "\"autoIndent\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":100},\"autoMarkIncomplete\":{}}," //$NON-NLS-1$
+        + "\"autoIndent\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":100},\"autoMarkIncomplete\":{}," //$NON-NLS-1$
+        + "\"borders\":{},\"borderColor\":{},\"backColor\":{},\"textColor\":{}}," //$NON-NLS-1$
         + "\"required\":[\"row\",\"col\"]}}," //$NON-NLS-1$
         + "\"merges\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{" //$NON-NLS-1$
         + "\"fromRow\":" + INDEX_SCHEMA + ",\"fromCol\":" + INDEX_SCHEMA //$NON-NLS-1$ //$NON-NLS-2$
@@ -358,7 +360,16 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         + "\"widthWeightFactor\":" + INDEX_SCHEMA + "},\"required\":[\"col\"]}}," //$NON-NLS-1$ //$NON-NLS-2$
         + "\"rowHeights\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{" //$NON-NLS-1$
         + "\"row\":" + INDEX_SCHEMA + ",\"height\":{\"type\":\"integer\",\"minimum\":1}}," //$NON-NLS-1$ //$NON-NLS-2$
-        + "\"required\":[\"row\",\"height\"]}}},\"additionalProperties\":false}"; //$NON-NLS-1$
+        + "\"required\":[\"row\",\"height\"]}}," //$NON-NLS-1$
+        + "\"unmerges\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{" //$NON-NLS-1$
+        + "\"fromRow\":" + INDEX_SCHEMA + ",\"fromCol\":" + INDEX_SCHEMA //$NON-NLS-1$ //$NON-NLS-2$
+        + ",\"toRow\":" + INDEX_SCHEMA + ",\"toCol\":" + INDEX_SCHEMA //$NON-NLS-1$ //$NON-NLS-2$
+        + "},\"required\":[\"fromRow\",\"fromCol\",\"toRow\",\"toCol\"],\"additionalProperties\":false}}," //$NON-NLS-1$
+        + "\"removeAreas\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}," //$NON-NLS-1$
+        + "\"renameAreas\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{" //$NON-NLS-1$
+        + "\"name\":{\"type\":\"string\"},\"newName\":{\"type\":\"string\"}}," //$NON-NLS-1$
+        + "\"required\":[\"name\",\"newName\"],\"additionalProperties\":false}}}," //$NON-NLS-1$
+        + "\"additionalProperties\":false}"; //$NON-NLS-1$
 
     /** Output key: what a command interface stores after a {@link #KEY_COMMANDS} change. */
     private static final String KEY_STORED = "stored"; //$NON-NLS-1$
@@ -471,13 +482,18 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 + "exactly one literal oldText match) / 'append' / 'replace' (the only mode that creates a " //$NON-NLS-1$
                 + "missing file); replacing an existing file needs expectedHash or expectedSource from " //$NON-NLS-1$
                 + "get_metadata_details, or overwrite=true. SpreadsheetDocument: {cells?, merges?, areas?, " //$NON-NLS-1$
-                + "columnWidths?, rowHeights?}. cells [{row, col (both 0-based, required), replace?, text? " //$NON-NLS-1$
-                + "| parameter?, bold?, fontSize?, hAlign? (Left/Center/Right/Auto/Width), vAlign? " //$NON-NLS-1$
-                + "(Top/Center/Bottom), wrap?, textOrientation? (TENTHS of a degree: 90 degrees = 900), " //$NON-NLS-1$
-                + "autoIndent? (0..100), autoMarkIncomplete?}]; merges [{fromRow, fromCol, toRow, toCol}]; " //$NON-NLS-1$
-                + "areas [{name, fromRow, fromCol, toRow, toCol}]; columnWidths [{col, width?, " //$NON-NLS-1$
-                + "autoWidthCalculation?, widthWeightFactor? (only with autoWidthCalculation:true)}]; " //$NON-NLS-1$
-                + "rowHeights [{row, height}]. Omitted or null cell keys keep their values; replace:true " //$NON-NLS-1$
+                + "columnWidths?, rowHeights?, unmerges?, removeAreas?, renameAreas?}. cells [{row, col (both " //$NON-NLS-1$
+                + "0-based, required), replace?, text? | parameter?, bold?, fontSize?, hAlign? " //$NON-NLS-1$
+                + "(Left/Center/Right/Auto/Width), vAlign? (Top/Center/Bottom), wrap?, textOrientation? " //$NON-NLS-1$
+                + "(TENTHS of a degree: 90 degrees = 900), autoIndent? (0..100), autoMarkIncomplete?, " //$NON-NLS-1$
+                + "borders? ('Solid' or {style, width? 1..3}, or {left?, top?, right?, bottom?} of those), " //$NON-NLS-1$
+                + "borderColor? / backColor? / textColor? ({red, green, blue}, 'Web.Red', 'Style.<Name>', " //$NON-NLS-1$
+                + "'auto')}]; merges [{fromRow, " //$NON-NLS-1$
+                + "fromCol, toRow, toCol}]; areas [{name, fromRow, fromCol, toRow, toCol}]; columnWidths " //$NON-NLS-1$
+                + "[{col, width?, autoWidthCalculation?, widthWeightFactor? (only with " //$NON-NLS-1$
+                + "autoWidthCalculation:true)}]; rowHeights [{row, height}]; unmerges [{fromRow, fromCol, " //$NON-NLS-1$
+                + "toRow, toCol}] drops every merge touching the range; removeAreas [name]; renameAreas " //$NON-NLS-1$
+                + "[{name, newName}]; these three run first. Omitted or null cell keys keep their values; replace:true " //$NON-NLS-1$
                 + "resets them. Non-empty text clears parameter and vice versa; '' clears the named one. " //$NON-NLS-1$
                 + "false / 0 on a format key overrides inheritance, but wrap:false restores inherited " //$NON-NLS-1$
                 + "placement. Other cells, merges and areas are kept.", TEMPLATE_SCHEMA) //$NON-NLS-1$
@@ -536,7 +552,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 + "Catalog owners / Document register records / Subsystem content change (a plain " //$NON-NLS-1$
                 + "reference list, no per-entry flag) reports {added, removed}") //$NON-NLS-1$
             .objectProperty(KEY_TEMPLATE, "For a template content change: the applied counts object " //$NON-NLS-1$
-                + "{cells, merges, areas, columnWidths, rowHeights}, or {contentHash} for text") //$NON-NLS-1$
+                + "{cells, merges, areas, columnWidths, rowHeights, unmerges, removedAreas, renamedAreas}, or " //$NON-NLS-1$
+                + "{contentHash} for text") //$NON-NLS-1$
             .objectProperty(KEY_COMMANDS, "For a command-interface change: how many commands changed " //$NON-NLS-1$
                 + "visibility / group, and how many groups got an explicit order {visibility, placement, " //$NON-NLS-1$
                 + "order}") //$NON-NLS-1$
@@ -2357,6 +2374,11 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
          * that cannot be resolved skips the version check rather than refusing a legal write.
          */
         Version projectVersion;
+        /**
+         * Whether the template lives in an external-objects project: its configuration is another
+         * project's, so a cell colour may name platform colours only (as a form item's there).
+         */
+        boolean externalObjects;
     }
 
     /**
@@ -2421,6 +2443,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         // returns) - not on the configuration's compatibilityMode. Below 8.3.10 it writes neither, so the
         // writer refuses them there instead of reporting success for a dropped value.
         writeCtx.projectVersion = com.ditrix.edt.mcp.server.utils.ProjectContext.platformVersion(ctx.project);
+        writeCtx.externalObjects = ctx.scope != null && ctx.scope.isExternalObjects();
 
         // The moxel content is a transient @ExternalProperty of the template - its own .mxlx resource, NOT
         // an inline BM reference. A freshly-materialized content doc must be ATTACHED as a BM top object
@@ -2473,8 +2496,12 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         // materialized + attachTopObject'd inside resolveSpreadsheetContent), so its own resource
         // FQN resolves and is force-exported alongside the template so the sibling .mxlx drains.
         contentFqnHolder[0] = contentResourceExportFqn(doc);
-        SpreadsheetTemplateWriter.Result applied =
-            SpreadsheetTemplateWriter.apply(doc, templateSpec, writeCtx.projectVersion);
+        // A named cell colour resolves as EDT's spreadsheet reader does: the platform colour first, then
+        // the configuration's style / palette item read in THIS transaction (the writer binds the
+        // reference to it); an external-objects project offers platform colours only.
+        SpreadsheetTemplateWriter.Result applied = SpreadsheetTemplateWriter.apply(doc, templateSpec,
+            writeCtx.projectVersion, SpreadsheetTemplateWriter.projectColors(writeCtx.externalObjects ? null
+                : () -> (Configuration)tx.getTopObjectByFqn("Configuration"), writeCtx.projectVersion)); //$NON-NLS-1$
         if (applied.hasError())
         {
             // Roll the whole write back so a validation failure leaves nothing on disk.
@@ -2552,7 +2579,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
 
     /**
      * Builds the success JSON for a completed template content change: the {@code template} counts object
-     * ({@code cells} / {@code merges} / {@code areas} / {@code columnWidths} / {@code rowHeights}) plus
+     * ({@code cells} / {@code merges} / {@code areas} / {@code columnWidths} / {@code rowHeights} /
+     * {@code unmerges} / {@code removedAreas} / {@code renamedAreas}) plus
      * {@code persisted} and a confirmation message. Pure helper.
      */
     private static String buildTemplateResult(String normFqn, SpreadsheetTemplateWriter.Result result,
@@ -2564,6 +2592,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         applied.addProperty("areas", result.areas); //$NON-NLS-1$
         applied.addProperty("columnWidths", result.columnWidths); //$NON-NLS-1$
         applied.addProperty("rowHeights", result.rowHeights); //$NON-NLS-1$
+        applied.addProperty("unmerges", result.unmerges); //$NON-NLS-1$
+        applied.addProperty("removedAreas", result.removedAreas); //$NON-NLS-1$
+        applied.addProperty("renamedAreas", result.renamedAreas); //$NON-NLS-1$
         return ToolResult.success()
             .put(McpKeys.ACTION, VAL_MODIFIED)
             .put("fqn", MetadataTypeUtils.toCanonicalEnglishFqn(normFqn)) //$NON-NLS-1$
@@ -2571,7 +2602,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             .put(KEY_PERSISTED, persisted)
             .put(McpKeys.MESSAGE, "Modified template " + MetadataTypeUtils.toCanonicalEnglishFqn(normFqn) + " content (cells: " + result.cells //$NON-NLS-1$ //$NON-NLS-2$
                 + ", merges: " + result.merges + ", areas: " + result.areas + ", columnWidths: " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                + result.columnWidths + ", rowHeights: " + result.rowHeights + ")") //$NON-NLS-1$ //$NON-NLS-2$
+                + result.columnWidths + ", rowHeights: " + result.rowHeights + ", merges removed: " //$NON-NLS-1$ //$NON-NLS-2$
+                + result.unmerges + ", areas removed: " + result.removedAreas + ", areas renamed: " //$NON-NLS-1$ //$NON-NLS-2$
+                + result.renamedAreas + ")") //$NON-NLS-1$
             .toJson();
     }
 

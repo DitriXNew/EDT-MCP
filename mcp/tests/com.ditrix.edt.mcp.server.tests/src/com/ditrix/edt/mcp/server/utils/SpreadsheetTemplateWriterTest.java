@@ -890,7 +890,8 @@ public class SpreadsheetTemplateWriterTest
         String[][] cases = {
             { "{\"cells\":[{\"row\":0,\"col\":0,\"text\":\"A\",\"italic\":true}]}", //$NON-NLS-1$
                 "Unknown member 'italic' in cells[0]. Accepted members: row, col, replace, text, parameter, " //$NON-NLS-1$
-                    + "bold, fontSize, hAlign, vAlign, wrap, textOrientation, autoIndent, autoMarkIncomplete." },
+                    + "bold, fontSize, hAlign, vAlign, wrap, textOrientation, autoIndent, autoMarkIncomplete, borders, " //$NON-NLS-1$
+                    + "borderColor, backColor, textColor." },
             { "{\"columnWidths\":[{\"col\":0,\"widht\":40}]}", //$NON-NLS-1$
                 "Unknown member 'widht' in columnWidths[0]. Accepted members: col, width, autoWidthCalculation, " //$NON-NLS-1$
                     + "widthWeightFactor." },
