@@ -1,8 +1,9 @@
-Edit one metadata object module (`.bsl` under `src/`) using seven modes, syntax validation and lost-update guards.
+Edit one metadata object module (`.bsl` under `src/`) using eight modes, syntax validation and lost-update guards.
 
 ## When to use
 
 - `searchReplace` (default): edit existing BSL.
+- `replaceAll`: replace every whole-word occurrence of a name or fragment in the module, e.g. a renamed variable or a called procedure.
 - `replaceMethod`: replace one complete procedure/function.
 - `insertBefore` / `insertAfter`: add a complete procedure/function next to an anchor.
 - `replace`: rewrite/create a whole module; only this mode can create a file.
@@ -29,8 +30,8 @@ Passing both is rejected; passing neither is rejected. `moduleType` is meaningfu
 | `source` | unless fromModulePath or deleteMethods | the BSL to write (max 500000 chars); exactly one complete method for a method-targeted mode. |
 | `fromModulePath` | to copy methods | `src/`-relative `.bsl` module of the same project; replaces `source`. |
 | `methodNames` | with fromModulePath or deleteMethods | array of up to 100 method names, each once. |
-| `oldSource` | mode=searchReplace | must match exactly once. |
-| `mode` | optional | `searchReplace` (default; `append` with fromModulePath), `replace`, `append`, `replaceMethod`, `insertBefore`, `insertAfter`, `deleteMethods`. |
+| `oldSource` | mode=searchReplace or replaceAll | searchReplace: must match exactly once; replaceAll: every whole-word occurrence is replaced. |
+| `mode` | optional | `searchReplace` (default; `append` with fromModulePath), `replace`, `append`, `replaceMethod`, `insertBefore`, `insertAfter`, `deleteMethods`, `replaceAll`. |
 | `methodName` | method-targeted modes | existing unambiguous method anchor; REQUIRED. |
 | `formName` | moduleType=FormModule | except CommonForm. |
 | `commandName` | moduleType=CommandModule | except CommonCommand. |
@@ -47,6 +48,7 @@ Passing both is rejected; passing neither is rejected. `moduleType` is meaningfu
 ## Modes
 
 - `searchReplace` (default): finds `oldSource` and replaces it with `source`. `oldSource` is REQUIRED and must match EXACTLY ONE location — zero matches or multiple matches are rejected with a steer to read again / give a larger fragment. The match runs on the raw file content (trailing newline preserved), so a fragment ending at EOF including its final newline is found. The file must already exist.
+- `replaceAll`: replaces EVERY whole-word occurrence of `oldSource` with `source` (an empty `source` deletes them). The match is literal and case-sensitive on the same text `searchReplace` matches, so the spelling `search_in_code` finds is the spelling replaced; left to right, non-overlapping, and the replacement is never scanned again. Whole word: an occurrence counts only when no letter (any script), digit or `_` touches an edge of it that is itself such a character - `OldName` is replaced in `OldName.Run()`, `(OldName)` and `OldName;`, never in `OldNameX`, `XOldName` or `Old_Name1`; a fragment such as `Old.Run(` is checked on its identifier edge only. Comments and string literals are text like any other and ARE replaced. BSL ignores letter case, so a whole-word spelling that differs only by case is REPORTED in the `warning`, never replaced - repeat the call with that spelling when it is the same identifier. The response carries `replacements` (the count) and `replacedLines` (the lines of the text BEFORE the write where a replaced occurrence starts, ranges collapsed, at most 40 entries then `(+K more)` lines). No whole-word occurrence is an error, nothing written, naming occurrences inside longer identifiers and in another case. `oldSource` equal to `source` is refused, and so are `methodName`, `methodNames`, `fromModulePath`, `expectedSource` and `overwrite`; `expectedHash`, the syntax check and the repeated-method-name check apply as in every mode, so a replaceAll that turns one declaration into the name of another is refused. The file must already exist; the result is bounded at 10,000,000 characters.
 - `replace`: replaces the entire file. The ONLY mode that can CREATE a new module (creates parent folders). Over an EXISTING module it is guarded (see Lost-update guards).
 - `append`: adds `source` to the end. The file must already exist.
 - `replaceMethod`: replaces the complete `methodName` definition. Its span includes the contiguous `//` documentation and `&...` annotations/directives immediately above the declaration. `source` must declare exactly one complete procedure/function with the same name AND the same kind; a rename is rejected, and so is turning a Function into a Procedure or back - callers of a Function consume its return value, and the block-balance check cannot see the difference.
@@ -129,6 +131,13 @@ Surgical edit (default mode):
   "oldSource": "Return 1;", "source": "Return 2;" }
 ```
 
+Replace every whole-word occurrence of a name (comments and strings included):
+```
+{ "projectName": "MyProj", "modulePath": "CommonModules/MyModule/Module.bsl",
+  "mode": "replaceAll", "oldSource": "OldName", "source": "NewName",
+  "expectedHash": "<contentHash from read_module_source>" }
+```
+
 Form module via objectName:
 ```
 { "projectName": "MyProj", "objectName": "Document.MyDoc",
@@ -162,7 +171,8 @@ Insert a new method before an existing anchor:
 ## Gotchas
 
 - Only `.bsl` files; `modulePath` may not contain `..`.
-- `searchReplace`/`append`, `deleteMethods` and all method-targeted modes need an EXISTING file; only `replace` creates one.
+- `searchReplace`/`append`/`replaceAll`, `deleteMethods` and all method-targeted modes need an EXISTING file; only `replace` creates one.
+- To rename an identifier across several modules: find the modules with `search_in_code`, then one `replaceAll` per module; each answer names its count and lines.
 - New BSL files are written with a UTF-8 BOM; existing files keep their BOM state.
 - `source` is `\r\n`->`\n` normalized and a module with code always ends with a newline; a module left with no lines (every method deleted) is written empty.
 - In an extension, writing the module of an ADOPTED object also switches that module's state from `None` to `Extended` and exports the object's `.mdo`; `Checked`, `Notify` and a missing extension block are left as they are (see Modules of adopted objects).
