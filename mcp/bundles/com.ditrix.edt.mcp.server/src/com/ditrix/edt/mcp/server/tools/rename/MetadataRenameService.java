@@ -341,20 +341,31 @@ public class MetadataRenameService
             return ToolResult.error(memberRefusal).toJson();
         }
 
-        // Resolve the project and its configuration
-        ProjectContext.ConfigurationResult resolved = ProjectContext.resolveConfiguration(projectName);
+        // An empty or padded segment is refused for EVERY branch, before any is chosen: the form-element
+        // parser drops a trailing empty segment and its kind lookup trims, so the form branch would
+        // otherwise rename the element a shorter or trimmed address names.
+        String malformed = malformedAddressRefusal(MetadataTypeUtils.normalizeFqn(objectFqn));
+        if (malformed != null)
+        {
+            return ToolResult.error(malformed).toJson();
+        }
+
+        // Resolve the project and its metadata ROOT: a configuration, or the own roots of an external-objects
+        // project - which may be linked to no base configuration at all, and then has none (issue #994).
+        ProjectContext.ConfigurationResult resolved = ProjectContext.resolveMetadataRoot(projectName);
         if (!resolved.ok())
         {
             return resolved.errorJson();
         }
         IProject project = resolved.project();
         Configuration config = resolved.configuration();
+        MetadataScope rootScope = resolved.scope();
 
         objectFqn = MetadataTypeUtils.normalizeFqn(objectFqn);
 
         // Vendor support, before any refactoring exists: EDT's rename checks only the referencing
         // objects, never the renamed one itself (#642).
-        String locked = vendorSupportRefusal(MetadataScope.of(project, config), objectFqn);
+        String locked = vendorSupportRefusal(rootScope, objectFqn);
         if (locked != null)
         {
             return ToolResult.error(locked).toJson();
@@ -369,7 +380,7 @@ public class MetadataRenameService
         FormElementWriter.FormMemberRef formRef = FormElementWriter.parse(objectFqn);
         if (formRef != null)
         {
-            return renameFormMember(project, config, objectFqn, newName, confirm, disableRequest,
+            return renameFormMember(project, rootScope, objectFqn, newName, confirm, disableRequest,
                 expectedHash, maxResults, progress, formRef);
         }
 
@@ -570,7 +581,7 @@ public class MetadataRenameService
      * a new exposure, but the claim is stated as it is rather than as "nothing escapes".
      *
      * @param project the EDT project
-     * @param config the project's configuration
+     * @param scope the project's metadata root (an external-objects project's forms live in its own roots)
      * @param normFqn the normalized form FQN
      * @param newName the new element name
      * @param confirm {@code false} previews, {@code true} applies
@@ -581,7 +592,7 @@ public class MetadataRenameService
      * @param ref the parsed form-member reference
      * @return the Markdown report, or a {@link ToolResult#error} JSON payload
      */
-    private String renameFormMember(IProject project, Configuration config, String normFqn,
+    private String renameFormMember(IProject project, MetadataScope scope, String normFqn,
         String newName, boolean confirm, DisableRequest disableRequest, String expectedHash,
         int maxResults, RenameProgress progress, FormElementWriter.FormMemberRef ref)
     {
@@ -598,7 +609,7 @@ public class MetadataRenameService
         }
         try
         {
-            FormElementWriter.FormEditContext fctx = FormElementWriter.resolveForEdit(project, config,
+            FormElementWriter.FormEditContext fctx = FormElementWriter.resolveForEdit(project, scope,
                 ref.formPath, "Form not found for '" + normFqn //$NON-NLS-1$
                     + "'. Address a form element as 'Type.Object.Form.FormName.<Kind>.Name' or " //$NON-NLS-1$
                     + "'CommonForm.FormName.<Kind>.Name' (Kind = Attribute / Command / Field / " //$NON-NLS-1$
@@ -3770,11 +3781,60 @@ public class MetadataRenameService
     {
         // An empty segment ('Catalog.X.Form.F.', 'Catalog..X') is malformed: the shared parser's split
         // drops a trailing one, so without this a cascading write would run on the shorter address.
-        if (fqn == null || hasEmptySegment(fqn))
+        // A padded segment ('Subsystem. Sales ') is malformed too: the subsystem lookup trims every
+        // name, so it would rename 'Sales' for an address that does not spell it - the other subsystem
+        // writes refuse the same shape (SubsystemUtils.malformedSegmentError).
+        if (fqn == null || hasEmptySegment(fqn) || paddedSegment(fqn) != null)
         {
             return null;
         }
         return MetadataNodeResolver.resolveAddress(scope, fqn, false);
+    }
+
+    /**
+     * The refusal of an address with an EMPTY segment (a doubled, leading or trailing '.') or a PADDED
+     * one (whitespace at either end), or {@code null} when every segment is clean. Purely syntactic, so
+     * the rename asks it before choosing a branch: a subsystem address gets the refusal every subsystem
+     * write gives ({@link SubsystemUtils#malformedSegmentError}), any other address its own.
+     *
+     * @param fqn the normalized address (not {@code null})
+     * @return the refusal message, or {@code null}
+     */
+    public static String malformedAddressRefusal(String fqn)
+    {
+        String[] head = fqn.split("\\.", 2); //$NON-NLS-1$
+        String subsystemSegment = SubsystemUtils.isSubsystemTypeToken(head[0].trim())
+            ? SubsystemUtils.malformedSegmentError(fqn) : null;
+        if (subsystemSegment != null)
+        {
+            // The one refusal every subsystem write gives an empty or padded segment.
+            return "Object not found: " + fqn + ". " + subsystemSegment; //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        if (hasEmptySegment(fqn))
+        {
+            return "Object not found: " + fqn + ". The address has an empty segment (a doubled, leading or " //$NON-NLS-1$ //$NON-NLS-2$
+                + "trailing '.'); write it as 'Type.Name' or 'Type.Name.Kind.Name'."; //$NON-NLS-1$
+        }
+        String padded = paddedSegment(fqn);
+        if (padded != null)
+        {
+            return "Object not found: " + fqn + ". The address has a padded segment '" + padded //$NON-NLS-1$ //$NON-NLS-2$
+                + "'. A Name is matched exactly as written, so remove the whitespace around it."; //$NON-NLS-1$
+        }
+        return null;
+    }
+
+    /** The first segment of {@code fqn} with whitespace at either end, or {@code null}. */
+    private static String paddedSegment(String fqn)
+    {
+        for (String part : fqn.split("\\.", -1)) //$NON-NLS-1$
+        {
+            if (!part.equals(part.trim()))
+            {
+                return part;
+            }
+        }
+        return null;
     }
 
     private static boolean hasEmptySegment(String fqn)
@@ -3834,10 +3894,10 @@ public class MetadataRenameService
      */
     static String notFoundMessage(MetadataScope scope, String fqn)
     {
-        if (hasEmptySegment(fqn))
+        String malformed = malformedAddressRefusal(fqn);
+        if (malformed != null)
         {
-            return "Object not found: " + fqn + ". The address has an empty segment (a doubled, leading or " //$NON-NLS-1$ //$NON-NLS-2$
-                + "trailing '.'); write it as 'Type.Name' or 'Type.Name.Kind.Name'."; //$NON-NLS-1$
+            return malformed;
         }
         if (SubsystemUtils.parseSubsystemPath(fqn) != null)
         {

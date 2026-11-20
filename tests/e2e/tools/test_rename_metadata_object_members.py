@@ -14,6 +14,7 @@ each test.
 """
 
 import os
+import time
 
 from harness import (
     rename_call,
@@ -32,6 +33,7 @@ from harness import (
     poll_disk_path_gone,
     read_disk,
     settle_or_fail,
+    split_markdown_row,
     wait_for_project_ready,
     e2e_test,
     PROJECT,
@@ -321,3 +323,107 @@ def test_rename_address_with_a_trailing_dot_is_refused():
     assert_error_quality(err, names=["Catalog.Catalog"], suggests=["empty segment"],
                          ctx="the refusal says the address is malformed")
     assert_no_diff("a refused rename must not change the project on disk")
+
+@e2e_test(tool="rename_metadata_object", kind="write-metadata")
+def test_rename_padded_subsystem_address_is_refused():
+    # The subsystem lookup trims every name, so a padded address used to rename the unpadded subsystem.
+    _create("Subsystem." + SUB)
+    before = tree_snapshot()
+    r = rename_call({"projectName": PROJECT, "objectFqn": "Subsystem. " + SUB, "newName": SUB + "X"})
+    err = assert_error(r, "a padded subsystem segment must be refused, not trimmed")
+    assert_error_quality(err, names=[SUB], suggests=["padded segment"], ctx="the refusal names the padded segment")
+    assert_tree_unchanged(before, "a refused rename must not change the project on disk")
+
+
+# Unique per run: EDT may still build the processor into bin/*.epf while delete_project removes the project,
+# leaving a directory behind that a fixed name would collide with on the next run.
+EXT_PROJECT = "E2E994ExtStandalone_%d_e2e" % int(time.time())
+EXT_ROOT = "ExternalDataProcessor.E2E994ExtProc"
+
+
+def _ext_ok(tool, args, ctx):
+    r = call(tool, args)
+    assert_ok(r, ctx)
+    return r
+
+
+def _ext_project_dir(project):
+    """The created project's directory as list_projects reports it (it lives in EDT's workspace, not in
+    the fixture)."""
+    lp = _ext_ok("list_projects", {}, "list_projects for the created project's path")
+    columns = None
+    for line in (lp.text or "").splitlines():
+        cells = split_markdown_row(line)
+        if not cells:
+            continue
+        if columns is None:
+            lowered = [cell.lower() for cell in cells]
+            if "name" in lowered and "path" in lowered:
+                columns = (lowered.index("name"), lowered.index("path"))
+            continue
+        if len(cells) > max(columns) and cells[columns[0]] == project and cells[columns[1]]:
+            return cells[columns[1]]
+    raise AssertionError("list_projects has no row with a path for %r:\n%s" % (project, lp.text))
+
+
+def _poll_file(path, needles, absent, timeout=30, ctx=""):
+    """Poll ONE file until a single read holds every needle and none of the absent strings."""
+    deadline = time.time() + timeout
+    last = "(not read yet)"
+    while time.time() < deadline:
+        try:
+            with open(path, encoding="utf-8", errors="replace") as f:
+                last = f.read()
+            if all(n in last for n in needles) and not any(a in last for a in absent):
+                return last
+        except OSError:
+            pass
+        time.sleep(0.5)
+    raise AssertionError("%s: %s did not reach %r without %r:\n%s" % (ctx, path, needles, absent, last[:1500]))
+
+@e2e_test(tool="rename_metadata_object", kind="action")
+def test_rename_in_an_external_objects_project_without_a_base_configuration():
+    # An external-objects project linked to NO base configuration has no Configuration at all; its roots
+    # are its own. The rename used to stop at "needs a base configuration" before resolving anything.
+    call("delete_project", {"projectName": EXT_PROJECT, "deleteContent": True, "confirm": True})
+    try:
+        _ext_ok("create_project", {"projectKind": "externalObjects", "name": EXT_PROJECT, "externalObject": EXT_ROOT},
+                "create a standalone external-objects project")
+        settle_or_fail("the new external-objects project")
+        _ext_ok("create_metadata", {"projectName": EXT_PROJECT, "fqn": EXT_ROOT + ".Attribute.E2E994Attr"},
+                "seed an attribute of the external data processor")
+        _ext_ok("create_metadata", {"projectName": EXT_PROJECT, "fqn": EXT_ROOT + ".Form.E2E994ExtForm"},
+                "seed a form of the external data processor")
+        _ext_ok("create_metadata", {"projectName": EXT_PROJECT,
+                                    "fqn": EXT_ROOT + ".Form.E2E994ExtForm.Attribute.E2E994FormAttr"},
+                "seed a form attribute")
+        settle_or_fail("an external-objects member rename")
+
+        member = EXT_ROOT + ".Attribute.E2E994Attr"
+        p = rename_call({"projectName": EXT_PROJECT, "objectFqn": member, "newName": "E2E994Field"})
+        assert_ok(p, "preview a member rename in a standalone external-objects project")
+        assert_contains(p.text, "action: preview", "the member reaches EDT's rename")
+        r = rename_call({"projectName": EXT_PROJECT, "objectFqn": member, "newName": "E2E994Field", "confirm": True})
+        assert_ok(r, "confirm the member rename")
+        assert_contains(r.text, "action: executed", "the member rename is applied")
+        d = _ext_ok("get_metadata_details", {"projectName": EXT_PROJECT, "objectFqns": [EXT_ROOT]},
+                    "read the external data processor back")
+        assert_contains(d.text, "E2E994Field", "the model lists the renamed attribute")
+        assert_not_contains(d.text, "E2E994Attr", "the old attribute name is gone")
+        mdo = os.path.join(_ext_project_dir(EXT_PROJECT), "src", "ExternalDataProcessors", "E2E994ExtProc",
+                           "E2E994ExtProc.mdo")
+        _poll_file(mdo, ["<name>E2E994Field</name>"], ["<name>E2E994Attr</name>"],
+                   ctx="the rename reaches the external data processor's own .mdo on disk")
+
+        # A form ELEMENT resolves against the project's own roots too.
+        f = rename_call({"projectName": EXT_PROJECT,
+                         "objectFqn": EXT_ROOT + ".Form.E2E994ExtForm.Attribute.E2E994FormAttr",
+                         "newName": "E2E994FormField"})
+        assert_ok(f, "preview a form element rename in a standalone external-objects project")
+        assert_contains(f.text, "action: preview", "the form element reaches EDT's form rename")
+    finally:
+        wait_for_project_ready()  # let EDT's own build of the processor finish before the project goes
+        deleted = call("delete_project", {"projectName": EXT_PROJECT, "deleteContent": True, "confirm": True})
+    # Reached only when the body passed: a project left registered would disturb later readiness checks.
+    assert_ok(deleted, "remove the temporary external-objects project")
+    assert_no_diff("the fixture must be untouched by a project the test created and removed")

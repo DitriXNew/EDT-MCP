@@ -381,6 +381,59 @@ public class MetadataRenameMemberKindsTest
         assertTrue(message, message.contains("empty segment")); //$NON-NLS-1$
     }
 
+    // ==================== padded segments are malformed, not a trimmed address ====================
+
+    @Test
+    public void testAPaddedSubsystemAddressNamesNothing()
+    {
+        Subsystem orders = MdClassFactory.eINSTANCE.createSubsystem();
+        orders.setName("Orders"); //$NON-NLS-1$
+        sales.getSubsystems().add(orders);
+
+        assertNull("the subsystem lookup trims: a padded name must not rename 'Sales'", resolve("Subsystem. Sales")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNull(resolve("Subsystem.Sales ")); //$NON-NLS-1$
+        assertNull(resolve("Subsystem.Sales.Subsystem. Orders")); //$NON-NLS-1$
+        assertNull(resolve("Catalog.Cat.Attribute. Weight")); //$NON-NLS-1$
+        assertSame("control: the clean address resolves", sales, resolve("Subsystem.Sales")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testAPaddedSubsystemAddressGetsTheSharedSubsystemRefusal()
+    {
+        String message = MetadataRenameService.notFoundMessage(scope, "Subsystem. Sales"); //$NON-NLS-1$
+
+        assertTrue(message, message.startsWith("Object not found: Subsystem. Sales. ")); //$NON-NLS-1$
+        assertTrue(message, message.contains("padded segment ' Sales'")); //$NON-NLS-1$
+        // The SAME refusal the other subsystem writes give (SubsystemUtils.malformedSegmentError).
+        assertTrue(message, message.endsWith(com.ditrix.edt.mcp.server.utils.SubsystemUtils
+            .malformedSegmentError("Subsystem. Sales"))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAPaddedMemberAddressSaysWhichSegmentIsPadded()
+    {
+        String message = MetadataRenameService.notFoundMessage(scope, "Catalog.Cat.Attribute. Weight"); //$NON-NLS-1$
+
+        assertTrue(message, message.contains("padded segment ' Weight'")); //$NON-NLS-1$
+        assertFalse(message, message.contains("member kinds")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAMalformedFormElementAddressIsRefusedBeforeAnyBranchIsChosen()
+    {
+        // The form-element parser drops a trailing empty segment and its kind lookup trims, so the
+        // refusal must come before the form branch - and before the project is even resolved.
+        MetadataRenameService rename = new MetadataRenameService();
+        String padded = rename.rename("NoSuchProject994", "Catalog.Cat.Form.ItemForm. Attribute.Name", "New", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            false, DisableRequest.parse(null), null, 20, new RenameProgress());
+        String trailing = rename.rename("NoSuchProject994", "Catalog.Cat.Form.ItemForm.Attribute.Name.", "New", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            false, DisableRequest.parse(null), null, 20, new RenameProgress());
+
+        assertTrue(padded, padded.contains("padded segment")); //$NON-NLS-1$
+        assertTrue(trailing, trailing.contains("empty segment")); //$NON-NLS-1$
+        assertFalse("refused before the project is looked up", padded.contains("Project not found")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
     // ==================== a new name already taken at the same place ====================
 
     @Test
