@@ -1250,6 +1250,18 @@ public final class DcsReadProjection
         }
     }
 
+    /** The template name a grouping binding, field template or resource template names, else null. */
+    private static String templateReference(EObject object)
+    {
+        if (object instanceof DataCompositionSchemaGroupTemplate)
+            return ((DataCompositionSchemaGroupTemplate)object).getTemplate();
+        if (object instanceof com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaFieldTemplate)
+            return ((com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaFieldTemplate)object).getTemplate();
+        if (object instanceof com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaTotalFieldsTemplate)
+            return ((com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaTotalFieldsTemplate)object).getTemplate();
+        return null;
+    }
+
     /**
      * Compares two DCS identities the way 1C does - case-insensitively - because a retained
      * reference spelled `revenue` really does point at the field `Revenue`.
@@ -1265,18 +1277,6 @@ public final class DcsReadProjection
      * @param second the other identity, may be {@code null}
      * @return {@code true} when both are present and equal ignoring case
      */
-    /** The template name a grouping binding, field template or resource template names, else null. */
-    private static String templateReference(EObject object)
-    {
-        if (object instanceof DataCompositionSchemaGroupTemplate)
-            return ((DataCompositionSchemaGroupTemplate)object).getTemplate();
-        if (object instanceof com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaFieldTemplate)
-            return ((com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaFieldTemplate)object).getTemplate();
-        if (object instanceof com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaTotalFieldsTemplate)
-            return ((com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaTotalFieldsTemplate)object).getTemplate();
-        return null;
-    }
-
     private static boolean sameIdentity(String first, String second)
     {
         return first != null && second != null

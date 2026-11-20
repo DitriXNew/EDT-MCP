@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.server.utils;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -212,11 +213,23 @@ public final class DcsTemplateWriter
         }
         if (templates != null)
         {
+            // A body names each template once: the second entry of a name would otherwise find the
+            // template the first one just created and merge into it. Same identity as the collision guard.
+            Map<String, Integer> named = new HashMap<>();
             for (int i = 0; i < templates.size(); i++)
             {
                 if (!templates.get(i).isJsonObject())
                 {
                     return PlanResult.failure("body.templates[" + i + "] must be a template object."); //$NON-NLS-1$ //$NON-NLS-2$
+                }
+                String name = stringMember(templates.get(i).getAsJsonObject(), DcsTemplateBody.KEY_NAME);
+                Integer earlier = name == null || name.isEmpty() ? null
+                    : named.putIfAbsent(name.toLowerCase(Locale.ROOT), Integer.valueOf(i));
+                if (earlier != null)
+                {
+                    return PlanResult.failure("'body.templates[" + i + "]' repeats template name '" + name //$NON-NLS-1$ //$NON-NLS-2$
+                        + "' of 'body.templates[" + earlier + "]' (names are compared case-insensitively). " //$NON-NLS-1$ //$NON-NLS-2$
+                        + "A body names each template once; merge the two entries. Nothing was written."); //$NON-NLS-1$
                 }
                 String error = upsertTemplate(state, templates.get(i).getAsJsonObject(), context,
                     "body.templates[" + i + "]"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -228,11 +241,23 @@ public final class DcsTemplateWriter
             JsonElement value = members.get(member);
             if (value == null) continue;
             JsonArray bindings = value.getAsJsonArray();
+            // The same for bindings: one entry per grouping and template type, by the upsert's own key.
+            Map<String, Integer> keyed = new HashMap<>();
             for (int i = 0; i < bindings.size(); i++)
             {
                 String path = "body." + member + "[" + i + "]"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                 if (!bindings.get(i).isJsonObject()) return PlanResult.failure("'" + path + "' must be a binding object."); //$NON-NLS-1$ //$NON-NLS-2$
-                String error = upsertBinding(state, member, bindings.get(i).getAsJsonObject(), path);
+                DataCompositionSchemaGroupTemplate probe = DcsFactory.eINSTANCE.createDataCompositionSchemaGroupTemplate();
+                String error = DcsTemplateBody.applyBinding(probe, bindings.get(i).getAsJsonObject(), path, true);
+                if (error != null) return PlanResult.failure(error);
+                Integer earlier = keyed.putIfAbsent(bindingKey(probe), Integer.valueOf(i));
+                if (earlier != null)
+                {
+                    return PlanResult.failure("'" + path + "' binds the same grouping and template type (" //$NON-NLS-1$ //$NON-NLS-2$
+                        + bindingKey(probe) + ") as 'body." + member + "[" + earlier + "]'. A body binds each " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                        + "grouping and template type once; merge the two entries. Nothing was written."); //$NON-NLS-1$
+                }
+                error = upsertBinding(state, member, bindings.get(i).getAsJsonObject(), path);
                 if (error != null) return PlanResult.failure(error);
             }
         }
@@ -597,7 +622,13 @@ public final class DcsTemplateWriter
             return DcsMutationGuard.referenceError(schema, address, "template", name); //$NON-NLS-1$
         }
 
-        /** Bindings this call writes must name a template of the resulting schema. */
+        /**
+         * Bindings this call writes must name a template of the resulting schema, spelled exactly:
+         * EDT's template editor resolves a binding's template with {@code String.equals}
+         * ({@code Templates.getTemplateDescription}), so {@code totalrow} does not reach
+         * {@code TotalRow}. The guards that refuse (name collision, a removed or renamed template
+         * still named) compare case-insensitively instead, so no two templates differ only by case.
+         */
         String integrityError()
         {
             Set<String> names = new LinkedHashSet<>();
@@ -610,9 +641,17 @@ public final class DcsTemplateWriter
                 String template = entry.getKey().getTemplate();
                 if (!names.contains(template))
                 {
+                    String spelled = null;
+                    for (String name : names)
+                    {
+                        if (name.equalsIgnoreCase(template)) spelled = name;
+                    }
                     return "The binding written to '" + bindingAddress(entry.getValue(), entry.getKey()) //$NON-NLS-1$
-                        + "' names template '" + template + "', which this schema does not have. Existing " //$NON-NLS-1$ //$NON-NLS-2$
-                        + "templates: " + (names.isEmpty() ? "(none)" : String.join(", ", names)) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                        + "' names template '" + template + "', which this schema does not have. " //$NON-NLS-1$ //$NON-NLS-2$
+                        + (spelled == null ? "" //$NON-NLS-1$
+                            : "Template names are matched exactly, as EDT's template editor resolves them: " //$NON-NLS-1$
+                                + "spell it '" + spelled + "'. ") //$NON-NLS-1$ //$NON-NLS-2$
+                        + "Existing templates: " + (names.isEmpty() ? "(none)" : String.join(", ", names)) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                         + ". Create the template first (or in the same root call), or name an existing one; " //$NON-NLS-1$
                         + "nothing was written."; //$NON-NLS-1$
                 }

@@ -384,8 +384,10 @@ Write them with `type='schema'` at the addresses the read prints, or as the root
 
 `upsert` at `#/templates` or in the root body creates or finds a template by name; a name must be
 unique (case-insensitive) and not a number. `update` at `#/templates/<name>` may carry a new `name`.
-A binding must name an existing template, and a template that a binding, field template or resource
-template names cannot be removed or renamed. An unknown grouping name and a cell parameter the
+A binding must name an existing template spelled exactly (EDT resolves it case-sensitively), and a
+template that a binding, field template or resource template names cannot be removed or renamed. A
+root body names each template, and binds each grouping and `templateType`, once. An unknown
+grouping name and a cell parameter the
 template does not declare only produce warnings, because EDT checks neither. Send the node page's
 `## Body` back with `replace` to restate the node. `replace`, and `rows`/`parameters` in an update,
 are refused when the stored part holds a value this writer cannot rebuild exactly (another spelling

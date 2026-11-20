@@ -22,12 +22,15 @@ import com._1c.g5.v8.dt.dcs.model.areaTemplate.DataCompositionAreaTemplateTableC
 import com._1c.g5.v8.dt.dcs.model.areaTemplate.DataCompositionAreaTemplateTableRow;
 import com._1c.g5.v8.dt.dcs.model.common.DataCompositionAreaTemplateType;
 import com._1c.g5.v8.dt.dcs.model.core.DataCompositionField;
+import com._1c.g5.v8.dt.dcs.model.core.DataCompositionParameter;
+import com._1c.g5.v8.dt.dcs.model.core.DataCompositionParameterValue;
 import com._1c.g5.v8.dt.dcs.model.core.LocalString;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaGroupTemplate;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaTemplateDescription;
 import com._1c.g5.v8.dt.dcs.model.schema.DcsFactory;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionGroup;
+import com._1c.g5.v8.dt.dcs.model.settings.SettingsParameterValue;
 
 /**
  * #662: typed writes of area templates and grouping bindings through {@link DcsSchemaWriter}
@@ -191,6 +194,112 @@ public class DcsTemplateWriterTest
     }
 
     @Test
+    public void testACellsPatchKeepsTheClassOfStoredAppearanceItDoesNotWrite()
+    {
+        DataCompositionSchema schema = schemaWith("A");
+        // A stored dotted-key holder of the settings class, with a nested sibling of that class.
+        SettingsParameterValue holder = settingsItem("BorderStyle");
+        holder.setUse(false);
+        holder.getNestedParameterValues().add(settingsItem("BorderStyle.Right"));
+        cell(schema, 0, 0).getAppearance().getItems().add(holder);
+
+        success(write(schema, "update", ROOT + "#/templates/A",
+            "{\"cells\":[{\"row\":0,\"col\":0,\"appearance\":{"
+                + "\"BorderStyle.Left\":{\"kind\":\"line\",\"value\":{\"width\":2,\"style\":\"Solid\"}}}}]}"));
+        DataCompositionAreaTemplateTableCell first = cell(schema, 0, 0);
+        assertEquals(2, first.getAppearance().getItems().size());
+        assertEquals("HorizontalAlign", first.getAppearance().getItems().get(0).getParameter().getValue());
+        DataCompositionParameterValue kept = first.getAppearance().getItems().get(1);
+        assertTrue(kept.eClass().getName(), kept instanceof SettingsParameterValue);
+        assertFalse(kept.isUse());
+        assertEquals(2, kept.getNestedParameterValues().size());
+        DataCompositionParameterValue right = kept.getNestedParameterValues().get(0);
+        assertEquals("BorderStyle.Right", right.getParameter().getValue());
+        assertTrue(right.eClass().getName(), right instanceof SettingsParameterValue);
+        // The value this call wrote is the core item EDT's template designer writes.
+        DataCompositionParameterValue left = kept.getNestedParameterValues().get(1);
+        assertEquals("BorderStyle.Left", left.getParameter().getValue());
+        assertFalse(left.eClass().getName(), left instanceof SettingsParameterValue);
+    }
+
+    @Test
+    public void testACellsPatchKeepsAStoredSiblingThatCarriesSettingsMembers()
+    {
+        DataCompositionSchema schema = schemaWith("A");
+        SettingsParameterValue holder = settingsItem("BorderStyle");
+        holder.setUse(false);
+        SettingsParameterValue right = settingsItem("BorderStyle.Right");
+        right.setUserSettingID("stored-id");
+        holder.getNestedParameterValues().add(right);
+        cell(schema, 0, 0).getAppearance().getItems().add(holder);
+
+        success(write(schema, "update", ROOT + "#/templates/A",
+            "{\"cells\":[{\"row\":0,\"col\":0,\"appearance\":{"
+                + "\"BorderStyle.Left\":{\"kind\":\"line\",\"value\":{\"width\":2,\"style\":\"Solid\"}}}}]}"));
+        DataCompositionParameterValue stored = cell(schema, 0, 0).getAppearance().getItems().get(1)
+            .getNestedParameterValues().get(0);
+        assertTrue(stored.eClass().getName(), stored instanceof SettingsParameterValue);
+        assertEquals("stored-id", ((SettingsParameterValue)stored).getUserSettingID());
+
+        // A settings member this call writes is still refused.
+        assertContains(failure(write(schema, "update", ROOT + "#/templates/A",
+            "{\"cells\":[{\"row\":0,\"col\":1,\"appearance\":{\"items\":[{\"parameter\":"
+                + "{\"kind\":\"parameter\",\"value\":\"BorderStyle\"},\"nestedParameterValues\":[{\"parameter\":"
+                + "{\"kind\":\"parameter\",\"value\":\"BorderStyle.Left\"},"
+                + "\"value\":{\"kind\":\"line\",\"value\":{\"width\":2,\"style\":\"Solid\"}},"
+                + "\"userSettingID\":\"new-id\"}]}]}}]}")), "carries viewMode, userSettingID");
+    }
+
+    @Test
+    public void testABindingNamesItsTemplateExactlyAsEdtResolvesIt()
+    {
+        DataCompositionSchema schema = schemaWith("TotalRow");
+        String refused = failure(write(schema, "upsert", ROOT + "#/groupTemplates",
+            "{\"groupName\":\"Customer\",\"template\":\"totalrow\"}"));
+        assertContains(refused, "names template 'totalrow'");
+        assertContains(refused, "matched exactly");
+        assertContains(refused, "spell it 'TotalRow'");
+        assertTrue(schema.getGroupTemplates().isEmpty());
+
+        success(write(schema, "upsert", ROOT + "#/groupTemplates",
+            "{\"groupName\":\"Customer\",\"template\":\"TotalRow\"}"));
+        assertEquals(1, schema.getGroupTemplates().size());
+        // The same identity keeps a case variant from being created beside the bound template.
+        assertContains(failure(write(schema, "upsert", ROOT + "#/templates", "{\"name\":\"totalrow\"}")),
+            "collides");
+    }
+
+    @Test
+    public void testARootBodyNamesEachTemplateAndBindsEachGroupingOnce()
+    {
+        DataCompositionSchema schema = schemaWith("Keep");
+        String twice = failure(write(schema, "replace", ROOT, "{\"templates\":[{\"name\":\"T\"," + ROWS
+            + "},{\"name\":\"T\",\"parameters\":[]}]}"));
+        assertContains(twice, "'body.templates[1]' repeats template name 'T' of 'body.templates[0]'");
+        assertEquals(1, schema.getTemplates().size());
+        assertEquals("Keep", schema.getTemplates().get(0).getName());
+
+        assertContains(failure(write(schema, "upsert", ROOT, "{\"templates\":[{\"name\":\"T\"},{\"name\":\"t\"}]}")),
+            "'body.templates[1]' repeats template name 't' of 'body.templates[0]'");
+
+        String bindings = failure(write(schema, "upsert", ROOT, "{\"templates\":[{\"name\":\"T\"}],"
+            + "\"groupTemplates\":[{\"groupName\":\"Customer\",\"template\":\"T\"},"
+            + "{\"groupName\":\"customer\",\"template\":\"Keep\"}]}"));
+        assertContains(bindings, "'body.groupTemplates[1]' binds the same grouping and template type");
+        assertContains(bindings, "'body.groupTemplates[0]'");
+        assertEquals(1, schema.getTemplates().size());
+        assertTrue(schema.getGroupTemplates().isEmpty());
+
+        // Another template type, and the other collection, are other bindings.
+        success(write(schema, "upsert", ROOT, "{\"groupTemplates\":["
+            + "{\"groupName\":\"Customer\",\"template\":\"Keep\"},"
+            + "{\"groupName\":\"Customer\",\"templateType\":\"Footer\",\"template\":\"Keep\"}],"
+            + "\"groupHeaderTemplates\":[{\"groupName\":\"Customer\",\"template\":\"Keep\"}]}"));
+        assertEquals(2, schema.getGroupTemplates().size());
+        assertEquals(1, schema.getGroupHeaderTemplates().size());
+    }
+
+    @Test
     public void testRowsInAnUpdateRefuseToDiscardWhatTheWriterCannotRestate()
     {
         DataCompositionSchema schema = schemaWith("A");
@@ -304,6 +413,17 @@ public class DcsTemplateWriterTest
         binding.setGroupName(groupName);
         binding.setTemplate(template);
         return binding;
+    }
+
+    static SettingsParameterValue settingsItem(String name)
+    {
+        SettingsParameterValue item = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createSettingsParameterValue();
+        DataCompositionParameter parameter =
+            com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE.createDataCompositionParameter();
+        parameter.setValue(name);
+        item.setParameter(parameter);
+        return item;
     }
 
     static DataCompositionField field(String value)
