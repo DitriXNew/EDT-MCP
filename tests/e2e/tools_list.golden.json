@@ -3561,7 +3561,7 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Diagnose the EDT MCP server and its feature configuration. Parameters and examples: get_tool_guide('get_server_status').",
+    "description": "Diagnose the EDT MCP server: its configuration and the tool calls and background jobs running right now. Parameters and examples: get_tool_guide('get_server_status').",
     "inputSchema": {
       "properties": {},
       "required": [],
@@ -3570,6 +3570,15 @@
     "name": "get_server_status",
     "outputSchema": {
       "properties": {
+        "activeCalls": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "activeCallsUntracked": {
+          "type": "integer"
+        },
         "authEnabled": {
           "type": "boolean"
         },
@@ -3602,6 +3611,12 @@
         },
         "running": {
           "type": "boolean"
+        },
+        "runningJobs": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
         },
         "success": {
           "type": "boolean"
