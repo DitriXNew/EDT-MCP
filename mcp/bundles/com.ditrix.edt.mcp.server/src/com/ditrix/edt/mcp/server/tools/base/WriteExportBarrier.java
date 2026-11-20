@@ -52,7 +52,8 @@ public final class WriteExportBarrier
 
     public static Outcome await(WriteScope.Verdict verdict, long budgetMs, Environment environment)
     {
-        long deadline = System.currentTimeMillis() + budgetMs;
+        // Monotonic: a wall-clock change neither grants nor takes export time.
+        long deadline = System.nanoTime() / 1_000_000L + budgetMs;
         boolean drained = true;
         for (String project : verdict.written())
         {
@@ -69,7 +70,7 @@ public final class WriteExportBarrier
 
     private static DiskExportState waitWithin(long deadline, String project, Environment environment)
     {
-        long remainingMs = deadline - System.currentTimeMillis();
+        long remainingMs = deadline - System.nanoTime() / 1_000_000L;
         if (project == null || project.isEmpty() || remainingMs < MIN_USEFUL_WAIT_MS)
             return DiskExportState.UNOBSERVABLE;
         return environment.waitForDiskExport(project, remainingMs);

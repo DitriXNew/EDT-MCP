@@ -96,6 +96,26 @@ public class DcsCallBudgetTest
     }
 
     @Test
+    public void testADynamicListValidatesTheFormAndSettingsTheTransactionWrote() throws Exception
+    {
+        // The target resolved form content A; the write transaction found and wrote form content B.
+        List<ExportTarget> targets = List.of(
+            export(ExportRole.FORM_CONTENT, "Catalog.Products.Form.ListForm.FormA"), //$NON-NLS-1$
+            export(ExportRole.DYNAMIC_LIST_SETTINGS, "Catalog.Products.Form.ListForm.FormA.Settings")); //$NON-NLS-1$
+        assertEquals(List.of("Catalog.Products.Form.ListForm.FormB", "Catalog.Products.Form.ListForm.FormB.Settings"), //$NON-NLS-1$ //$NON-NLS-2$
+            DcsTool.dynamicListValidationObjects(targets, "Catalog.Products.Form.ListForm.FormB", //$NON-NLS-1$
+                "Catalog.Products.Form.ListForm.FormB.Settings")); //$NON-NLS-1$
+        assertEquals("a write that left no list settings validates the form it wrote only", //$NON-NLS-1$
+            List.of("Catalog.Products.Form.ListForm.FormB"), //$NON-NLS-1$
+            DcsTool.dynamicListValidationObjects(targets, "Catalog.Products.Form.ListForm.FormB", null)); //$NON-NLS-1$
+        assertEquals("another resolved top object is kept", //$NON-NLS-1$
+            List.of("Catalog.Products", "Catalog.Products.Form.ListForm.FormB"), //$NON-NLS-1$ //$NON-NLS-2$
+            DcsTool.dynamicListValidationObjects(List.of(export(ExportRole.OWNER_TOP_OBJECT, "Catalog.Products"), //$NON-NLS-1$
+                export(ExportRole.FORM_CONTENT, "Catalog.Products.Form.ListForm.FormA")), //$NON-NLS-1$
+                "Catalog.Products.Form.ListForm.FormB", null)); //$NON-NLS-1$
+    }
+
+    @Test
     public void testTheCallBudgetRunsOnTheMonotonicClock()
     {
         // A wall-clock change must neither grant nor take export or validation time.

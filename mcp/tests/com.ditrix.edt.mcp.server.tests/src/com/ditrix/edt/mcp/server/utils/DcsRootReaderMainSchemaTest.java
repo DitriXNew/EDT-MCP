@@ -75,7 +75,7 @@ public class DcsRootReaderMainSchemaTest
         Report report = MdClassFactory.eINSTANCE.createReport();
         Template template = MdClassFactory.eINSTANCE.createTemplate();
         template.setTemplateType(TemplateType.DATA_COMPOSITION_SCHEMA);
-        DataCompositionSchema schema = DcsFactory.eINSTANCE.createDataCompositionSchema();
+        DataCompositionSchema schema = DcsAttachedSchemas.attached("Report.Sales.Template.Main.Template"); //$NON-NLS-1$
         template.setTemplate(schema);
         report.getTemplates().add(template);
         report.setMainDataCompositionSchema(template);
@@ -108,8 +108,8 @@ public class DcsRootReaderMainSchemaTest
     public void testAReassignedMainSchemaIsReadFromTheReportNotFromTheStaleTemplateId() throws Exception
     {
         // The descriptor saw template A as the main schema; another write then pointed the report at B.
-        DataCompositionSchema schemaA = DcsFactory.eINSTANCE.createDataCompositionSchema();
-        DataCompositionSchema schemaB = DcsFactory.eINSTANCE.createDataCompositionSchema();
+        DataCompositionSchema schemaA = DcsAttachedSchemas.attached("Report.Sales.Template.A.Template"); //$NON-NLS-1$
+        DataCompositionSchema schemaB = DcsAttachedSchemas.attached("Report.Sales.Template.B.Template"); //$NON-NLS-1$
         Template templateA = dcsTemplate(schemaA);
         Template templateB = dcsTemplate(schemaB);
         Report report = MdClassFactory.eINSTANCE.createReport();

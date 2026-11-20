@@ -16,6 +16,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 
 import org.eclipse.core.resources.IProject;
@@ -360,6 +362,25 @@ public final class WrittenObjectMarkers
         return CommandInterfaceAddress.isConfigurationToken(dot < 0 ? targetFqn : targetFqn.substring(0, dot));
     }
 
+    /** The clock of the shared budget, in milliseconds: monotonic, so a wall-clock change neither grants nor takes time. */
+    private static final AtomicReference<LongSupplier> CLOCK = new AtomicReference<>(() -> System.nanoTime() / 1_000_000L);
+
+    private static long nowMs()
+    {
+        return CLOCK.get().getAsLong();
+    }
+
+    /**
+     * Test seam: replaces the budget clock.
+     *
+     * @param clock a monotonic reading in milliseconds
+     * @return the clock it replaced
+     */
+    static LongSupplier useClock(LongSupplier clock)
+    {
+        return CLOCK.getAndSet(clock);
+    }
+
     /**
      * Waits for and reads the markers of the written objects under one shared budget. Never throws:
      * a failure becomes {@link Reason#READ_FAILED}.
@@ -378,7 +399,7 @@ public final class WrittenObjectMarkers
         int count = 0;
         List<Row> rows = new ArrayList<>();
         List<String> objects = new ArrayList<>();
-        long deadlineAtMs = System.currentTimeMillis() + budgetMs;
+        long deadlineAtMs = nowMs() + budgetMs;
         for (Map.Entry<String, List<String>> entry : sliceByProject.entrySet())
         {
             String projectName = entry.getKey();
@@ -387,22 +408,22 @@ public final class WrittenObjectMarkers
             try
             {
                 Map<String, Long> ids = env.resolveTopObjects(projectName, fqns,
-                    readTimeoutMs(deadlineAtMs - System.currentTimeMillis()));
+                    readTimeoutMs(deadlineAtMs - nowMs()));
                 unresolved |= ids.size() < fqns.size();
                 if (ids.isEmpty())
                 {
                     continue;
                 }
-                long startedAtMs = System.currentTimeMillis();
+                long startedAtMs = nowMs();
                 long remainingMs = deadlineAtMs - startedAtMs;
                 BuildUtils.ValidationState state = remainingMs < MIN_USEFUL_WAIT_MS
                     ? BuildUtils.ValidationState.PENDING
                     : env.awaitValidation(projectName, ids.values(), remainingMs);
                 unobservable |= state == BuildUtils.ValidationState.UNOBSERVABLE;
                 pending |= state == BuildUtils.ValidationState.PENDING;
-                long waitedMs = System.currentTimeMillis() - startedAtMs;
+                long waitedMs = nowMs() - startedAtMs;
                 ProjectMarkers read = env.read(projectName, ids, MAX_ROWS,
-                    readTimeoutMs(deadlineAtMs - System.currentTimeMillis()));
+                    readTimeoutMs(deadlineAtMs - nowMs()));
                 count += read.total;
                 rows.addAll(read.rows);
                 // The timing line the validation budget is tuned from.

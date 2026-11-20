@@ -107,14 +107,6 @@ public final class DcsRootReader
                 + "' disappeared before it could be read. Re-run dcs action='get'."); //$NON-NLS-1$
         }
         BasicTemplate template = (BasicTemplate)object;
-        if (template.getTemplate() == null && template.getTemplateType() != TemplateType.DATA_COMPOSITION_SCHEMA)
-        {
-            // The live template, read now, may not be the one the resolver checked (a report pointed at
-            // another main template): an empty template not declared as a DCS is not an empty schema.
-            return Result.failure("DCS root '" + target.normalizedRootFqn() + "' now addresses a template " //$NON-NLS-1$ //$NON-NLS-2$
-                + "declared as " + (template.getTemplateType() == null ? "unset" : template.getTemplateType().getName()) //$NON-NLS-1$ //$NON-NLS-2$
-                + ", not a data composition schema. Re-run dcs action='get'."); //$NON-NLS-1$
-        }
         EObject content = template.getTemplate();
         // A template DECLARED as a DCS whose content resource has not been materialized yet answers
         // with an unresolved placeholder (eClass degrades to the bare EObject), not null. That is an
@@ -130,6 +122,26 @@ public final class DcsRootReader
             return Result.failure("DCS root '" + target.normalizedRootFqn() + "' now contains '" //$NON-NLS-1$ //$NON-NLS-2$
                 + content.eClass().getName() + "', not DataCompositionSchema. Address a DCS template " //$NON-NLS-1$
                 + "or re-save the template with type DATA_COMPOSITION_SCHEMA."); //$NON-NLS-1$
+        }
+        // The resolver's own tests decide what the write changes, so the hash is taken of that very object: a
+        // detached schema holding content is refused by both, an empty detached one is replaced by a fresh
+        // schema and so hashes as no schema (DcsSchemaContent.isWrittenSchema / unattachedContentRefusal).
+        String unattached = DcsSchemaContent.unattachedContentRefusal(content, target.normalizedRootFqn());
+        if (unattached != null)
+        {
+            return Result.failure(unattached);
+        }
+        if (content != null && !DcsSchemaContent.isWrittenSchema(content))
+        {
+            content = null;
+        }
+        if (content == null && template.getTemplateType() != TemplateType.DATA_COMPOSITION_SCHEMA)
+        {
+            // The live template, read now, may not be the one the resolver checked (a report pointed at
+            // another main template): an empty template not declared as a DCS is not an empty schema.
+            return Result.failure("DCS root '" + target.normalizedRootFqn() + "' now addresses a template " //$NON-NLS-1$ //$NON-NLS-2$
+                + "declared as " + (template.getTemplateType() == null ? "unset" : template.getTemplateType().getName()) //$NON-NLS-1$ //$NON-NLS-2$
+                + ", not a data composition schema. Re-run dcs action='get'."); //$NON-NLS-1$
         }
         return Result.success(content);
     }

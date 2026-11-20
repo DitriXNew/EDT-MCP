@@ -487,6 +487,35 @@ public class DcsTool implements IMcpTool
         return new ArrayList<>(fqns);
     }
 
+    /**
+     * The top objects whose markers a committed dynamic-list write reports: the content form and the list
+     * settings the write transaction actually wrote. The descriptor's form content and settings, resolved
+     * before the transaction, are dropped - they may name another form object than the one written - and
+     * any other resolved top object is kept.
+     *
+     * @param targets the resolved export targets
+     * @param writtenFormFqn the content form the write transaction wrote, or {@code null}
+     * @param writtenSettingsFqn the list settings the write transaction wrote, or {@code null}
+     * @return the FQNs, in stable order, without duplicates
+     */
+    static List<String> dynamicListValidationObjects(List<DcsTargetResolver.ExportTarget> targets,
+        String writtenFormFqn, String writtenSettingsFqn)
+    {
+        Set<String> fqns = new LinkedHashSet<>();
+        for (DcsTargetResolver.ExportTarget target : targets)
+        {
+            if (target.fqn() != null && !target.fqn().isEmpty()
+                && target.role() != DcsTargetResolver.ExportRole.FORM_CONTENT
+                && target.role() != DcsTargetResolver.ExportRole.DYNAMIC_LIST_SETTINGS)
+            {
+                fqns.add(target.fqn());
+            }
+        }
+        if (writtenFormFqn != null && !writtenFormFqn.isEmpty()) fqns.add(writtenFormFqn);
+        if (writtenSettingsFqn != null && !writtenSettingsFqn.isEmpty()) fqns.add(writtenSettingsFqn);
+        return new ArrayList<>(fqns);
+    }
+
     /** The clock of the call budget: monotonic, so a wall-clock change neither grants nor takes time. */
     static long monotonicMs()
     {
@@ -1293,8 +1322,13 @@ public class DcsTool implements IMcpTool
                 }
                 DcsDynamicListWriter.CommitResult committed = planned.plan().commit(formModel,
                     member, extInfo, tx, configurationInTransaction(context, tx), version);
+                // The content form this transaction wrote - the one writeEditableForm exports - and the list
+                // settings the list holds now, edited by this write or not: their markers are this write's.
+                EObject listMember = FormElementWriter.resolveFormMember(formModel, ref);
+                DynamicListExtInfo after = listMember == null ? null : dynamicListExtInfo(listMember);
                 outcome.set(new DynamicWriteOutcome(committed.modelSnapshot(),
-                    committed.settingsFqn(), committed.applied()));
+                    committed.settingsFqn(), committed.applied(), DcsSchemaContent.attachedFqn(formModel),
+                    after == null ? null : DcsSchemaContent.attachedFqn(after.getListSettings())));
             });
         DynamicWriteOutcome written = outcome.get();
         if (written == null)
@@ -1330,10 +1364,9 @@ public class DcsTool implements IMcpTool
         // A dynamic list's query, fields and main table live in the content form's top object, and EDT
         // indexes markers per top object only, so the form's markers are the finest slice that holds
         // the list's problems; its settings are a top object of their own.
-        Set<String> validated = new LinkedHashSet<>(target.forceExportFqns());
-        if (written.settingsFqn != null) validated.add(written.settingsFqn);
-        validated.remove(null);
-        validation.set(new ValidationScope(context.project().getName(), new ArrayList<>(validated),
+        validation.set(new ValidationScope(context.project().getName(),
+            dynamicListValidationObjects(target.exportTargets(), written.formContentFqn,
+                written.liveSettingsFqn != null ? written.liveSettingsFqn : written.settingsFqn),
             List.of(recheckAddress(target.normalizedRootFqn(), ref.formPath)), "A dynamic list is validated with the form that holds it, so these " //$NON-NLS-1$
                 + "are the markers of that form and of the list settings.")); //$NON-NLS-1$
         return "**Action:** `" + action + "`\n\n**Target:** `" + address //$NON-NLS-1$ //$NON-NLS-2$
@@ -1838,13 +1871,19 @@ public class DcsTool implements IMcpTool
         final DynamicListExtInfo modelSnapshot;
         final String settingsFqn;
         final List<String> applied;
+        /** The content form's top-object FQN the write transaction wrote (and exported), or {@code null}. */
+        final String formContentFqn;
+        /** The list settings' top-object FQN after the write, whether it edited them or not, or {@code null}. */
+        final String liveSettingsFqn;
 
         DynamicWriteOutcome(DynamicListExtInfo modelSnapshot, String settingsFqn,
-            List<String> applied)
+            List<String> applied, String formContentFqn, String liveSettingsFqn)
         {
             this.modelSnapshot = modelSnapshot;
             this.settingsFqn = settingsFqn;
             this.applied = applied;
+            this.formContentFqn = formContentFqn;
+            this.liveSettingsFqn = liveSettingsFqn;
         }
     }
 
