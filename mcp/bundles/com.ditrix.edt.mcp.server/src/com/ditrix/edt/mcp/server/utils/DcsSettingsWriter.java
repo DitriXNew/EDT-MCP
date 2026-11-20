@@ -3743,9 +3743,11 @@ public final class DcsSettingsWriter
                 () -> appearance(body, holder, languages, available, version, path));
             if (built.error != null) return AppearanceItemsResult.failure(built.error);
             List<DataCompositionParameterValue> items = new ArrayList<>();
-            for (DataCompositionParameterValue item : new ArrayList<>(built.value.getItems()))
+            List<DataCompositionParameterValue> builtItems = new ArrayList<>(built.value.getItems());
+            for (int i = 0; i < builtItems.size(); i++)
             {
-                DataCompositionParameterValue result = templateAppearanceItem(item, storedCounterpart(inputs, item));
+                DataCompositionParameterValue item = builtItems.get(i);
+                DataCompositionParameterValue result = templateAppearanceItem(item, storedAt(inputs, i));
                 if (result == null)
                 {
                     return AppearanceItemsResult.failure("Appearance item '" //$NON-NLS-1$
@@ -3760,16 +3762,22 @@ public final class DcsSettingsWriter
     }
 
     /**
-     * Decides one built item by the stored item at the same parameter path, not by whether the
-     * whole subtree still equals its input: a dotted key changes a nested value in place, so the
-     * holder above it is unequal to its input although this call did not write the holder. A node
-     * equal to its stored counterpart is the stored node; a node whose own members (class, use,
-     * parameter, values, settings members) equal the stored one's is the stored node changed only
-     * below, so it keeps its class and each child is decided the same way; anything else - a node
-     * with no stored counterpart, or one that replaced it - was written by this call.
+     * Decides one built item by the stored item at the same position, not by whether the whole
+     * subtree still equals its input: a dotted key changes a nested value in place, so the holder
+     * above it is unequal to its input although this call did not write the holder. A node equal to
+     * its stored counterpart is the stored node; a node whose own members (class, use, parameter,
+     * values, settings members) equal the stored one's is the stored node changed only below, so it
+     * keeps its class and each child is decided the same way; anything else - a node with no stored
+     * counterpart, or one that replaced it - was written by this call.
+     *
+     * <p>The pairing is by position, not by parameter name: a stored list may carry two items of
+     * one name (EDT's Template.dcs reader keeps both), and pairing by name would judge the second by
+     * the first. Position is exact because the builder keeps every stored item at its index - it
+     * copies the list, replaces an item in place and appends a new one ({@code putAppearanceItem},
+     * {@code putAppearanceParameter}), and never removes or inserts before a stored item.
      *
      * @param item the built item
-     * @param stored the stored item with the same parameter name at this level, or {@code null}
+     * @param stored the stored item at the same position in the same list, or {@code null}
      * @return the item to store, or {@code null} when a written item carries settings members
      */
     private static DataCompositionParameterValue templateAppearanceItem(DataCompositionParameterValue item,
@@ -3785,10 +3793,11 @@ public final class DcsSettingsWriter
         }
         List<DataCompositionParameterValue> children = new ArrayList<>(item.getNestedParameterValues());
         item.getNestedParameterValues().clear();
-        for (DataCompositionParameterValue child : children)
+        for (int i = 0; i < children.size(); i++)
         {
+            DataCompositionParameterValue child = children.get(i);
             DataCompositionParameterValue decided =
-                templateAppearanceItem(child, storedCounterpart(stored.getNestedParameterValues(), child));
+                templateAppearanceItem(child, storedAt(stored.getNestedParameterValues(), i));
             if (decided == null)
             {
                 return null;
@@ -3798,23 +3807,10 @@ public final class DcsSettingsWriter
         return item;
     }
 
-    /** The stored item that carries the built item's parameter name, or {@code null}. */
-    private static DataCompositionParameterValue storedCounterpart(List<DataCompositionParameterValue> stored,
-        DataCompositionParameterValue item)
+    /** The stored item at {@code index}, or {@code null} for an item the builder appended. */
+    private static DataCompositionParameterValue storedAt(List<DataCompositionParameterValue> stored, int index)
     {
-        String name = item.getParameter() == null ? null : item.getParameter().getValue();
-        if (name == null)
-        {
-            return null;
-        }
-        for (DataCompositionParameterValue candidate : stored)
-        {
-            if (candidate.getParameter() != null && name.equals(candidate.getParameter().getValue()))
-            {
-                return candidate;
-            }
-        }
-        return null;
+        return index < stored.size() ? stored.get(index) : null;
     }
 
     /** A detached copy of an item without its nested values, to compare its own members only. */

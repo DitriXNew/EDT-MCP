@@ -14,7 +14,9 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
+import java.util.ArrayList;
 import java.util.LinkedHashSet;
+import java.util.List;
 
 import org.junit.Test;
 
@@ -251,6 +253,80 @@ public class DcsTemplateWriterTest
     }
 
     @Test
+    public void testACellsPatchPairsSameNamedStoredItemsByPosition() throws Exception
+    {
+        // Two same-named items in one appearance list: EDT's Template.dcs reader keeps both, so a
+        // stored cell can hold them (hand-edited XML, or the lossless XML channel).
+        DataCompositionSchema seeded = schemaWith("A");
+        DataCompositionParameterValue first = coreItem("BorderStyle");
+        first.setUse(false);
+        first.getNestedParameterValues().add(coreItem("BorderStyle.Left"));
+        SettingsParameterValue second = settingsItem("BorderStyle");
+        second.setUse(false);
+        second.setUserSettingID("second-id");
+        second.getNestedParameterValues().add(coreItem("BorderStyle.Right"));
+        cell(seeded, 0, 0).getAppearance().getItems().add(first);
+        cell(seeded, 0, 0).getAppearance().getItems().add(second);
+        DataCompositionSchema schema =
+            DcsStoredXmlTestSupport.deserialize(DcsStoredXmlTestSupport.serialize(seeded));
+        assertStoredDuplicates(cell(schema, 0, 0).getAppearance().getItems(), "BorderStyle");
+
+        success(write(schema, "update", ROOT + "#/templates/A",
+            "{\"cells\":[{\"row\":0,\"col\":0,\"appearance\":{\"VerticalAlign\":\"Top\"}}]}"));
+        List<DataCompositionParameterValue> items = cell(schema, 0, 0).getAppearance().getItems();
+        assertEquals(4, items.size());
+        assertFalse(items.get(1).eClass().getName(), items.get(1) instanceof SettingsParameterValue);
+        assertTrue(items.get(2).eClass().getName(), items.get(2) instanceof SettingsParameterValue);
+        assertEquals("second-id", ((SettingsParameterValue)items.get(2)).getUserSettingID());
+        assertEquals("BorderStyle.Right", items.get(2).getNestedParameterValues().get(0).getParameter().getValue());
+        assertEquals("VerticalAlign", items.get(3).getParameter().getValue());
+    }
+
+    @Test
+    public void testACellsPatchPairsSameNamedNestedItemsByPosition() throws Exception
+    {
+        DataCompositionSchema seeded = schemaWith("A");
+        SettingsParameterValue holder = settingsItem("BorderStyle");
+        holder.setUse(false);
+        holder.getNestedParameterValues().add(coreItem("BorderStyle.Left"));
+        SettingsParameterValue duplicate = settingsItem("BorderStyle.Left");
+        duplicate.setUserSettingID("nested-id");
+        holder.getNestedParameterValues().add(duplicate);
+        cell(seeded, 0, 0).getAppearance().getItems().add(holder);
+        DataCompositionSchema schema =
+            DcsStoredXmlTestSupport.deserialize(DcsStoredXmlTestSupport.serialize(seeded));
+        assertStoredDuplicates(cell(schema, 0, 0).getAppearance().getItems().get(1).getNestedParameterValues(),
+            "BorderStyle.Left");
+
+        success(write(schema, "update", ROOT + "#/templates/A",
+            "{\"cells\":[{\"row\":0,\"col\":0,\"appearance\":{"
+                + "\"BorderStyle.Right\":{\"kind\":\"line\",\"value\":{\"width\":2,\"style\":\"Solid\"}}}}]}"));
+        DataCompositionParameterValue kept = cell(schema, 0, 0).getAppearance().getItems().get(1);
+        assertTrue(kept.eClass().getName(), kept instanceof SettingsParameterValue);
+        List<DataCompositionParameterValue> nested = kept.getNestedParameterValues();
+        assertEquals(3, nested.size());
+        assertFalse(nested.get(0).eClass().getName(), nested.get(0) instanceof SettingsParameterValue);
+        assertTrue(nested.get(1).eClass().getName(), nested.get(1) instanceof SettingsParameterValue);
+        assertEquals("nested-id", ((SettingsParameterValue)nested.get(1)).getUserSettingID());
+        assertEquals("BorderStyle.Right", nested.get(2).getParameter().getValue());
+        assertFalse(nested.get(2).eClass().getName(), nested.get(2) instanceof SettingsParameterValue);
+    }
+
+    /** The two same-named items survived EDT's serializer and reader, the core one first. */
+    private static void assertStoredDuplicates(List<DataCompositionParameterValue> items, String name)
+    {
+        List<DataCompositionParameterValue> named = new ArrayList<>();
+        for (DataCompositionParameterValue item : items)
+        {
+            if (item.getParameter() != null && name.equals(item.getParameter().getValue())) named.add(item);
+        }
+        assertEquals(2, named.size());
+        assertFalse(named.get(0).eClass().getName(), named.get(0) instanceof SettingsParameterValue);
+        assertTrue(named.get(1).eClass().getName(), named.get(1) instanceof SettingsParameterValue);
+        assertNotNull(((SettingsParameterValue)named.get(1)).getUserSettingID());
+    }
+
+    @Test
     public void testABindingNamesItsTemplateExactlyAsEdtResolvesIt()
     {
         DataCompositionSchema schema = schemaWith("TotalRow");
@@ -413,6 +489,17 @@ public class DcsTemplateWriterTest
         binding.setGroupName(groupName);
         binding.setTemplate(template);
         return binding;
+    }
+
+    static DataCompositionParameterValue coreItem(String name)
+    {
+        DataCompositionParameterValue item = com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE
+            .createDataCompositionParameterValue();
+        DataCompositionParameter parameter =
+            com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE.createDataCompositionParameter();
+        parameter.setValue(name);
+        item.setParameter(parameter);
+        return item;
     }
 
     static SettingsParameterValue settingsItem(String name)
