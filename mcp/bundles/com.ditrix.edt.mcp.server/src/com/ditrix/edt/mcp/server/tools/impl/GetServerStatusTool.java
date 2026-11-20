@@ -9,7 +9,9 @@ package com.ditrix.edt.mcp.server.tools.impl;
 import com.ditrix.edt.mcp.server.utils.EdtVersion;
 import com.ditrix.edt.mcp.server.HostKind;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.function.BooleanSupplier;
@@ -20,14 +22,18 @@ import org.eclipse.jface.preference.IPreferenceStore;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.McpServer;
 import com.ditrix.edt.mcp.server.preferences.PreferenceConstants;
+import com.ditrix.edt.mcp.server.protocol.InFlightToolCalls;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.McpConstants;
+import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.tools.McpToolRegistry;
 import com.ditrix.edt.mcp.server.transport.HttpTransport;
 import com.ditrix.edt.mcp.server.transport.StdioPluginSupport;
 import com.ditrix.edt.mcp.server.transport.TransportStatus;
+import com.ditrix.edt.mcp.server.utils.BackgroundJobs;
+import com.ditrix.edt.mcp.server.utils.BackgroundJobs.JobSnapshot;
 import com.ditrix.edt.mcp.server.utils.CheckDescriptionLoader;
 import com.ditrix.edt.mcp.server.utils.NativeRenderModeProbe;
 import com.ditrix.edt.mcp.server.utils.NativeRenderModeProbe.NativeRenderMode;
@@ -41,7 +47,8 @@ import com.ditrix.edt.mcp.server.utils.NativeRenderModeProbe.NativeRenderMode;
  * enabled/total tool counts, the {@code plainTextMode} and {@code checksFolder}
  * preference flags, the startup modes and requested properties of the two form-render modes
  * ({@code -DnativeFormBufferedLayoutRender} / {@code -DnativeFormLayoutRender}),
- * and whether authentication is enabled.
+ * whether authentication is enabled, and what the server is busy with: the tool calls executing
+ * now ({@link InFlightToolCalls}, this call itself left out) and the running background jobs.
  * <p>
  * SECURITY: the auth token value is never emitted — only the {@code authEnabled}
  * boolean derived from whether {@link PreferenceConstants#PREF_AUTH_TOKEN} is
@@ -58,6 +65,8 @@ public class GetServerStatusTool implements IMcpTool
 {
     private final Supplier<McpServer> httpServer;
     private final BooleanSupplier ipcRunning;
+    private final Supplier<InFlightToolCalls.Report> activeCalls;
+    private final Supplier<List<JobSnapshot>> runningJobs;
 
     public GetServerStatusTool()
     {
@@ -65,8 +74,31 @@ public class GetServerStatusTool implements IMcpTool
     }
 
     GetServerStatusTool(Supplier<McpServer> httpServer, BooleanSupplier ipcRunning)
-    { this.httpServer = httpServer; this.ipcRunning = ipcRunning; }
+    {
+        // The caller's own call is left out: it is running by definition, and listing it would
+        // make every answer report one call more than the server was busy with.
+        this(httpServer, ipcRunning, () -> InFlightToolCalls.report(InFlightToolCalls.current()),
+            () -> BackgroundJobs.shared().running());
+    }
+
+    GetServerStatusTool(Supplier<McpServer> httpServer, BooleanSupplier ipcRunning,
+        Supplier<InFlightToolCalls.Report> activeCalls, Supplier<List<JobSnapshot>> runningJobs)
+    {
+        this.httpServer = httpServer;
+        this.ipcRunning = ipcRunning;
+        this.activeCalls = activeCalls;
+        this.runningJobs = runningJobs;
+    }
     public static final String NAME = "get_server_status"; //$NON-NLS-1$
+
+    /** Output key: the tool calls executing now, oldest first. */
+    static final String KEY_ACTIVE_CALLS = "activeCalls"; //$NON-NLS-1$
+
+    /** Output key: calls running but not listed because the in-flight registry was full. */
+    static final String KEY_ACTIVE_CALLS_UNTRACKED = "activeCallsUntracked"; //$NON-NLS-1$
+
+    /** Output key: the background jobs whose status is running, oldest first. */
+    static final String KEY_RUNNING_JOBS = "runningJobs"; //$NON-NLS-1$
 
     /** Form-render JVM flag: enables the offscreen buffered layout render. */
     private static final String FLAG_BUFFERED_LAYOUT_RENDER = "nativeFormBufferedLayoutRender"; //$NON-NLS-1$
@@ -86,8 +118,8 @@ public class GetServerStatusTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Diagnose the EDT MCP server and its feature configuration. Parameters and examples: " //$NON-NLS-1$
-            + "get_tool_guide('get_server_status')."; //$NON-NLS-1$
+        return "Diagnose the EDT MCP server: its configuration and the tool calls and background jobs " //$NON-NLS-1$
+            + "running right now. Parameters and examples: get_tool_guide('get_server_status')."; //$NON-NLS-1$
     }
 
     @Override
@@ -126,6 +158,13 @@ public class GetServerStatusTool implements IMcpTool
                 "atStartup is the mode when this plugin activated; requested is the current " //$NON-NLS-1$
                     + "system property. EDT binds these modes at class initialization; changing them " //$NON-NLS-1$
                     + "requires an EDT restart") //$NON-NLS-1$
+            .objectArrayProperty(KEY_ACTIVE_CALLS, "Tool calls whose EDT work is running now, oldest first, " //$NON-NLS-1$
+                + "without this call: tool, projectName (when the call passed one), startedAtMs, elapsedMs, " //$NON-NLS-1$
+                + "responseSent (only when true: the client already has an answer and the work goes on)") //$NON-NLS-1$
+            .integerProperty(KEY_ACTIVE_CALLS_UNTRACKED, "Present only when positive: calls running but not " //$NON-NLS-1$
+                + "listed in activeCalls because the in-flight registry was full when they began") //$NON-NLS-1$
+            .objectArrayProperty(KEY_RUNNING_JOBS, "Background jobs whose status is running, oldest first: " //$NON-NLS-1$
+                + "jobId, tool, startedAtMs, elapsedMs; poll one with get_job_status") //$NON-NLS-1$
             .build();
     }
 
@@ -201,6 +240,8 @@ public class GetServerStatusTool implements IMcpTool
                     System.getProperty(FLAG_BUFFERED_LAYOUT_RENDER)));
             result.put("formRenderFlags", formRenderFlags); //$NON-NLS-1$
 
+            putRunningWork(result);
+
             return result.toJson();
         }
         catch (Exception e)
@@ -208,6 +249,50 @@ public class GetServerStatusTool implements IMcpTool
             Activator.logError("Error in get_server_status", e); //$NON-NLS-1$
             return ToolResult.error(e.getMessage()).toJson();
         }
+    }
+
+    /**
+     * Adds what the server is busy with (#993). Both lists are always present: an empty array is
+     * the statement "nothing is running", which an absent key could not make. Only the tool name and
+     * the {@code projectName} argument of a call are reported - never its other arguments.
+     */
+    private void putRunningWork(ToolResult result)
+    {
+        InFlightToolCalls.Report report = activeCalls.get();
+        List<Map<String, Object>> calls = new ArrayList<>();
+        for (InFlightToolCalls.Snapshot call : report.calls())
+        {
+            Map<String, Object> entry = new LinkedHashMap<>();
+            entry.put("tool", call.tool()); //$NON-NLS-1$
+            if (call.projectName() != null)
+            {
+                entry.put(McpKeys.PROJECT_NAME, call.projectName());
+            }
+            entry.put("startedAtMs", call.startedAtMs()); //$NON-NLS-1$
+            entry.put("elapsedMs", call.elapsedMs()); //$NON-NLS-1$
+            if (call.responseSent())
+            {
+                entry.put("responseSent", true); //$NON-NLS-1$
+            }
+            calls.add(entry);
+        }
+        result.put(KEY_ACTIVE_CALLS, calls);
+        if (report.untracked() > 0)
+        {
+            result.put(KEY_ACTIVE_CALLS_UNTRACKED, report.untracked());
+        }
+
+        List<Map<String, Object>> jobs = new ArrayList<>();
+        for (JobSnapshot job : runningJobs.get())
+        {
+            Map<String, Object> entry = new LinkedHashMap<>();
+            entry.put("jobId", job.getId()); //$NON-NLS-1$
+            entry.put("tool", job.getOwningTool()); //$NON-NLS-1$
+            entry.put("startedAtMs", job.getStartedAtMs()); //$NON-NLS-1$
+            entry.put("elapsedMs", job.getElapsedMs()); //$NON-NLS-1$
+            jobs.add(entry);
+        }
+        result.put(KEY_RUNNING_JOBS, jobs);
     }
 
     /**

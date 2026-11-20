@@ -544,7 +544,7 @@ public class McpProtocolHandler
         com.ditrix.edt.mcp.server.ActiveToolCall call = server != null ? server.getExecutingToolCall() : null;
 
         // Execute the tool (timed + logged + status-bar cleared in one place).
-        String result = executeToolTimed(tool, params, server, call);
+        String result = executeToolTimed(tool, params, server, call, projectNameArgument(request));
 
         // PII redaction (#242): the single wire-serialization choke point.
         // A no-op unless redaction is enabled AND the tool is flagged returnsInfobaseData -
@@ -566,6 +566,18 @@ public class McpProtocolHandler
     }
 
     /**
+     * The call's {@code projectName} as the client sent it, for the in-flight listing - only when it
+     * is a JSON string. A tool that does not declare the parameter accepts any value under that key,
+     * and the flattened params would carry an object or array re-serialized as text.
+     */
+    private static String projectNameArgument(JsonRpcRequest request)
+    {
+        Map<String, Object> arguments = request != null ? request.getArguments() : null;
+        Object value = arguments != null ? arguments.get(McpKeys.PROJECT_NAME) : null;
+        return value instanceof String text ? text : null;
+    }
+
+    /**
      * Executes {@code tool} while timing the call, clearing the status-bar tool name in a
      * {@code finally}, and emitting exactly one completion log line (plus, on failure, the
      * extracted error message at WARNING). Extracted verbatim from {@link #handleToolCall} so
@@ -576,11 +588,14 @@ public class McpProtocolHandler
      * @param tool the resolved tool to run
      * @param params the extracted tool params
      * @param server the MCP server (may be {@code null} during a shutdown race)
+     * @param call the transport invocation bound to this thread, or {@code null}
+     * @param projectName the call's string {@code projectName} argument for the in-flight listing, or
+     *            {@code null}
      * @return the raw tool result payload (may be {@code null} only if {@code execute} returned
      *         {@code null})
      */
     private String executeToolTimed(IMcpTool tool, Map<String, String> params, McpServer server,
-        com.ditrix.edt.mcp.server.ActiveToolCall call)
+        com.ditrix.edt.mcp.server.ActiveToolCall call, String projectName)
     {
         String result = null;
         long startNanos = System.nanoTime();
@@ -610,15 +625,25 @@ public class McpProtocolHandler
         }
         HeadlessLifetime lifetime = Activator.getDefault() == null
             ? null : Activator.getDefault().getHeadlessLifetime();
+        // Listed by get_server_status while the tool runs (#993). Registered only once the headless
+        // lease is granted - a call refused here never ran - and removed first in the finally, so
+        // every exit after it - a result, a throw, an interruption - removes it; begin() cannot
+        // throw, so it can never disturb the call.
+        InFlightToolCalls.Handle inFlight = null;
         try (var lease = lifetime == null ? null : lifetime.tool())
         {
             if (lifetime != null && lease == null) { return ToolResult.error("Headless EDT is shutting down; reconnect and retry a read.").toJson(); }
+            inFlight = InFlightToolCalls.begin(tool.getName(), projectName, call);
             result = tool.execute(params);
             threw = false;
             return result;
         }
         finally
         {
+            if (inFlight != null)
+            {
+                inFlight.close();
+            }
             if (connectsToInfobase)
             {
                 InfobaseAuthDialogSuppressor.markActivityEnd();

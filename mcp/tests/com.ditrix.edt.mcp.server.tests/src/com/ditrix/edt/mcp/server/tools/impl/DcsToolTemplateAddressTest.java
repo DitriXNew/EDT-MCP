@@ -16,95 +16,122 @@ import java.util.Map;
 import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.utils.DcsAddress;
-import com.ditrix.edt.mcp.server.utils.DcsTemplateProjection;
+import com.ditrix.edt.mcp.server.utils.DcsTemplateWriter;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
 /**
- * #662 exposes template and grouping-binding addresses to reads only. A typed write at one of them
- * is refused before any model work, with the lossless XML channel as the way to change them.
+ * #662: typed writes at template and grouping-binding addresses pass the tool's shape check (they
+ * are planned by the template writer); what cannot be written is refused there, before any model
+ * work - field/resource templates, addresses inside a node, collection-level update/replace/remove,
+ * insertPosition, another type, and a cells patch without the observed hash.
  */
 public class DcsToolTemplateAddressTest
 {
     @Test
-    public void testEveryTypedWriteAtATemplateAddressIsRefusedWithTheXmlRoute()
+    public void testTypedWritesAtTemplateAddressesPassTheShapeCheck()
     {
         String[][] cases = {
             {"remove", "Report.Sales#/templates/TotalRow", null},
             {"update", "Report.Sales#/templates/TotalRow", "{\"name\":\"Other\"}"},
-            {"replace", "Report.Sales#/groupTemplates/0", "{\"templateType\":\"Footer\"}"},
-            {"upsert", "Report.Sales#/groupHeaderTemplates", "{\"groupName\":\"Totals\"}"},
+            {"replace", "Report.Sales#/groupTemplates/0", "{\"groupName\":\"G\",\"template\":\"T\"}"},
+            {"upsert", "Report.Sales#/groupHeaderTemplates", "{\"groupName\":\"Totals\",\"template\":\"T\"}"},
+            {"upsert", "Report.Sales#/templates", "{\"name\":\"T\",\"rows\":[]}"},
         };
         for (String[] item : cases)
         {
-            Map<String, String> params = new HashMap<>();
-            params.put("projectName", "AnyProject"); //$NON-NLS-1$ //$NON-NLS-2$
-            params.put("fqn", item[1]); //$NON-NLS-1$
-            params.put("action", item[0]); //$NON-NLS-1$
-            params.put("type", "schema"); //$NON-NLS-1$ //$NON-NLS-2$
-            params.put("expectedHash", "00000000000000000000"); //$NON-NLS-1$ //$NON-NLS-2$
-            if (item[2] != null) params.put("body", item[2]); //$NON-NLS-1$
-
-            JsonObject result = JsonParser.parseString(new DcsTool().execute(params)).getAsJsonObject();
-
-            assertFalse(item[0], result.get("success").getAsBoolean()); //$NON-NLS-1$
-            String error = result.get("error").getAsString(); //$NON-NLS-1$
-            assertTrue(error, error.contains("Template address '" + item[1] + "' is read-only")); //$NON-NLS-1$ //$NON-NLS-2$
-            assertTrue(error, error.contains("action='" + item[0] + "' was not run")); //$NON-NLS-1$ //$NON-NLS-2$
-            assertTrue(error, error.contains("format='xml' on 'Report.Sales'")); //$NON-NLS-1$
-            assertTrue(error, error.contains("action='replace', type='schema', body={xml:...}")); //$NON-NLS-1$
+            // limit is checked right after the template shape check and before any model or
+            // display work, so its refusal proves the template check let the write through.
+            Map<String, String> params = params(item[0], item[1], "schema", item[2], true); //$NON-NLS-1$
+            params.put("limit", "1"); //$NON-NLS-1$ //$NON-NLS-2$
+            String error = error(params);
+            assertTrue(item[1] + ": " + error, error.startsWith("limit/offset apply only")); //$NON-NLS-1$
         }
     }
 
     @Test
-    public void testOnlySchemaRootsAreGuardedOtherRootsKeepTheirOwnValidation()
+    public void testWhatTheTypedApiDoesNotWriteIsRefusedBeforeModelWork()
     {
-        // No expectedHash: a guarded schema root answers with the template refusal, every other
-        // root keeps the validation it had before the guard (here, the missing-hash error).
+        assertContains(error("remove", "Report.Sales#/fieldTemplates/0", "schema", null, true),
+            "field and resource templates are not authorable");
+        assertContains(error("update", "Report.Sales#/totalFieldsTemplates/0", "schema", "{}", true),
+            "action='replace', type='schema', body={xml:...}");
+        assertContains(error("update", "Report.Sales#/templates/T/template/items/0", "schema", "{}", true),
+            "points inside a template node");
+        assertContains(error("update", "Report.Sales#/templates/T/template/items/0", "schema", "{}", true),
+            "Report.Sales#/templates/T");
+        assertContains(error("update", "Report.Sales#/templates", "schema", "{\"name\":\"T\"}", true),
+            "action='upsert' at the collection");
+        assertContains(error("replace", "Report.Sales#/groupTemplates", "schema", "{}", true),
+            "groupTemplates:[...]");
+        assertContains(error("update", "Report.Sales#/templates/T", "dataSet", "{}", true),
+            "type='schema'");
+        assertContains(error("upsert", "Report.Sales#/templates", "schema",
+            "{\"name\":\"T\",\"insertPosition\":0}", true), "insertPosition is not accepted");
+    }
+
+    @Test
+    public void testACellsPatchNeedsTheObservedHash()
+    {
+        String cells = "{\"cells\":[{\"row\":0,\"col\":0,\"text\":\"x\"}]}";
+        assertContains(error("update", "Report.Sales#/templates/T", "schema", cells, false), "expectedHash is required");
+        assertContains(error("update", "Report.Sales#/templates/T", "schema", cells, false), "body.cells");
+        assertContains(error("upsert", "Report.Sales", "schema",
+            "{\"templates\":[{\"name\":\"T\",\"cells\":[]}]}", false), "expectedHash is required");
+        assertFalse(DcsTemplateWriter.requiresHash(DcsAddress.parse("Report.Sales#/templates/T").address(), //$NON-NLS-1$
+            JsonParser.parseString("{\"rows\":[]}").getAsJsonObject())); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testOnlySchemaRootsAreTemplateAddresses()
+    {
         String[][] cases = {
-            {"Report.Sales#/templates/TotalRow", "schema", "read-only"},
-            {"CommonTemplate.Analytics#/templates/TotalRow", "schema", "read-only"},
-            {"Report.Sales.Template.CustomDcs#/groupTemplates/0", "schema", "read-only"},
-            {"Catalog.Products.Form.ListForm#/templates/TotalRow", "conditionalAppearance", null},
-            {"Catalog.Products.Form.ListForm.Attribute.List#/templates/TotalRow", "dynamicList", null},
-            {"Catalog.Products#/templates/TotalRow", "schema", null},
+            {"Catalog.Products.Form.ListForm#/fieldTemplates/0", "conditionalAppearance"},
+            {"Catalog.Products.Form.ListForm.Attribute.List#/templates/TotalRow", "dynamicList"},
+            {"Catalog.Products#/fieldTemplates/0", "schema"},
         };
         for (String[] item : cases)
         {
-            Map<String, String> params = new HashMap<>();
-            params.put("projectName", "AnyProject"); //$NON-NLS-1$ //$NON-NLS-2$
-            params.put("fqn", item[0]); //$NON-NLS-1$
-            params.put("action", "remove"); //$NON-NLS-1$ //$NON-NLS-2$
-            params.put("type", item[1]); //$NON-NLS-1$
-
-            String error = JsonParser.parseString(new DcsTool().execute(params)).getAsJsonObject()
-                .get("error").getAsString(); //$NON-NLS-1$
-
-            if (item[2] != null)
-            {
-                assertTrue(item[0] + ": " + error, error.contains("Template address '" + item[0] //$NON-NLS-1$
-                    + "' is " + item[2])); //$NON-NLS-1$
-            }
-            else
-            {
-                assertFalse(item[0] + ": " + error, error.contains("Template address")); //$NON-NLS-1$
-                assertTrue(item[0] + ": " + error, error.contains("expectedHash is required")); //$NON-NLS-1$
-            }
+            String error = error("remove", item[0], item[1], null, false);
+            assertFalse(item[0] + ": " + error, error.contains("not authorable")); //$NON-NLS-1$
+            assertTrue(item[0] + ": " + error, error.contains("expectedHash is required")); //$NON-NLS-1$
         }
-        assertNull(DcsTemplateProjection.writeRefusal("remove", //$NON-NLS-1$
-            DcsAddress.parse("Catalog.Products.Form.ListForm#/templates/X").address())); //$NON-NLS-1$
+        assertNull(DcsTemplateWriter.shapeRefusal("update", "schema", //$NON-NLS-1$ //$NON-NLS-2$
+            DcsAddress.parse("Report.Sales#/dataSetLinks/0").address(), null)); //$NON-NLS-1$
+        assertNull(DcsTemplateWriter.shapeRefusal("update", "schema", //$NON-NLS-1$ //$NON-NLS-2$
+            DcsAddress.parse("Report.Sales#/parameters/templates").address(), null)); //$NON-NLS-1$
     }
 
-    @Test
-    public void testOnlyTemplateCollectionsAreGuarded()
+    /**
+     * Every case here is refused before the tool reaches the display: a call that passed every
+     * check would create an SWT display on the test thread and leak it into later tests.
+     */
+    private static String error(String action, String fqn, String type, String body, boolean hash)
     {
-        assertNull(DcsTemplateProjection.writeRefusal("update", //$NON-NLS-1$
-            DcsAddress.parse("Report.Sales#/dataSetLinks/0").address())); //$NON-NLS-1$
-        assertNull(DcsTemplateProjection.writeRefusal("upsert", //$NON-NLS-1$
-            DcsAddress.parse("Report.Sales").address())); //$NON-NLS-1$
-        assertNull(DcsTemplateProjection.writeRefusal("update", //$NON-NLS-1$
-            DcsAddress.parse("Report.Sales#/parameters/templates").address())); //$NON-NLS-1$
-        assertTrue(DcsTemplateProjection.writeRefusal("remove", //$NON-NLS-1$
-            DcsAddress.parse("Report.Sales#/groupTemplates/0/groupFields").address()) != null); //$NON-NLS-1$
+        return error(params(action, fqn, type, body, hash));
+    }
+
+    private static Map<String, String> params(String action, String fqn, String type, String body, boolean hash)
+    {
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "AnyProject"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("fqn", fqn); //$NON-NLS-1$
+        params.put("action", action); //$NON-NLS-1$
+        params.put("type", type); //$NON-NLS-1$
+        if (hash) params.put("expectedHash", "00000000000000000000"); //$NON-NLS-1$ //$NON-NLS-2$
+        if (body != null) params.put("body", body); //$NON-NLS-1$
+        return params;
+    }
+
+    private static String error(Map<String, String> params)
+    {
+        JsonObject result = JsonParser.parseString(new DcsTool().execute(params)).getAsJsonObject();
+        assertFalse(params.get("fqn"), result.get("success").getAsBoolean()); //$NON-NLS-1$ //$NON-NLS-2$
+        return result.get("error").getAsString(); //$NON-NLS-1$
+    }
+
+    private static void assertContains(String text, String expected)
+    {
+        assertTrue("expected <" + expected + "> in: " + text, text.contains(expected)); //$NON-NLS-1$ //$NON-NLS-2$
     }
 }
