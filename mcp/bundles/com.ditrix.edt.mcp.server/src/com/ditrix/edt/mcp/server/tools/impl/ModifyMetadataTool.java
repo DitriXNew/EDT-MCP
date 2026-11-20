@@ -51,10 +51,10 @@ import com._1c.g5.v8.dt.mcore.StringValue;
 import com._1c.g5.v8.dt.mcore.TypeDescription;
 import com._1c.g5.v8.dt.mcore.Value;
 import com._1c.g5.v8.dt.metadata.mdclass.AdjustableBoolean;
+import com._1c.g5.v8.dt.metadata.mdclass.BasicForm;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicTemplate;
 import com._1c.g5.v8.dt.metadata.mdclass.Catalog;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonAttribute;
-import com._1c.g5.v8.dt.metadata.mdclass.CommonForm;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonPicture;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.Document;
@@ -116,6 +116,7 @@ import com.ditrix.edt.mcp.server.utils.MetadataMemberValues;
 import com.ditrix.edt.mcp.server.utils.FormChoiceParameters;
 import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector.PropertyInfo;
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
+import com.ditrix.edt.mcp.server.utils.OwnedFormMetadata;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeBuilder;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.ReferencedTopObjects;
@@ -159,6 +160,11 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     private static final String COMMON_FORM_MDCLASS_DISCOVERY_HINT =
         "The common form's own metadata properties are listed by get_metadata_details with " //$NON-NLS-1$
             + "assignable:true on the same FQN."; //$NON-NLS-1$
+
+    /** The same guidance for an owned form, whose metadata object sits in its owner (issue #995). */
+    static final String OWNED_FORM_MDCLASS_DISCOVERY_HINT =
+        "The form's own metadata properties (synonym, comment, usePurposes, ...) are listed by " //$NON-NLS-1$
+            + "get_metadata_details with assignable:true on the same FQN."; //$NON-NLS-1$
 
     /**
      * Asks the destructive-consent gate. A package-private SEAM: the production default delegates to
@@ -426,9 +432,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 "Full-name FQN of the node to modify (required), e.g. 'Catalog.Products' or " //$NON-NLS-1$
                 + "'Catalog.Products.Attribute.Weight'; a managed-form root is " //$NON-NLS-1$
                 + "'Catalog.Products.Form.ItemForm' or 'CommonForm.Main'; the configuration root is " //$NON-NLS-1$
-                + "'Configuration'. On CommonForm.Main, any " //$NON-NLS-1$
-                + "mdclass-assignable property keeps the whole call on the mdclass surface; only " //$NON-NLS-1$
-                + "an all-root-only batch falls back to the content root. Type / kind tokens may " //$NON-NLS-1$
+                + "'Configuration'. On a form FQN ('Catalog.Products.Form.ItemForm', " //$NON-NLS-1$
+                + "'CommonForm.Main'), any property of the form's metadata object keeps the whole call " //$NON-NLS-1$
+                + "on its .mdo; only an all-content batch goes to the content root. Type / kind tokens may " //$NON-NLS-1$
                 + "be English or Russian; the Name parts are the programmatic Name.", true) //$NON-NLS-1$
             .property("properties", //$NON-NLS-1$
                 "Properties to set, as [{name, value, language?}], e.g. {name: 'synonym', value: " //$NON-NLS-1$
@@ -633,22 +639,36 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             return dispatchFormMemberFqn(ctx, normFqn, formRef, args);
         }
 
-        // A four-part OWNED-form FQN addresses only the FORM MODEL ROOT (the form:Form object
-        // serialized in Form.form): no mdclass node exists at that address, so it always takes the
-        // early root branch. A two-part CommonForm.Name is also a real mdclass top object and is
+        // A four-part OWNED-form FQN names two objects (issue #995): the form's metadata object (a
+        // BasicForm in the owner's forms, written to the owner's .mdo) and its content root (the
+        // form:Form object serialized in Form.form). The call is routed by its property names, the
+        // rule CommonForm.Name follows below; the owned form is resolved here because the generic
+        // resolver's grammar has no form step. A two-part CommonForm.Name is a top object and is
         // deliberately deferred until after mdclass resolution below.
         String formRootPath = FormElementWriter.parseFormPath(normFqn);
         if (shouldDispatchFormRoot(formRootPath, null, args.properties))
         {
-            boolean exists = HostKind.current() == HostKind.HEADLESS
-                ? readPreparation(ctx.project, () -> FormStructureReader.resolveMdForm(preparationScope(ctx),
-                    FormElementWriter.parseFormPath(MetadataTypeUtils.normalizeFqn(args.fqn))) != null)
-                : resolveFormRootForDispatch(ctx.scope, normFqn) != null;
-            if (!exists)
+            boolean headless = HostKind.current() == HostKind.HEADLESS;
+            String formFqn = normFqn;
+            String formPath = formRootPath;
+            FormRoute route = readPreparation(ctx.project, () -> routeOwnedForm(preparationScope(ctx),
+                formPath, formFqn, args.properties,
+                args.hasRolePayload || args.hasContentPayload || args.hasTemplatePayload));
+            if (route.node == null)
             {
                 return formRootNotFoundError(formRootPath);
             }
-            return dispatchFormRootFqn(ctx, normFqn, formRootPath, args, false);
+            if (route.contentRoot)
+            {
+                return dispatchFormRootFqn(ctx, normFqn, formRootPath, args, OWNED_FORM_MDCLASS_DISCOVERY_HINT);
+            }
+            if (route.refusal != null)
+            {
+                return route.refusal;
+            }
+            // Headless, the node is resolved again inside the write preparation (it must not leave a read).
+            return applyGenericPropertyChanges(ctx, args.projectName, normFqn, headless ? null : route.node,
+                args.properties, args.normReport);
         }
 
         // A FQN addressing a PREDEFINED item (Catalog/ChartOfCharacteristicTypes.Name.Predefined.Item)
@@ -701,7 +721,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         formRootPath = FormElementWriter.parseFormPath(normFqn);
         if (shouldDispatchFormRoot(formRootPath, target, args.properties))
         {
-            return dispatchFormRootFqn(ctx, normFqn, formRootPath, args, true);
+            return dispatchFormRootFqn(ctx, normFqn, formRootPath, args, COMMON_FORM_MDCLASS_DISCOVERY_HINT);
         }
 
         // The payload surfaces (template / role / membership content) are dispatched by the
@@ -710,6 +730,12 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         if (payloadResult != null)
         {
             return payloadResult;
+        }
+        // A common form's batch that also names properties its metadata object does not have.
+        String mixedForm = mixedFormLayersRefusal(normFqn, target, args.properties);
+        if (mixedForm != null)
+        {
+            return mixedForm;
         }
 
         // The remaining case: a generic 'properties' change applied through the BM write boundary.
@@ -729,7 +755,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         MdObject target = resolved.node.object;
         String formPath = FormElementWriter.parseFormPath(fqn);
         if (shouldDispatchFormRoot(formPath, target, args.properties))
-            return () -> dispatchFormRootFqn(handle, fqn, formPath, args, true);
+            return () -> dispatchFormRootFqn(handle, fqn, formPath, args, COMMON_FORM_MDCLASS_DISCOVERY_HINT);
         if (args.hasTemplatePayload)
         {
             if (!(target instanceof BasicTemplate))
@@ -768,6 +794,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             String refusal = dispatchContentPayload(ctx, fqn, target, args.properties, args.content);
             return () -> refusal;
         }
+        String mixedForm = mixedFormLayersRefusal(fqn, target, args.properties);
+        if (mixedForm != null) return () -> mixedForm;
         return () -> applyGenericPropertyChanges(handle, args.projectName, fqn, null,
             args.properties, args.normReport);
     }
@@ -917,10 +945,11 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * Dispatches an EXISTING managed-form MODEL ROOT. Unlike a form member, the root has no
      * structural side channels (handler/button rebind, move/reorder, dynamic-list query), so the
      * only accepted payload is the ordinary {@code properties} list and it routes directly to the
-     * shared form-property apply loop.
+     * shared form-property apply loop. {@code nonAssignableHint} names the form's metadata object in
+     * the refusal of a property the content root does not have either.
      */
     private String dispatchFormRootFqn(ProjectContext ctx, String normFqn, String formRootPath,
-        ModifyArgs args, boolean commonFormFallback)
+        ModifyArgs args, String nonAssignableHint)
     {
         if (args.hasRolePayload || args.hasContentPayload || args.hasTemplatePayload)
         {
@@ -931,7 +960,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 + "to the form model root.").toJson(); //$NON-NLS-1$
         }
         return modifyFormRoot(ctx, normFqn, formRootPath, args.properties, args.normReport,
-            commonFormFallback);
+            nonAssignableHint);
     }
 
     /**
@@ -959,11 +988,13 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
-     * Decides whether a parsed form address belongs to the content-root write path. Four-part owned
-     * forms always do. A two-part common form does only after it resolved as a {@link CommonForm} and
-     * none of the requested property names is assignable on that mdclass object. The latter check is
-     * deliberately the same lightweight introspector lookup used by generic write preparation.
-     * Package-visible for the headless dispatch test.
+     * Decides whether a parsed form address belongs to the content-root write path. Before the form is
+     * resolved ({@code resolvedTarget == null}) a four-part owned-form address is taken by the form
+     * branch (which resolves it, and reports a missing form with its owner) and a common form waits for
+     * the mdclass resolution. A resolved form - owned or common, any {@link BasicForm} - goes to the
+     * content root only when none of the requested property names is assignable on its metadata object
+     * (issue #995); the check is the same lightweight introspector lookup generic write preparation
+     * uses. Package-visible for the headless dispatch test.
      */
     static boolean shouldDispatchFormRoot(String formRootPath, MdObject resolvedTarget,
         List<JsonObject> properties)
@@ -972,11 +1003,11 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         {
             return false;
         }
-        if (FormElementWriter.parseFormObjectCreate(formRootPath) != null)
+        if (resolvedTarget == null)
         {
-            return true;
+            return FormElementWriter.parseFormObjectCreate(formRootPath) != null;
         }
-        if (!(resolvedTarget instanceof CommonForm))
+        if (!(resolvedTarget instanceof BasicForm))
         {
             return false;
         }
@@ -989,6 +1020,115 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             }
         }
         return true;
+    }
+
+    /**
+     * Where a call on an owned-form address goes (built by {@link #routeOwnedForm}): {@link #node} is
+     * the form's metadata object ({@code null} when the form does not exist); {@link #contentRoot} sends
+     * the call to {@code Form.form}; {@link #refusal} is the mixed-batch refusal; otherwise the call
+     * writes the metadata object.
+     */
+    static final class FormRoute
+    {
+        final MetadataNodeResolver.MetadataNode node;
+        final boolean contentRoot;
+        final String refusal;
+
+        private FormRoute(MetadataNodeResolver.MetadataNode node, boolean contentRoot, String refusal)
+        {
+            this.node = node;
+            this.contentRoot = contentRoot;
+            this.refusal = refusal;
+        }
+    }
+
+    /**
+     * Routes a call on an owned-form address {@code Type.Object.Form.F} by its property names (issue
+     * #995). The address names two objects: the form's metadata object (a {@code BasicForm} in the
+     * owner's {@code forms}) and its content root (in {@code Form.form}); their properties share no
+     * name. A call with a payload, or with no property of the metadata object, keeps the content-root
+     * path it has always had - byte for byte, payload refusals included. Package-visible for tests.
+     *
+     * @param scope the resolution root
+     * @param formRootPath the parsed form path ({@code FormElementWriter.parseFormPath})
+     * @param fqn the address as normalized, for the refusal text
+     * @param properties the requested properties
+     * @param payload whether a role / content / template payload accompanies the call
+     * @return the route, never {@code null}
+     */
+    static FormRoute routeOwnedForm(MetadataScope scope, String formRootPath, String fqn,
+        List<JsonObject> properties, boolean payload)
+    {
+        MetadataNodeResolver.MetadataNode node = MetadataNodeResolver.formNode(scope, formRootPath);
+        if (node == null)
+        {
+            return new FormRoute(null, false, null);
+        }
+        if (payload || shouldDispatchFormRoot(formRootPath, node.object, properties))
+        {
+            return new FormRoute(node, true, null);
+        }
+        String refusal = mixedFormLayersRefusal(fqn, node.object, properties);
+        return new FormRoute(node, false, refusal != null ? refusal : formTypeRefusal(fqn, properties));
+    }
+
+    /**
+     * Refuses a {@code formType} write on an owned form (issue #995): the enum alone would say Managed or
+     * Ordinary while the form's content in {@code Form.form} stays of the kind it was created with, and
+     * nothing here converts it. {@code null} when the batch does not name {@code formType}. The rule is
+     * {@link OwnedFormMetadata#isSettable}, which get_metadata_details' assignable table follows too.
+     */
+    static String formTypeRefusal(String fqn, List<JsonObject> properties)
+    {
+        for (JsonObject property : properties)
+        {
+            if (!OwnedFormMetadata.isSettable(asString(property.get("name")))) //$NON-NLS-1$
+            {
+                return ToolResult.error("'" + MetadataTypeUtils.toCanonicalEnglishFqn(fqn) //$NON-NLS-1$
+                    + "': formType of an existing form is not changed: the form's content in Form.form " //$NON-NLS-1$
+                    + "stays of the kind it was created with, and setting the property would not convert " //$NON-NLS-1$
+                    + "it. The other properties of the form's metadata object (synonym, comment, " //$NON-NLS-1$
+                    + "usePurposes, ...) are set as usual." + NOTHING_CHANGED).toJson(); //$NON-NLS-1$
+            }
+        }
+        return null;
+    }
+
+    /**
+     * The refusal of a form batch that names properties of the form's metadata object AND properties
+     * that object does not have (content-root properties, or misspelt ones): one call writes one of the
+     * two, so the whole batch is refused before anything is written, naming the split (issue #995).
+     * {@code null} for a target that is no form, or a batch that is not mixed; entries without a name are
+     * left to the ordinary validation. Package-visible for tests.
+     */
+    static String mixedFormLayersRefusal(String fqn, MdObject target, List<JsonObject> properties)
+    {
+        if (!(target instanceof BasicForm))
+        {
+            return null;
+        }
+        List<String> metadata = new ArrayList<>();
+        List<String> other = new ArrayList<>();
+        for (JsonObject property : properties)
+        {
+            String name = asString(property.get("name")); //$NON-NLS-1$
+            if (name == null || name.isEmpty())
+            {
+                continue;
+            }
+            (MetadataPropertyIntrospector.findFeature(target, name) != null ? metadata : other).add(name);
+        }
+        if (metadata.isEmpty() || other.isEmpty())
+        {
+            return null;
+        }
+        return ToolResult.error("'" + MetadataTypeUtils.toCanonicalEnglishFqn(fqn) //$NON-NLS-1$
+            + "' is both the form's metadata object and its content root " //$NON-NLS-1$
+            + "(Form.form), and one call writes only one of them. Properties of the metadata object: " //$NON-NLS-1$
+            + String.join(", ", metadata) + "; not properties of it: " + String.join(", ", other) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + ". Send content-root properties (title, autoTitle, ...) in a separate call on the same FQN, " //$NON-NLS-1$
+            + "and check the spelling of a name that is neither; get_metadata_details with assignable:true " //$NON-NLS-1$
+            + "lists both." + NOTHING_CHANGED).toJson(); //$NON-NLS-1$
     }
 
     private static String formRootNotFoundMessage(String formPath)
@@ -2760,6 +2900,11 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         {
             return root.node;
         }
+        // An owned form's metadata object, which the child grammar below has no step to (issue #995).
+        if (FormElementWriter.parseFormObjectCreate(fqn) != null)
+        {
+            return MetadataNodeResolver.formNode(scope, FormElementWriter.parseFormPath(fqn));
+        }
         // The address resolveModifyTarget handed on: a nested subsystem's canonical chain (issue #897).
         return SubsystemUtils.nestedChain(fqn) != null
             ? MetadataNodeResolver.resolveNestedSubsystem(scope, fqn, false).node
@@ -4328,7 +4473,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * one-transaction apply, normalization and content-form export as an ordinary form member.
      */
     private String modifyFormRoot(ProjectContext ctx, String normFqn, String formRootPath,
-        List<JsonObject> properties, MdNameNormalizer.Report normReport, boolean commonFormFallback)
+        List<JsonObject> properties, MdNameNormalizer.Report normReport, String nonAssignableHint)
     {
         try
         {
@@ -4336,8 +4481,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 ctx.scope, formRootPath, formRootNotFoundMessage(formRootPath));
             Version version = platformVersionOf(ctx);
             return applyFormProperties(ctx, normFqn, properties, normReport, fctx, version,
-                "ModifyFormRoot", formModel -> formModel, commonFormFallback //$NON-NLS-1$
-                    ? COMMON_FORM_MDCLASS_DISCOVERY_HINT : null);
+                "ModifyFormRoot", formModel -> formModel, nonAssignableHint); //$NON-NLS-1$
         }
         catch (Exception e)
         {
