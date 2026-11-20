@@ -184,6 +184,15 @@ public class DcsTool implements IMcpTool
     @Override
     public String execute(Map<String, String> params)
     {
+        String result = executeCall(params);
+        // Any refused chunked-upload call ends its upload, including a refusal returned before the
+        // chunk reached the staging (bad action, type, fqn, format, language or limit/offset).
+        DcsXmlChunkUpload.SHARED.discardIfRefused(JsonUtils.extractStringArgument(params, KEY_BODY), result);
+        return result;
+    }
+
+    private String executeCall(Map<String, String> params)
+    {
         // Keep all ten reads explicit: SchemaExecuteParamParityTest checks both directions.
         String projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
         String rawFqn = JsonUtils.extractStringArgument(params, KEY_FQN);

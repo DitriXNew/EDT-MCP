@@ -109,30 +109,33 @@ destination's current hash, then replace it:
 ```
 
 `body.xml` takes the WHOLE document and must never receive an individual page. To send a large
-document in parts, replace `xml` with `xmlChunk` plus `offset`, `totalChars` and a client-chosen
-`uploadId` (1-64 of `A-Za-z0-9._-`), repeating the same `expectedHash` on every call:
+document in parts, replace `xml` with `xmlChunk` plus `offset` and `totalChars`, repeating the same
+`expectedHash` on every call. The first chunk carries no `uploadId`; its answer returns the
+server-issued `Upload id`, which every later chunk must send:
 
 ```text
-total = len(xml); offset = 0; id = "sales-1"   # lengths/offsets count UTF-16 chars, as get does
+total = len(xml); offset = 0; id = null   # lengths/offsets count UTF-16 chars, as get does
 while offset < total:
   part = xml[offset : offset + 40000]
-  r = dcs(replace schema, expectedHash=hash,
-          body={xmlChunk: part, offset: offset, totalChars: total, uploadId: id})
-  require r is not an error          # any refusal discards the upload: restart at offset 0
+  body = {xmlChunk: part, offset: offset, totalChars: total}
+  if id: body.uploadId = id
+  r = dcs(replace schema, expectedHash=hash, body=body)
+  require r is not an error   # any refusal discards the upload: start again at offset 0, no uploadId
+  if offset == 0 and r is staged: id = r."Upload id"
   offset += len(part)
 # the chunk that reaches totalChars returns the normal replace result
 ```
 
 Nothing is written until the chunk that brings the received length to `totalChars`; that call
 runs exactly the whole-document `body.xml` replace below and returns its result. Earlier chunks
-answer `chunk staged, not written` with `Received` and `Next offset`. The first chunk is checked
-against the current hash; every chunk must keep the same `projectName`, `fqn`, `expectedHash`,
-`totalChars` and `uploadId` and start at the received length, else the upload is discarded. An
-`offset:0` chunk restarts its `uploadId`. A finished, refused or expired upload cannot continue:
-re-sending its last chunk is refused, so after a lost final answer re-read with `get` (a changed
-hash means the replace was applied). Limits: 4194304 characters per document, 4 uploads at a
-time, 10 idle minutes. `xmlChunk` is refused together with `xml` or other body members.
-
+answer `chunk staged, not written` with `Upload id`, `Received` and `Next offset`. The first chunk
+is checked against the current hash; every chunk must keep the same `projectName`, `fqn`,
+`expectedHash` and `totalChars` and start at the received length, else the upload is discarded. An
+`offset:0` chunk with its `uploadId` restarts that upload. An id that is not in progress (finished,
+refused, expired, or never issued) is refused at any offset, so after a lost final answer re-read
+with `get` (a changed hash means the replace was applied). Limits: 4194304 characters per
+document, 4 uploads at a time, 10 idle minutes. `xmlChunk` is refused together with `xml` or other
+body members.
 `body.xml` is mutually exclusive with every structured
 schema member, is accepted only for `replace` + `schema` at a bare root, and still requires
 `expectedHash`. The XML is deserialized before the write; malformed or truncated XML is

@@ -14,7 +14,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
+import java.util.UUID;
 import java.util.function.LongSupplier;
+import java.util.function.Supplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -37,6 +39,12 @@ import com.google.gson.JsonParser;
  * same consent, preset and write barrier). Staging ends on that commit hand-off, on any refused
  * chunk, and on expiry; an upload is never resumed after it ended.
  *
+ * <p>The {@code uploadId} is issued HERE on the first chunk (a random UUID) and is the only key to an
+ * upload: every later chunk, and an offset-0 restart, must carry it, and an id that is not active is
+ * refused. Two callers therefore cannot reach one staging by choosing the same id - with a
+ * caller-chosen id, a second caller's restart silently replaced the first caller's prefix and the
+ * first caller's suffix completed a mixed document.
+ *
  * <p>Offsets and lengths are Java {@code char}s (UTF-16 code units), the unit of the paged get.
  * A chunk boundary inside a surrogate pair is harmless: the document is assembled by plain
  * concatenation, so the two halves are adjacent again before anything parses the XML.
@@ -49,7 +57,7 @@ public final class DcsXmlChunkUpload
     public static final String KEY_OFFSET = "offset"; //$NON-NLS-1$
     /** Character length of the whole document; reaching it commits. */
     public static final String KEY_TOTAL_CHARS = "totalChars"; //$NON-NLS-1$
-    /** Caller-chosen id that ties the chunks of one document together. */
+    /** Server-issued id that ties the chunks of one document together; omitted on a new first chunk. */
     public static final String KEY_UPLOAD_ID = "uploadId"; //$NON-NLS-1$
 
     private static final String KEY_XML = "xml"; //$NON-NLS-1$
@@ -71,10 +79,10 @@ public final class DcsXmlChunkUpload
     public static final long IDLE_EXPIRY_MINUTES = 10;
 
     private static final long IDLE_EXPIRY_NANOS = TimeUnit.MINUTES.toNanos(IDLE_EXPIRY_MINUTES);
-    private static final Pattern UPLOAD_ID = Pattern.compile("[A-Za-z0-9._-]{1,64}"); //$NON-NLS-1$
     private static final Pattern HASH = Pattern.compile("[0-9a-f]{20}"); //$NON-NLS-1$
     private static final Pattern HASH_HEADER = Pattern.compile("\\A\\*\\*Hash:\\*\\* `([0-9a-f]{20})`"); //$NON-NLS-1$
     private static final int MAX_ECHO_CHARS = 80;
+    private static final String RESTART = "Start again at body.offset=0 without uploadId."; //$NON-NLS-1$
     private static final Set<String> CHUNK_MEMBERS =
         Set.of(KEY_CHUNK, KEY_OFFSET, KEY_TOTAL_CHARS, KEY_UPLOAD_ID);
 
@@ -82,12 +90,23 @@ public final class DcsXmlChunkUpload
     public static final DcsXmlChunkUpload SHARED = new DcsXmlChunkUpload(System::nanoTime);
 
     private final LongSupplier clock;
+    private final Supplier<String> ids;
     private final Map<String, Staging> uploads = new LinkedHashMap<>();
 
     /** @param clock monotonic nanoseconds; tests drive expiry through it */
     public DcsXmlChunkUpload(LongSupplier clock)
     {
+        this(clock, () -> UUID.randomUUID().toString());
+    }
+
+    /**
+     * @param clock monotonic nanoseconds
+     * @param ids issues a new, unguessable uploadId
+     */
+    DcsXmlChunkUpload(LongSupplier clock, Supplier<String> ids)
+    {
         this.clock = clock;
+        this.ids = ids;
     }
 
     /**
@@ -252,9 +271,7 @@ public final class DcsXmlChunkUpload
      */
     public Step accept(Request request, HashProbe probe)
     {
-        JsonElement rawId = request.body().get(KEY_UPLOAD_ID);
-        String uploadId = rawId != null && rawId.isJsonPrimitive() && rawId.getAsJsonPrimitive().isString()
-            && UPLOAD_ID.matcher(rawId.getAsString()).matches() ? rawId.getAsString() : null;
+        String uploadId = uploadIdOf(request.body());
         String shapeError = shapeError(request);
         if (shapeError != null)
         {
@@ -276,8 +293,29 @@ public final class DcsXmlChunkUpload
         return append(request, chunk);
     }
 
+    /**
+     * Ends the upload a chunk names when that chunk's call was refused anywhere - also before the call
+     * reached {@link #accept(Request, HashProbe)} (an invalid action, type, fqn, format or top-level
+     * argument). Without it such a refusal would leave the staging alive, and "every refusal
+     * discards the upload" would not hold.
+     *
+     * @param body the raw {@code body} argument of the call
+     * @param result the call's result
+     */
+    public void discardIfRefused(String body, String result)
+    {
+        if (result != null && ToolResult.isErrorPayload(result) && isChunkBody(body))
+        {
+            discard(uploadIdOf(JsonParser.parseString(body).getAsJsonObject()));
+        }
+    }
+
     private Step start(Request request, Chunk chunk, HashProbe probe)
     {
+        if (chunk.uploadId() != null && !isActive(chunk.uploadId()))
+        {
+            return unknownUpload(chunk);
+        }
         boolean completes = chunk.text().length() == chunk.totalChars();
         if (completes)
         {
@@ -296,27 +334,37 @@ public final class DcsXmlChunkUpload
             return refuse(chunk.uploadId(), "expectedHash '" + request.expectedHash() //$NON-NLS-1$
                 + "' does not match current hash '" + current.hash + "' for '" + request.target() //$NON-NLS-1$ //$NON-NLS-2$
                 + "'. Re-run dcs action='get', rebuild the document from it, and start again at " //$NON-NLS-1$
-                + "body.offset=0 with the new expectedHash."); //$NON-NLS-1$
+                + "body.offset=0 with the new expectedHash and no uploadId."); //$NON-NLS-1$
         }
         synchronized (this)
         {
             long now = clock.getAsLong();
             sweep(now);
-            if (!uploads.containsKey(chunk.uploadId()) && uploads.size() >= MAX_UPLOADS)
+            String uploadId = chunk.uploadId();
+            if (uploadId != null && !uploads.containsKey(uploadId))
             {
-                return new Step(ToolResult.error(MAX_UPLOADS + " chunked uploads are already in progress (" //$NON-NLS-1$
-                    + String.join(", ", uploads.keySet()) + "). Finish one of them, restart one of " //$NON-NLS-1$ //$NON-NLS-2$
-                    + "those uploadIds at body.offset=0 for this document, or retry after the " //$NON-NLS-1$
-                    + "oldest has been idle for " + IDLE_EXPIRY_MINUTES + " minutes. Nothing was " //$NON-NLS-1$ //$NON-NLS-2$
+                // It ended while the hash was being read.
+                return unknownUpload(chunk);
+            }
+            if (uploadId == null && uploads.size() >= MAX_UPLOADS)
+            {
+                // The ids are capabilities: never list another caller's upload here.
+                return new Step(ToolResult.error(MAX_UPLOADS + " chunked uploads are already in progress. " //$NON-NLS-1$
+                    + "Finish one, restart one of your own at body.offset=0 with its uploadId, or retry " //$NON-NLS-1$
+                    + "after one has been idle for " + IDLE_EXPIRY_MINUTES + " minutes. Nothing was " //$NON-NLS-1$ //$NON-NLS-2$
                     + "staged or written.").toJson(), null); //$NON-NLS-1$
+            }
+            if (uploadId == null)
+            {
+                uploadId = ids.get();
             }
             Staging staging = new Staging(request.projectName(), request.target(), request.expectedHash(),
                 chunk.totalChars(), now);
             staging.received.append(chunk.text());
-            // An offset-0 chunk always starts the upload afresh, replacing whatever that id held.
-            uploads.remove(chunk.uploadId());
-            uploads.put(chunk.uploadId(), staging);
-            return staged(request, chunk.uploadId(), staging);
+            // An offset-0 chunk with an active uploadId restarts that upload; only its holder knows the id.
+            uploads.remove(uploadId);
+            uploads.put(uploadId, staging);
+            return staged(request, uploadId, staging);
         }
     }
 
@@ -327,19 +375,14 @@ public final class DcsXmlChunkUpload
         Staging staging = uploads.get(chunk.uploadId());
         if (staging == null)
         {
-            return new Step(ToolResult.error("No chunked upload '" + chunk.uploadId() //$NON-NLS-1$
-                + "' is in progress for body.offset=" + chunk.offset() + ": it was never started, " //$NON-NLS-1$ //$NON-NLS-2$
-                + "was already committed, was refused, or expired after " + IDLE_EXPIRY_MINUTES //$NON-NLS-1$
-                + " idle minutes. Start it again at body.offset=0; nothing was written by this " //$NON-NLS-1$
-                + "call. After a lost answer to a final chunk, re-run dcs action='get' first: a " //$NON-NLS-1$
-                + "changed hash means that replace was applied.").toJson(), null); //$NON-NLS-1$
+            return unknownUpload(chunk);
         }
         String mismatch = mismatch(staging, request, chunk);
         if (mismatch != null)
         {
             uploads.remove(chunk.uploadId());
             return new Step(ToolResult.error(mismatch + " Upload '" + chunk.uploadId() //$NON-NLS-1$
-                + "' was discarded; restart it at body.offset=0. Nothing was written.").toJson(), null); //$NON-NLS-1$
+                + "' was discarded; " + RESTART + " Nothing was written.").toJson(), null); //$NON-NLS-1$ //$NON-NLS-2$
         }
         staging.received.append(chunk.text());
         staging.lastTouched = now;
@@ -349,6 +392,28 @@ public final class DcsXmlChunkUpload
             return new Step(null, staging.received.toString());
         }
         return staged(request, chunk.uploadId(), staging);
+    }
+
+    private static Step unknownUpload(Chunk chunk)
+    {
+        return new Step(ToolResult.error("Upload '" + chunk.uploadId() + "' is not in progress " //$NON-NLS-1$ //$NON-NLS-2$
+            + "(body.offset=" + chunk.offset() + "): it was committed, refused or idle for " //$NON-NLS-1$ //$NON-NLS-2$
+            + IDLE_EXPIRY_MINUTES + " minutes, or this server never issued it. " + RESTART //$NON-NLS-1$
+            + " Nothing was written by this call. After a lost answer to a final chunk, re-run dcs " //$NON-NLS-1$
+            + "action='get' first: a changed hash means that replace was applied.").toJson(), null); //$NON-NLS-1$
+    }
+
+    private synchronized boolean isActive(String uploadId)
+    {
+        sweep(clock.getAsLong());
+        return uploads.containsKey(uploadId);
+    }
+
+    private static String uploadIdOf(JsonObject body)
+    {
+        JsonElement id = body.get(KEY_UPLOAD_ID);
+        return id != null && id.isJsonPrimitive() && id.getAsJsonPrimitive().isString()
+            && id.getAsString().length() <= MAX_ECHO_CHARS ? id.getAsString() : null;
     }
 
     private static String mismatch(Staging staging, Request request, Chunk chunk)
@@ -387,11 +452,12 @@ public final class DcsXmlChunkUpload
         int received = staging.received.length();
         return new Step("**Action:** `replace` (chunk staged, not written)" //$NON-NLS-1$
             + "\n\n**Target:** `" + request.target() + "`" //$NON-NLS-1$ //$NON-NLS-2$
-            + "\n\n**Upload:** `" + uploadId + "`" //$NON-NLS-1$ //$NON-NLS-2$
+            + "\n\n**Upload id:** `" + uploadId + "`" //$NON-NLS-1$ //$NON-NLS-2$
             + "\n\n**Received:** `" + received + "` of `" + staging.totalChars + "` characters" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             + "\n\n**Next offset:** `" + received + "`" //$NON-NLS-1$ //$NON-NLS-2$
             + "\n\nNothing was written. Send the next chunk with body.offset=" + received //$NON-NLS-1$
-            + " and the same uploadId, totalChars and expectedHash; the chunk that reaches totalChars " //$NON-NLS-1$
+            + ", body.uploadId=\"" + uploadId + "\" (this server issued it; send it with every later " //$NON-NLS-1$ //$NON-NLS-2$
+            + "chunk) and the same totalChars and expectedHash; the chunk that reaches totalChars " //$NON-NLS-1$
             + "replaces the schema. Staging expires after " + IDLE_EXPIRY_MINUTES //$NON-NLS-1$
             + " idle minutes.", null); //$NON-NLS-1$
     }
@@ -400,7 +466,7 @@ public final class DcsXmlChunkUpload
     {
         boolean discarded = uploadId != null && discard(uploadId);
         return new Step(ToolResult.error(message + (discarded
-            ? " Upload '" + uploadId + "' was discarded; restart it at body.offset=0. Nothing was written." //$NON-NLS-1$ //$NON-NLS-2$
+            ? " Upload '" + uploadId + "' was discarded; " + RESTART + " Nothing was written." //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             : " Nothing was staged or written.")).toJson(), null); //$NON-NLS-1$
     }
 
@@ -442,7 +508,7 @@ public final class DcsXmlChunkUpload
         {
             return "body.xmlChunk and body.xml are mutually exclusive. Send the whole document as " //$NON-NLS-1$
                 + "body={\"xml\":\"...\"}, or send it in parts as body={\"xmlChunk\":\"...\",\"offset\":0," //$NON-NLS-1$
-                + "\"totalChars\":N,\"uploadId\":\"...\"}."; //$NON-NLS-1$
+                + "\"totalChars\":N} (later chunks add the uploadId the first answer returns)."; //$NON-NLS-1$
         }
         Set<String> extra = new LinkedHashSet<>(body.keySet());
         extra.removeAll(CHUNK_MEMBERS);
@@ -473,11 +539,10 @@ public final class DcsXmlChunkUpload
                 + "' is invalid. Re-run dcs action='get' and copy its 20-character lowercase hash."; //$NON-NLS-1$
         }
         JsonElement id = body.get(KEY_UPLOAD_ID);
-        if (id == null || !id.isJsonPrimitive() || !id.getAsJsonPrimitive().isString()
-            || !UPLOAD_ID.matcher(id.getAsString()).matches())
+        if (id != null && uploadIdOf(body) == null)
         {
-            return "body.uploadId " + describe(id) + " is not a valid upload id. Pass 1-64 characters " //$NON-NLS-1$ //$NON-NLS-2$
-                + "of A-Z, a-z, 0-9, '.', '_' or '-', the same on every chunk of one document."; //$NON-NLS-1$
+            return "body.uploadId " + describe(id) + " is not an upload id this server issued. Omit it on " //$NON-NLS-1$ //$NON-NLS-2$
+                + "a new first chunk and send the uploadId returned by that chunk's answer with every later chunk."; //$NON-NLS-1$
         }
         JsonElement text = body.get(KEY_CHUNK);
         if (!text.isJsonPrimitive() || !text.getAsJsonPrimitive().isString() || text.getAsString().isEmpty())
@@ -490,6 +555,11 @@ public final class DcsXmlChunkUpload
         {
             return "body.offset " + describe(body.get(KEY_OFFSET)) + " must be a whole number >= 0: " //$NON-NLS-1$ //$NON-NLS-2$
                 + "the character position of this chunk in the whole document (0 for the first)."; //$NON-NLS-1$
+        }
+        if (offset.intValue() > 0 && id == null)
+        {
+            return "body.uploadId is required for body.offset=" + offset + ": send the uploadId returned by " //$NON-NLS-1$ //$NON-NLS-2$
+                + "the first chunk's answer. " + RESTART; //$NON-NLS-1$
         }
         Integer total = integral(body.get(KEY_TOTAL_CHARS));
         if (total == null || total.intValue() < 1)

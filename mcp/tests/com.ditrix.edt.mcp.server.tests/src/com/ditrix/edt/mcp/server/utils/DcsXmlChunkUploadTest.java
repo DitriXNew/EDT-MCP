@@ -8,6 +8,8 @@ package com.ditrix.edt.mcp.server.utils;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotEquals;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
@@ -17,6 +19,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import org.junit.Test;
 
@@ -32,6 +36,7 @@ public class DcsXmlChunkUploadTest
     private static final String PROJECT = "Project"; //$NON-NLS-1$
     private static final String TARGET = "Report.Sales"; //$NON-NLS-1$
     private static final String DOC = "<DataCompositionSchema>abcdefghij</DataCompositionSchema>"; //$NON-NLS-1$
+    private static final Pattern ISSUED = Pattern.compile("\\*\\*Upload id:\\*\\* `([^`]+)`"); //$NON-NLS-1$
 
     private final long[] now = {1_000L};
     private final AtomicInteger probes = new AtomicInteger();
@@ -45,13 +50,17 @@ public class DcsXmlChunkUploadTest
         };
     }
 
+    /** A chunk body; {@code id == null} omits uploadId, as a new first chunk does. */
     private static JsonObject chunk(String id, String text, int offset, int total)
     {
         JsonObject body = new JsonObject();
         body.addProperty("xmlChunk", text); //$NON-NLS-1$
         body.addProperty("offset", offset); //$NON-NLS-1$
         body.addProperty("totalChars", total); //$NON-NLS-1$
-        body.addProperty("uploadId", id); //$NON-NLS-1$
+        if (id != null)
+        {
+            body.addProperty("uploadId", id); //$NON-NLS-1$
+        }
         return body;
     }
 
@@ -70,6 +79,21 @@ public class DcsXmlChunkUploadTest
         return uploads.accept(request(chunk(id, text, offset, total)), probe(HASH));
     }
 
+    /** Starts a new upload with the first {@code length} characters of {@code DOC}; returns the issued id. */
+    private String begin(int length)
+    {
+        return issued(send(null, DOC.substring(0, length), 0, DOC.length()));
+    }
+
+    private static String issued(DcsXmlChunkUpload.Step step)
+    {
+        assertFalse(step.response(), step.isComplete());
+        assertFalse(step.response(), ToolResult.isErrorPayload(step.response()));
+        Matcher matcher = ISSUED.matcher(step.response());
+        assertTrue(step.response(), matcher.find());
+        return matcher.group(1);
+    }
+
     private static String error(DcsXmlChunkUpload.Step step)
     {
         assertFalse(step.isComplete());
@@ -78,16 +102,16 @@ public class DcsXmlChunkUploadTest
     }
 
     /** Sends {@code doc} as consecutive chunks of {@code size} and returns the last step. */
-    private DcsXmlChunkUpload.Step upload(String id, String doc, int size)
+    private DcsXmlChunkUpload.Step upload(String doc, int size)
     {
+        String id = null;
         DcsXmlChunkUpload.Step step = null;
         for (int offset = 0; offset < doc.length(); offset += size)
         {
             step = send(id, doc.substring(offset, Math.min(doc.length(), offset + size)), offset, doc.length());
             if (offset + size < doc.length())
             {
-                assertFalse("chunk at " + offset + " must not complete", step.isComplete()); //$NON-NLS-1$ //$NON-NLS-2$
-                assertFalse(step.response(), ToolResult.isErrorPayload(step.response()));
+                id = issued(step);
             }
         }
         return step;
@@ -96,51 +120,125 @@ public class DcsXmlChunkUploadTest
     @Test
     public void testConsecutiveChunksAssembleTheExactDocumentOnlyOnTheLastChunk()
     {
-        DcsXmlChunkUpload.Step last = upload("u1", DOC, 7); //$NON-NLS-1$
-        assertTrue(last.isComplete());
-        assertEquals(DOC, last.xml());
-        assertNull(last.response());
-        assertEquals("the completed upload leaves staging", -1, uploads.receivedChars("u1")); //$NON-NLS-1$ //$NON-NLS-2$
+        String id = begin(7);
+        for (int offset = 7; offset < DOC.length(); offset += 7)
+        {
+            DcsXmlChunkUpload.Step step = send(id, DOC.substring(offset, Math.min(DOC.length(), offset + 7)),
+                offset, DOC.length());
+            if (offset + 7 < DOC.length())
+            {
+                assertEquals("the issued id stays the same", id, issued(step)); //$NON-NLS-1$
+                continue;
+            }
+            assertTrue(step.isComplete());
+            assertEquals(DOC, step.xml());
+            assertNull(step.response());
+        }
+        assertEquals("the completed upload leaves staging", -1, uploads.receivedChars(id)); //$NON-NLS-1$
     }
 
     @Test
-    public void testANonFinalChunkSaysItIsStagedNotWrittenAndNamesTheNextOffset()
+    public void testANonFinalChunkSaysItIsStagedNotWrittenAndHandsOutItsId()
     {
-        DcsXmlChunkUpload.Step step = send("u2", DOC.substring(0, 10), 0, DOC.length()); //$NON-NLS-1$
-        assertFalse(step.isComplete());
+        DcsXmlChunkUpload.Step step = send(null, DOC.substring(0, 10), 0, DOC.length());
+        String id = issued(step);
         String text = step.response();
-        assertFalse(text, ToolResult.isErrorPayload(text));
         assertTrue(text, text.contains("chunk staged, not written")); //$NON-NLS-1$
         assertTrue(text, text.contains("**Received:** `10` of `" + DOC.length() + "` characters")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue(text, text.contains("**Next offset:** `10`")); //$NON-NLS-1$
+        assertTrue(text, text.contains("body.uploadId=\"" + id + "\"")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue(text, text.contains("Nothing was written")); //$NON-NLS-1$
-        assertEquals(10, uploads.receivedChars("u2")); //$NON-NLS-1$
+        assertEquals(10, uploads.receivedChars(id));
     }
 
     @Test
-    public void testASingleCompleteChunkCommitsWithoutAProbe()
+    public void testEveryNewUploadGetsItsOwnUnguessableId()
     {
-        DcsXmlChunkUpload.Step step = send("one", DOC, 0, DOC.length()); //$NON-NLS-1$
+        String first = begin(10);
+        String second = begin(10);
+        assertNotEquals(first, second);
+        assertTrue(first, first.matches("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")); //$NON-NLS-1$
+        assertEquals(Arrays.asList(first, second), uploads.uploadIds());
+    }
+
+    /** #662 P1: two callers starting the same document can no longer reach each other's staging. */
+    @Test
+    public void testASecondCallerCannotReplaceOrContinueAnotherCallersUpload()
+    {
+        String a = begin(10);
+        String b = issued(send(null, "<Other", 0, DOC.length())); //$NON-NLS-1$
+        assertNotEquals(a, b);
+        // A continues its own staging; B's prefix is never mixed in.
+        String rest = DOC.substring(10);
+        DcsXmlChunkUpload.Step done = send(a, rest, 10, DOC.length());
+        assertTrue(done.isComplete());
+        assertEquals(DOC, done.xml());
+        assertEquals(6, uploads.receivedChars(b));
+    }
+
+    @Test
+    public void testAnUploadIdThisServerNeverIssuedIsRefusedAtAnyOffset()
+    {
+        for (int offset : new int[] {0, 10})
+        {
+            String text = error(send("client-chosen", DOC.substring(offset, offset + 5), offset, DOC.length())); //$NON-NLS-1$
+            assertTrue(text, text.contains("Upload 'client-chosen' is not in progress")); //$NON-NLS-1$
+            assertTrue(text, text.contains("this server never issued it")); //$NON-NLS-1$
+            assertTrue(text, text.contains("Start again at body.offset=0 without uploadId.")); //$NON-NLS-1$
+        }
+        assertEquals("a refused id creates nothing", List.of(), uploads.uploadIds()); //$NON-NLS-1$
+        assertEquals("an unknown id never reaches the probe", 0, probes.get()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnUnknownIdOnACompletingFirstChunkIsRefusedToo()
+    {
+        String text = error(send("guess", DOC, 0, DOC.length())); //$NON-NLS-1$
+        assertTrue(text, text.contains("Upload 'guess' is not in progress")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testALaterChunkWithoutUploadIdIsRefused()
+    {
+        begin(10);
+        String text = error(send(null, DOC.substring(10, 15), 10, DOC.length()));
+        assertTrue(text, text.contains("body.uploadId is required for body.offset=10")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAMalformedUploadIdIsRefused()
+    {
+        JsonObject body = chunk(null, "<a", 0, 5); //$NON-NLS-1$
+        body.addProperty("uploadId", 7); //$NON-NLS-1$
+        String text = error(uploads.accept(request(body), probe(HASH)));
+        assertTrue(text, text.contains("body.uploadId '7' is not an upload id this server issued")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testASingleCompleteChunkCommitsWithoutAProbeOrAnId()
+    {
+        DcsXmlChunkUpload.Step step = send(null, DOC, 0, DOC.length());
         assertTrue(step.isComplete());
         assertEquals(DOC, step.xml());
         assertEquals("the commit checks the hash itself", 0, probes.get()); //$NON-NLS-1$
+        assertEquals(List.of(), uploads.uploadIds());
     }
 
     @Test
     public void testTheFirstChunkIsCheckedAgainstTheCurrentHash()
     {
-        String text = error(uploads.accept(request(chunk("h", "<a", 0, 5)), probe(OTHER_HASH))); //$NON-NLS-1$ //$NON-NLS-2$
+        String text = error(uploads.accept(request(chunk(null, "<a", 0, 5)), probe(OTHER_HASH))); //$NON-NLS-1$
         assertTrue(text, text.contains("expectedHash '" + HASH + "' does not match current hash '" //$NON-NLS-1$ //$NON-NLS-2$
             + OTHER_HASH + "'")); //$NON-NLS-1$
         assertTrue(text, text.contains("body.offset=0")); //$NON-NLS-1$
-        assertEquals(-1, uploads.receivedChars("h")); //$NON-NLS-1$
+        assertEquals(List.of(), uploads.uploadIds());
         assertEquals(1, probes.get());
     }
 
     @Test
     public void testOnlyTheFirstChunkIsProbed()
     {
-        upload("p", DOC, 5); //$NON-NLS-1$
+        upload(DOC, 5);
         assertEquals(1, probes.get());
     }
 
@@ -148,10 +246,10 @@ public class DcsXmlChunkUploadTest
     public void testAProbeErrorIsReturnedAndNothingIsStaged()
     {
         String readError = ToolResult.error("Project 'X' not found.").toJson(); //$NON-NLS-1$
-        DcsXmlChunkUpload.Step step = uploads.accept(request(chunk("pe", "<a", 0, 5)), //$NON-NLS-1$ //$NON-NLS-2$
+        DcsXmlChunkUpload.Step step = uploads.accept(request(chunk(null, "<a", 0, 5)), //$NON-NLS-1$
             () -> DcsXmlChunkUpload.ProbeResult.error(readError));
         assertEquals(readError, step.response());
-        assertEquals(-1, uploads.receivedChars("pe")); //$NON-NLS-1$
+        assertEquals(List.of(), uploads.uploadIds());
     }
 
     @Test
@@ -159,11 +257,10 @@ public class DcsXmlChunkUploadTest
     {
         DcsXmlChunkUpload.ProbeResult ok = DcsXmlChunkUpload.ProbeResult.fromRootRead(
             "**Hash:** `" + HASH + "`\n\n# DCS schema"); //$NON-NLS-1$ //$NON-NLS-2$
-        DcsXmlChunkUpload.Step step = uploads.accept(request(chunk("ph", "<a", 0, 5)), () -> ok); //$NON-NLS-1$ //$NON-NLS-2$
-        assertFalse(step.response(), ToolResult.isErrorPayload(step.response()));
+        issued(uploads.accept(request(chunk(null, "<a", 0, 5)), () -> ok)); //$NON-NLS-1$
 
         DcsXmlChunkUpload.ProbeResult unreadable = DcsXmlChunkUpload.ProbeResult.fromRootRead("# no hash"); //$NON-NLS-1$
-        assertTrue(ToolResult.isErrorPayload(uploads.accept(request(chunk("pu", "<a", 0, 5)), //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(ToolResult.isErrorPayload(uploads.accept(request(chunk(null, "<a", 0, 5)), //$NON-NLS-1$
             () -> unreadable).response()));
     }
 
@@ -172,116 +269,135 @@ public class DcsXmlChunkUploadTest
     {
         for (int wrongOffset : new int[] {9, 11})
         {
-            String id = "gap" + wrongOffset; //$NON-NLS-1$
-            send(id, DOC.substring(0, 10), 0, DOC.length());
+            String id = begin(10);
             String text = error(send(id, DOC.substring(wrongOffset, wrongOffset + 5), wrongOffset, DOC.length()));
             assertTrue(text, text.contains("body.offset=" + wrongOffset + " is not where upload '" + id + "' continues")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             assertTrue(text, text.contains("must start at body.offset=10")); //$NON-NLS-1$
-            assertTrue(text, text.contains("was discarded; restart it at body.offset=0")); //$NON-NLS-1$
+            assertTrue(text, text.contains("was discarded; Start again at body.offset=0 without uploadId.")); //$NON-NLS-1$
             assertEquals(-1, uploads.receivedChars(id));
             String after = error(send(id, DOC.substring(10, 15), 10, DOC.length()));
-            assertTrue(after, after.contains("No chunked upload '" + id + "' is in progress")); //$NON-NLS-1$ //$NON-NLS-2$
+            assertTrue(after, after.contains("Upload '" + id + "' is not in progress")); //$NON-NLS-1$ //$NON-NLS-2$
         }
     }
 
     @Test
     public void testEveryBindingMismatchIsRefusedAndDiscardsTheUpload()
     {
-        Map<String, DcsXmlChunkUpload.Request> mismatches = new HashMap<>();
-        mismatches.put("projectName 'Other' differs from 'Project'", //$NON-NLS-1$
-            request("Other", TARGET, HASH, chunk("b", DOC.substring(10, 15), 10, DOC.length()))); //$NON-NLS-1$ //$NON-NLS-2$
-        mismatches.put("fqn 'Report.Other' differs from 'Report.Sales'", //$NON-NLS-1$
-            request(PROJECT, "Report.Other", HASH, chunk("b", DOC.substring(10, 15), 10, DOC.length()))); //$NON-NLS-1$ //$NON-NLS-2$
+        Map<String, String[]> mismatches = new HashMap<>();
+        mismatches.put("projectName 'Other' differs from 'Project'", new String[] {"Other", TARGET, HASH, "0"}); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        mismatches.put("fqn 'Report.Other' differs from 'Report.Sales'", new String[] {PROJECT, "Report.Other", HASH, "0"}); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         mismatches.put("expectedHash '" + OTHER_HASH + "' differs from '" + HASH + "'", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            request(PROJECT, TARGET, OTHER_HASH, chunk("b", DOC.substring(10, 15), 10, DOC.length()))); //$NON-NLS-1$
+            new String[] {PROJECT, TARGET, OTHER_HASH, "0"}); //$NON-NLS-1$
         mismatches.put("body.totalChars=" + (DOC.length() + 1) + " differs from " + DOC.length(), //$NON-NLS-1$ //$NON-NLS-2$
-            request(chunk("b", DOC.substring(10, 15), 10, DOC.length() + 1))); //$NON-NLS-1$
-        for (Map.Entry<String, DcsXmlChunkUpload.Request> mismatch : mismatches.entrySet())
+            new String[] {PROJECT, TARGET, HASH, "1"}); //$NON-NLS-1$
+        for (Map.Entry<String, String[]> mismatch : mismatches.entrySet())
         {
-            send("b", DOC.substring(0, 10), 0, DOC.length()); //$NON-NLS-1$
-            String text = error(uploads.accept(mismatch.getValue(), probe(HASH)));
+            String id = begin(10);
+            String[] v = mismatch.getValue();
+            String text = error(uploads.accept(request(v[0], v[1], v[2],
+                chunk(id, DOC.substring(10, 15), 10, DOC.length() + Integer.parseInt(v[3]))), probe(HASH)));
             assertTrue(text, text.contains(mismatch.getKey()));
-            assertTrue(text, text.contains("Upload 'b' was discarded; restart it at body.offset=0. Nothing was written.")); //$NON-NLS-1$
-            assertEquals(mismatch.getKey(), -1, uploads.receivedChars("b")); //$NON-NLS-1$
+            assertTrue(text, text.contains("Upload '" + id + "' was discarded; Start again at body.offset=0 " //$NON-NLS-1$ //$NON-NLS-2$
+                + "without uploadId. Nothing was written.")); //$NON-NLS-1$
+            assertEquals(mismatch.getKey(), -1, uploads.receivedChars(id));
         }
     }
 
     @Test
     public void testAChunkPastTotalCharsIsRefusedAndDiscardsTheUpload()
     {
-        send("over", DOC.substring(0, 10), 0, DOC.length()); //$NON-NLS-1$
-        String text = error(send("over", DOC.substring(10) + "x", 10, DOC.length())); //$NON-NLS-1$ //$NON-NLS-2$
+        String id = begin(10);
+        String text = error(send(id, DOC.substring(10) + "x", 10, DOC.length())); //$NON-NLS-1$
         assertTrue(text, text.contains("past body.totalChars=" + DOC.length())); //$NON-NLS-1$
-        assertEquals(-1, uploads.receivedChars("over")); //$NON-NLS-1$
+        assertEquals(-1, uploads.receivedChars(id));
     }
 
     @Test
     public void testResendingTheFinalChunkAfterTheCommitIsRefusedNotReplayed()
     {
-        assertTrue(upload("again", DOC, 20).isComplete()); //$NON-NLS-1$
-        int lastOffset = (DOC.length() - 1) / 20 * 20;
-        String text = error(send("again", DOC.substring(lastOffset), lastOffset, DOC.length())); //$NON-NLS-1$
-        assertTrue(text, text.contains("No chunked upload 'again' is in progress")); //$NON-NLS-1$
+        String id = begin(20);
+        send(id, DOC.substring(20, 40), 20, DOC.length());
+        assertTrue(send(id, DOC.substring(40), 40, DOC.length()).isComplete());
+        String text = error(send(id, DOC.substring(40), 40, DOC.length()));
+        assertTrue(text, text.contains("Upload '" + id + "' is not in progress")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue(text, text.contains("re-run dcs action='get' first")); //$NON-NLS-1$
     }
 
     @Test
-    public void testAnOffsetZeroChunkRestartsTheUpload()
+    public void testAnOffsetZeroChunkWithItsIdRestartsTheUpload()
     {
-        send("r", DOC.substring(0, 10), 0, DOC.length()); //$NON-NLS-1$
-        send("r", DOC.substring(10, 20), 10, DOC.length()); //$NON-NLS-1$
-        send("r", DOC.substring(0, 4), 0, DOC.length()); //$NON-NLS-1$
-        assertEquals(4, uploads.receivedChars("r")); //$NON-NLS-1$
+        String id = begin(10);
+        send(id, DOC.substring(10, 20), 10, DOC.length());
+        assertEquals(id, issued(send(id, DOC.substring(0, 4), 0, DOC.length())));
+        assertEquals(4, uploads.receivedChars(id));
+        assertEquals(List.of(id), uploads.uploadIds());
+    }
+
+    @Test
+    public void testARestartWhoseUploadEndsWhileTheHashIsReadIsRefused()
+    {
+        String id = begin(10);
+        DcsXmlChunkUpload.Step step = uploads.accept(request(chunk(id, DOC.substring(0, 4), 0, DOC.length())), () -> {
+            now[0] += TimeUnit.MINUTES.toNanos(DcsXmlChunkUpload.IDLE_EXPIRY_MINUTES);
+            return DcsXmlChunkUpload.ProbeResult.hash(HASH);
+        });
+        String text = error(step);
+        assertTrue(text, text.contains("Upload '" + id + "' is not in progress")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("the expired id is not resurrected", List.of(), uploads.uploadIds()); //$NON-NLS-1$
     }
 
     @Test
     public void testAnIdleUploadExpiresAndAFreshOneSurvivesTheSweep()
     {
-        send("old", DOC.substring(0, 10), 0, DOC.length()); //$NON-NLS-1$
+        String old = begin(10);
         now[0] += TimeUnit.MINUTES.toNanos(DcsXmlChunkUpload.IDLE_EXPIRY_MINUTES) - 1;
-        send("young", DOC.substring(0, 10), 0, DOC.length()); //$NON-NLS-1$
-        assertEquals(Arrays.asList("old", "young"), uploads.uploadIds()); //$NON-NLS-1$ //$NON-NLS-2$
+        String young = begin(10);
+        assertEquals(Arrays.asList(old, young), uploads.uploadIds());
         now[0] += 1;
-        assertEquals(List.of("young"), uploads.uploadIds()); //$NON-NLS-1$
-        String text = error(send("old", DOC.substring(10, 15), 10, DOC.length())); //$NON-NLS-1$
-        assertTrue(text, text.contains("expired after " + DcsXmlChunkUpload.IDLE_EXPIRY_MINUTES + " idle minutes")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(List.of(young), uploads.uploadIds());
+        String text = error(send(old, DOC.substring(10, 15), 10, DOC.length()));
+        assertTrue(text, text.contains("idle for " + DcsXmlChunkUpload.IDLE_EXPIRY_MINUTES + " minutes")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test
     public void testEachChunkRenewsTheIdleExpiry()
     {
         long step = TimeUnit.MINUTES.toNanos(DcsXmlChunkUpload.IDLE_EXPIRY_MINUTES) - 1;
-        send("renew", DOC.substring(0, 10), 0, DOC.length()); //$NON-NLS-1$
+        String id = begin(10);
         now[0] += step;
-        send("renew", DOC.substring(10, 20), 10, DOC.length()); //$NON-NLS-1$
+        send(id, DOC.substring(10, 20), 10, DOC.length());
         now[0] += step;
-        assertEquals(20, uploads.receivedChars("renew")); //$NON-NLS-1$
+        assertEquals(20, uploads.receivedChars(id));
     }
 
     @Test
-    public void testTheNumberOfSimultaneousUploadsIsBounded()
+    public void testTheNumberOfSimultaneousUploadsIsBoundedAndTheRefusalListsNoIds()
     {
-        for (int i = 0; i < DcsXmlChunkUpload.MAX_UPLOADS; i++)
+        String[] ids = new String[DcsXmlChunkUpload.MAX_UPLOADS];
+        for (int i = 0; i < ids.length; i++)
         {
-            send("slot" + i, DOC.substring(0, 10), 0, DOC.length()); //$NON-NLS-1$
+            ids[i] = begin(10);
         }
-        String text = error(send("extra", DOC.substring(0, 10), 0, DOC.length())); //$NON-NLS-1$
+        String text = error(send(null, DOC.substring(0, 10), 0, DOC.length()));
         assertTrue(text, text.contains(DcsXmlChunkUpload.MAX_UPLOADS + " chunked uploads are already in progress")); //$NON-NLS-1$
-        assertTrue(text, text.contains("slot0")); //$NON-NLS-1$
-        assertEquals(-1, uploads.receivedChars("extra")); //$NON-NLS-1$
-        // Restarting a staged id needs no new slot.
-        assertFalse(ToolResult.isErrorPayload(send("slot0", DOC.substring(0, 3), 0, DOC.length()).response())); //$NON-NLS-1$
+        for (String id : ids)
+        {
+            assertFalse("another caller's id must not leak: " + text, text.contains(id)); //$NON-NLS-1$
+        }
+        assertEquals(ids.length, uploads.uploadIds().size());
+        // Restarting one's own upload needs no new slot.
+        assertEquals(ids[0], issued(send(ids[0], DOC.substring(0, 3), 0, DOC.length())));
         // A slot frees when its upload expires.
         now[0] += TimeUnit.MINUTES.toNanos(DcsXmlChunkUpload.IDLE_EXPIRY_MINUTES);
-        assertFalse(ToolResult.isErrorPayload(send("extra", DOC.substring(0, 10), 0, DOC.length()).response())); //$NON-NLS-1$
+        assertNotNull(begin(10));
     }
 
     @Test
     public void testTotalCharsIsBounded()
     {
-        String text = error(send("big", "<", 0, DcsXmlChunkUpload.MAX_TOTAL_CHARS + 1)); //$NON-NLS-1$ //$NON-NLS-2$
+        String text = error(send(null, "<", 0, DcsXmlChunkUpload.MAX_TOTAL_CHARS + 1)); //$NON-NLS-1$
         assertTrue(text, text.contains("exceeds the chunked-upload limit of " + DcsXmlChunkUpload.MAX_TOTAL_CHARS)); //$NON-NLS-1$
-        assertFalse(ToolResult.isErrorPayload(send("max", "<", 0, DcsXmlChunkUpload.MAX_TOTAL_CHARS).response())); //$NON-NLS-1$ //$NON-NLS-2$
+        issued(send(null, "<", 0, DcsXmlChunkUpload.MAX_TOTAL_CHARS)); //$NON-NLS-1$
         assertEquals(4 * 1024 * 1024, DcsXmlChunkUpload.MAX_TOTAL_CHARS);
     }
 
@@ -290,8 +406,8 @@ public class DcsXmlChunkUploadTest
     {
         String doc = "<a>x😀y</a>"; //$NON-NLS-1$
         int split = doc.indexOf('\uDE00');
-        send("sur", doc.substring(0, split), 0, doc.length()); //$NON-NLS-1$
-        DcsXmlChunkUpload.Step last = send("sur", doc.substring(split), split, doc.length()); //$NON-NLS-1$
+        String id = issued(send(null, doc.substring(0, split), 0, doc.length()));
+        DcsXmlChunkUpload.Step last = send(id, doc.substring(split), split, doc.length());
         assertTrue(last.isComplete());
         assertEquals(doc, last.xml());
         // ...and the whole-document body the commit re-enters with carries the pair intact.
@@ -302,14 +418,14 @@ public class DcsXmlChunkUploadTest
     @Test
     public void testWholeDocumentParamsReplaceOnlyTheBody()
     {
-        DcsXmlChunkUpload.Step last = send("w", DOC, 0, DOC.length()); //$NON-NLS-1$
+        DcsXmlChunkUpload.Step last = send(null, DOC, 0, DOC.length());
         Map<String, String> params = new HashMap<>();
         params.put("projectName", PROJECT); //$NON-NLS-1$
         params.put("fqn", TARGET); //$NON-NLS-1$
         params.put("action", "replace"); //$NON-NLS-1$ //$NON-NLS-2$
         params.put("type", "schema"); //$NON-NLS-1$ //$NON-NLS-2$
         params.put("expectedHash", HASH); //$NON-NLS-1$
-        params.put("body", chunk("w", DOC, 0, DOC.length()).toString()); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("body", chunk(null, DOC, 0, DOC.length()).toString()); //$NON-NLS-1$
         Map<String, String> whole = last.wholeDocumentParams(params);
         JsonObject body = JsonParser.parseString(whole.get("body")).getAsJsonObject(); //$NON-NLS-1$
         assertEquals(1, body.size());
@@ -325,35 +441,35 @@ public class DcsXmlChunkUploadTest
     public void testShapeRefusalsNameTheBadValueAndDiscardTheUpload()
     {
         Map<String, JsonObject> bodies = new HashMap<>();
-        JsonObject both = chunk("s", "<a", 10, 50); //$NON-NLS-1$ //$NON-NLS-2$
+        JsonObject both = chunk(null, "<a", 10, 50); //$NON-NLS-1$
         both.addProperty("xml", "<a/>"); //$NON-NLS-1$ //$NON-NLS-2$
         bodies.put("body.xmlChunk and body.xml are mutually exclusive", both); //$NON-NLS-1$
-        JsonObject extra = chunk("s", "<a", 10, 50); //$NON-NLS-1$ //$NON-NLS-2$
+        JsonObject extra = chunk(null, "<a", 10, 50); //$NON-NLS-1$
         extra.addProperty("insertPosition", 1); //$NON-NLS-1$
         bodies.put("also contains: insertPosition", extra); //$NON-NLS-1$
-        JsonObject empty = chunk("s", "", 10, 50); //$NON-NLS-1$ //$NON-NLS-2$
-        bodies.put("body.xmlChunk '\"\"' must be a non-empty string", empty); //$NON-NLS-1$
-        JsonObject fraction = chunk("s", "<a", 10, 50); //$NON-NLS-1$ //$NON-NLS-2$
+        bodies.put("body.xmlChunk '\"\"' must be a non-empty string", chunk(null, "", 10, 50)); //$NON-NLS-1$ //$NON-NLS-2$
+        JsonObject fraction = chunk(null, "<a", 10, 50); //$NON-NLS-1$
         fraction.addProperty("offset", 10.5); //$NON-NLS-1$
         bodies.put("body.offset '10.5' must be a whole number >= 0", fraction); //$NON-NLS-1$
-        JsonObject text = chunk("s", "<a", 10, 50); //$NON-NLS-1$ //$NON-NLS-2$
+        JsonObject text = chunk(null, "<a", 10, 50); //$NON-NLS-1$
         text.addProperty("totalChars", "50"); //$NON-NLS-1$ //$NON-NLS-2$
         bodies.put("body.totalChars '\"50\"' must be a whole number >= 1", text); //$NON-NLS-1$
         for (Map.Entry<String, JsonObject> bad : bodies.entrySet())
         {
-            send("s", DOC.substring(0, 10), 0, 50); //$NON-NLS-1$
-            assertEquals(10, uploads.receivedChars("s")); //$NON-NLS-1$
-            String message = error(uploads.accept(request(bad.getValue()), probe(HASH)));
+            String id = issued(send(null, DOC.substring(0, 10), 0, 50));
+            JsonObject body = bad.getValue().deepCopy();
+            body.addProperty("uploadId", id); //$NON-NLS-1$
+            String message = error(uploads.accept(request(body), probe(HASH)));
             assertTrue(message, message.contains(bad.getKey()));
-            assertTrue(message, message.contains("Upload 's' was discarded")); //$NON-NLS-1$
-            assertEquals(bad.getKey(), -1, uploads.receivedChars("s")); //$NON-NLS-1$
+            assertTrue(message, message.contains("Upload '" + id + "' was discarded")); //$NON-NLS-1$ //$NON-NLS-2$
+            assertEquals(bad.getKey(), -1, uploads.receivedChars(id));
         }
     }
 
     @Test
     public void testChunksAreOnlyForAReplaceOfABareSchemaRootWithAHash()
     {
-        JsonObject body = chunk("t", "<a", 0, 5); //$NON-NLS-1$ //$NON-NLS-2$
+        JsonObject body = chunk(null, "<a", 0, 5); //$NON-NLS-1$
         String wrongAction = error(uploads.accept(new DcsXmlChunkUpload.Request(PROJECT, TARGET, "upsert", "schema", //$NON-NLS-1$ //$NON-NLS-2$
             false, HASH, false, body), probe(HASH)));
         assertTrue(wrongAction, wrongAction.contains("body.xmlChunk is not allowed with action='upsert'")); //$NON-NLS-1$
@@ -370,9 +486,20 @@ public class DcsXmlChunkUploadTest
         assertTrue(noHash, noHash.contains("expectedHash is required for a chunked replace of 'Report.Sales'")); //$NON-NLS-1$
         String badHash = error(uploads.accept(request(PROJECT, TARGET, "ABC", body), probe(HASH))); //$NON-NLS-1$
         assertTrue(badHash, badHash.contains("expectedHash 'ABC' is invalid")); //$NON-NLS-1$
-        String badId = error(uploads.accept(request(chunk("has space", "<a", 0, 5)), probe(HASH))); //$NON-NLS-1$ //$NON-NLS-2$
-        assertTrue(badId, badId.contains("body.uploadId '\"has space\"' is not a valid upload id")); //$NON-NLS-1$
         assertEquals("no refusal reached the probe", 0, probes.get()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testDiscardIfRefusedEndsTheNamedUploadOnlyOnARefusal()
+    {
+        String id = begin(10);
+        String body = chunk(id, DOC.substring(10, 15), 10, DOC.length()).toString();
+        uploads.discardIfRefused(body, "**Action:** `replace`"); //$NON-NLS-1$
+        assertEquals("a success keeps the upload", 10, uploads.receivedChars(id)); //$NON-NLS-1$
+        uploads.discardIfRefused("{\"xml\":\"<a/>\"}", ToolResult.error("x").toJson()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("a whole-document refusal names no upload", 10, uploads.receivedChars(id)); //$NON-NLS-1$
+        uploads.discardIfRefused(body, ToolResult.error("Unknown format 'bogus'.").toJson()); //$NON-NLS-1$
+        assertEquals(-1, uploads.receivedChars(id));
     }
 
     @Test
