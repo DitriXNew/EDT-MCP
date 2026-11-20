@@ -625,20 +625,25 @@ public class McpProtocolHandler
         }
         HeadlessLifetime lifetime = Activator.getDefault() == null
             ? null : Activator.getDefault().getHeadlessLifetime();
-        // Listed by get_server_status while the tool runs (#993). Registered last before the try
-        // and removed first in its finally, so every exit - a result, a throw, an interruption -
-        // removes it; begin() cannot throw, so it can never disturb the call.
-        InFlightToolCalls.Handle inFlight = InFlightToolCalls.begin(tool.getName(), projectName, call);
+        // Listed by get_server_status while the tool runs (#993). Registered only once the headless
+        // lease is granted - a call refused here never ran - and removed first in the finally, so
+        // every exit after it - a result, a throw, an interruption - removes it; begin() cannot
+        // throw, so it can never disturb the call.
+        InFlightToolCalls.Handle inFlight = null;
         try (var lease = lifetime == null ? null : lifetime.tool())
         {
             if (lifetime != null && lease == null) { return ToolResult.error("Headless EDT is shutting down; reconnect and retry a read.").toJson(); }
+            inFlight = InFlightToolCalls.begin(tool.getName(), projectName, call);
             result = tool.execute(params);
             threw = false;
             return result;
         }
         finally
         {
-            inFlight.close();
+            if (inFlight != null)
+            {
+                inFlight.close();
+            }
             if (connectsToInfobase)
             {
                 InfobaseAuthDialogSuppressor.markActivityEnd();

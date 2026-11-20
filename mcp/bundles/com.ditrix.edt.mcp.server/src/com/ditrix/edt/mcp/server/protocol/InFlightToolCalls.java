@@ -108,6 +108,7 @@ public final class InFlightToolCalls
      */
     public static Handle begin(String tool, String projectName, ActiveToolCall call)
     {
+        long sequence = SEQUENCE.incrementAndGet();
         Registration previous = CURRENT.get();
         Registration handle;
         if (TRACKED.incrementAndGet() > MAX_TRACKED)
@@ -118,13 +119,24 @@ public final class InFlightToolCalls
         }
         else
         {
-            Entry entry = new Entry(SEQUENCE.incrementAndGet(), tool, normalizeProjectName(projectName),
+            Entry entry = new Entry(sequence, tool, normalizeProjectName(projectName),
                 System.currentTimeMillis(), System.nanoTime(), call, previous);
             ENTRIES.add(entry);
             handle = entry;
         }
         CURRENT.set(handle);
         return handle;
+    }
+
+    /**
+     * How many registrations {@link #begin} has made since the class loaded, listed or counted. Lets a
+     * test prove that a call refused before its tool ran was never registered, even for an instant.
+     *
+     * @return the number of {@link #begin} calls so far
+     */
+    static long registrations()
+    {
+        return SEQUENCE.get();
     }
 
     /**

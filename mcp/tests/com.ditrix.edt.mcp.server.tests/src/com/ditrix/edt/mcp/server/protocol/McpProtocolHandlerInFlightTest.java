@@ -21,6 +21,16 @@ import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+
+import java.lang.reflect.Field;
+import java.time.Duration;
+
+import org.eclipse.jface.preference.PreferenceStore;
+
+import com.ditrix.edt.mcp.server.Activator;
+import com.ditrix.edt.mcp.server.HeadlessLifetime;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.tools.McpToolRegistry;
 
@@ -165,6 +175,50 @@ public class McpProtocolHandlerInFlightTest
         assertNull("a refused tool must not have run", seen.get());
         assertFalse("a refused call is never registered", recorder.sawIt());
         assertTrue("a refused call leaves no entry behind", listed(recorder.tool).isEmpty());
+    }
+
+    @Test
+    public void testACallRefusedBecauseHeadlessIsStoppingIsNeverRegistered() throws Exception
+    {
+        // The headless lifetime refuses the tool lease once it is stopping; that refusal happens
+        // inside executeToolTimed, after the earlier refusals, and the tool never runs.
+        AtomicReference<String> ran = new AtomicReference<>();
+        registry.register(new StubTool("inflight_headless_stopping_tool") //$NON-NLS-1$
+        {
+            @Override
+            public String execute(Map<String, String> params)
+            {
+                ran.set("ran"); //$NON-NLS-1$
+                return "{}"; //$NON-NLS-1$
+            }
+        });
+        Field plugin = Activator.class.getDeclaredField("plugin"); //$NON-NLS-1$
+        plugin.setAccessible(true);
+        Object savedPlugin = plugin.get(null);
+        try (HeadlessLifetime lifetime = new HeadlessLifetime(Duration.ofMinutes(30), (task, delay) -> () -> {
+            // no timer in a unit test
+        }, () -> {
+            // no shutdown in a unit test
+        }))
+        {
+            lifetime.close();
+            Activator activator = mock(Activator.class);
+            when(activator.getHeadlessLifetime()).thenReturn(lifetime);
+            when(activator.getPreferenceStore()).thenReturn(new PreferenceStore());
+            plugin.set(null, activator);
+
+            long before = InFlightToolCalls.registrations();
+            String response = handler.processRequest(toolCall("inflight_headless_stopping_tool", "{}")); //$NON-NLS-1$ //$NON-NLS-2$
+
+            assertTrue(response, response.contains("shutting down")); //$NON-NLS-1$
+            assertNull("a refused tool must not have run", ran.get());
+            assertEquals("a call the headless lifetime refused is never registered", before,
+                InFlightToolCalls.registrations());
+        }
+        finally
+        {
+            plugin.set(null, savedPlugin);
+        }
     }
 
     @Test
