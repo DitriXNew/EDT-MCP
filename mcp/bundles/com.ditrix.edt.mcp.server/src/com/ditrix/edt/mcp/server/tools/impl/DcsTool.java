@@ -59,7 +59,8 @@ import com.ditrix.edt.mcp.server.utils.DcsSettingsWriter;
 import com.ditrix.edt.mcp.server.utils.DcsWriterCatalogues;
 import com.ditrix.edt.mcp.server.utils.DcsTargetResolver;
 import com.ditrix.edt.mcp.server.utils.DcsTargetResolver.TargetKind;
-import com.ditrix.edt.mcp.server.utils.DcsTemplateProjection;
+import com.ditrix.edt.mcp.server.utils.DcsTemplateWriter;
+import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.DcsWriter;
 import com.ditrix.edt.mcp.server.utils.DcsXmlCodec;
 import com.ditrix.edt.mcp.server.utils.DcsXmlRoundTripComparator;
@@ -410,7 +411,8 @@ public class DcsTool implements IMcpTool
             }
             return null;
         }
-        String templateRefusal = DcsTemplateProjection.writeRefusal(action, address);
+        JsonObject bodyObject = hasBody ? JsonParser.parseString(body).getAsJsonObject() : null;
+        String templateRefusal = DcsTemplateWriter.shapeRefusal(action, type, address, bodyObject);
         if (templateRefusal != null)
         {
             return ToolResult.error(templateRefusal).toJson();
@@ -441,14 +443,16 @@ public class DcsTool implements IMcpTool
                 + "'. Pass one object matching type='" + JsonUtils.extractStringArgument(params, KEY_TYPE) //$NON-NLS-1$
                 + "' from get_tool_guide('dcs').").toJson(); //$NON-NLS-1$
         }
-        boolean positionalInsert = hasBody && JsonParser.parseString(body).getAsJsonObject().has("insertPosition");
+        boolean positionalInsert = hasBody && bodyObject.has("insertPosition");
+        boolean cellPatch = "schema".equals(type) && DcsTemplateWriter.requiresHash(address, bodyObject); //$NON-NLS-1$
         boolean hashRequired = ACTION_REPLACE.equals(action) || ACTION_REMOVE.equals(action)
-            || address.isIndexAddressed() || positionalInsert;
+            || address.isIndexAddressed() || positionalInsert || cellPatch;
         if (hashRequired && !hasHash)
         {
             return ToolResult.error("expectedHash is required for action='" + action //$NON-NLS-1$
                 + "' at '" + address + "'. "
                 + (positionalInsert ? "body.insertPosition depends on the observed collection order. " : "")
+                + (cellPatch ? "body.cells addresses cells by their position in the observed template grid. " : "") //$NON-NLS-1$ //$NON-NLS-2$
                 + "Re-run dcs action='get' and pass its current hash.").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
         }
         return null;
@@ -720,18 +724,14 @@ public class DcsTool implements IMcpTool
             com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema detachedImport = importedSchema;
             DcsXmlCodec detachedImportCodec = importCodec;
             String detachedSubmittedXml = submittedXml;
-            String schemaMembersError = detachedImport == null && "schema".equals(type) && body != null //$NON-NLS-1$
-                ? schemaRootMembersError(body) : null;
-            if (schemaMembersError != null)
+            SchemaBodyRoute route = detachedImport != null ? new SchemaBodyRoute(null, false, body)
+                : schemaBodyRoute(action, type, address, body);
+            if (route.membersError() != null)
             {
-                return ToolResult.error(schemaMembersError).toJson();
+                return ToolResult.error(route.membersError()).toJson();
             }
-            boolean settingsWrite = detachedImport == null && (DcsSettingsWriter.supports(type)
-                || "schema".equals(type) && body != null //$NON-NLS-1$
-                    && (DcsSettingsWriter.schemaMembers(body).size() > 0
-                        || ACTION_REPLACE.equals(action)));
-            JsonObject schemaBody = detachedImport == null && "schema".equals(type) && body != null //$NON-NLS-1$
-                ? schemaLayerMembers(body) : body;
+            boolean settingsWrite = route.settingsWrite();
+            JsonObject schemaBody = route.schemaBody();
             DcsSchemaWriter.PrepareResult prepared = detachedImport != null ? null
                 : DcsSettingsWriter.supports(type)
                 || "schema".equals(type) && schemaBody != null && schemaBody.size() == 0 //$NON-NLS-1$
@@ -843,6 +843,7 @@ public class DcsTool implements IMcpTool
                         }
                     }
                     DcsWriter.Result counts = null;
+                    DcsTemplateWriter.Summary templates = null;
                     if (prepared != null)
                     {
                         DcsSchemaWriter.Result applied =
@@ -854,6 +855,7 @@ public class DcsTool implements IMcpTool
                                 : DcsWriteFailure.message(applied.error());
                         }
                         counts = applied.applied();
+                        templates = applied.templates();
                     }
                     if (settings != null)
                     {
@@ -881,7 +883,7 @@ public class DcsTool implements IMcpTool
                     }
                     return new WriteOutcome(DcsHash.compute(content.schema()), content.contentFqn(),
                         counts, settingsWrite,
-                        filled == 0 ? null : DcsReadProjection.schemaCounts(content.schema()));
+                        filled == 0 ? null : DcsReadProjection.schemaCounts(content.schema()), templates);
                 });
             }
             catch (DcsWriteFailure e)
@@ -918,6 +920,7 @@ public class DcsTool implements IMcpTool
                 + "`\n\n**Hash:** `" + outcome.hash + "`\n\n**Export scheduled:** `true`" //$NON-NLS-1$ //$NON-NLS-2$
                 + "\n\n**Settings applied:** `" + outcome.settingsApplied + "`" //$NON-NLS-1$ //$NON-NLS-2$
                 + "\n\n**Schema applied:** " + countsText //$NON-NLS-1$
+                + templateNote(outcome.templates)
                 + queryValidation.note() + localeUnusedNote(context, languages);
         }
         catch (RuntimeException e)
@@ -1497,6 +1500,45 @@ public class DcsTool implements IMcpTool
         return DcsMutationGuard.replaceError(whole, address, catalogues);
     }
 
+    /** The template counts and integrity warnings of a write that touched templates or bindings. */
+    static String templateNote(DcsTemplateWriter.Summary templates)
+    {
+        if (templates == null) return ""; //$NON-NLS-1$
+        StringBuilder note = new StringBuilder("\n\n**Templates applied:** ").append(templates.counts()); //$NON-NLS-1$
+        if (!templates.warnings().isEmpty())
+        {
+            note.append("\n\n**Template warnings:**"); //$NON-NLS-1$
+            for (String warning : templates.warnings())
+            {
+                note.append("\n- ").append(MarkdownUtils.escapeMarkdown(warning)); //$NON-NLS-1$
+            }
+        }
+        return note.toString();
+    }
+
+    /** Where a structured {@code type='schema'} body goes: its member check, the settings planner, the schema writer. */
+    record SchemaBodyRoute(String membersError, boolean settingsWrite, JsonObject schemaBody)
+    {
+    }
+
+    /**
+     * Routes a structured body. A bare-root {@code type='schema'} body is split into its schema-layer
+     * and settings members; a body at a node under the schema (a data-set link, a template, a grouping
+     * binding) is that node's own body for the schema writer, never a root body.
+     */
+    static SchemaBodyRoute schemaBodyRoute(String action, String type, DcsAddress address, JsonObject body)
+    {
+        boolean schemaBody = "schema".equals(type) && body != null; //$NON-NLS-1$
+        if (schemaBody && address != null && address.hasPointer())
+        {
+            return new SchemaBodyRoute(null, false, body);
+        }
+        boolean settingsWrite = DcsSettingsWriter.supports(type) || schemaBody
+            && (DcsSettingsWriter.schemaMembers(body).size() > 0 || ACTION_REPLACE.equals(action));
+        return new SchemaBodyRoute(schemaBody ? schemaRootMembersError(body) : null, settingsWrite,
+            schemaBody ? schemaLayerMembers(body) : body);
+    }
+
     private static JsonObject schemaLayerMembers(JsonObject body)
     {
         JsonObject result = new JsonObject();
@@ -1504,8 +1546,11 @@ public class DcsTool implements IMcpTool
         // (DcsSchemaWriter.clearReplaceTarget), and DcsWriter can author them, so omitting the
         // member from the forwarded body made every accepted root replacement destroy every join
         // with no way for the caller to restate it.
+        // templates/groupTemplates/groupHeaderTemplates go to the schema writer too (#662), which
+        // takes them out of the legacy payload and plans them with the template writer.
         for (String member : List.of("dataSources", "dataSets", "dataSetLinks", "parameters", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-            "calculatedFields", "totalFields")) //$NON-NLS-1$ //$NON-NLS-2$
+            "calculatedFields", "totalFields", "templates", "groupTemplates", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            "groupHeaderTemplates")) //$NON-NLS-1$
         {
             if (body.has(member)) result.add(member, body.get(member).deepCopy());
         }
@@ -1515,7 +1560,8 @@ public class DcsTool implements IMcpTool
     private static String schemaRootMembersError(JsonObject body)
     {
         Set<String> allowed = new LinkedHashSet<>(List.of("dataSources", "dataSets", "dataSetLinks", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            "parameters", "calculatedFields", "totalFields", "defaultSettings", "variants")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+            "parameters", "calculatedFields", "totalFields", "templates", "groupTemplates", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+            "groupHeaderTemplates", "defaultSettings", "variants")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         for (String member : body.keySet())
         {
             if (!allowed.contains(member))
@@ -1535,14 +1581,24 @@ public class DcsTool implements IMcpTool
         final boolean settingsApplied;
         final DcsReadProjection.SchemaCounts storedCounts;
 
+        final DcsTemplateWriter.Summary templates;
+
         WriteOutcome(String hash, String contentFqn, DcsWriter.Result applied,
             boolean settingsApplied, DcsReadProjection.SchemaCounts storedCounts)
+        {
+            this(hash, contentFqn, applied, settingsApplied, storedCounts, null);
+        }
+
+        WriteOutcome(String hash, String contentFqn, DcsWriter.Result applied,
+            boolean settingsApplied, DcsReadProjection.SchemaCounts storedCounts,
+            DcsTemplateWriter.Summary templates)
         {
             this.hash = hash;
             this.contentFqn = contentFqn;
             this.applied = applied;
             this.settingsApplied = settingsApplied;
             this.storedCounts = storedCounts;
+            this.templates = templates;
         }
     }
 

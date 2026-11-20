@@ -149,6 +149,34 @@ public final class DcsSchemaWriter
             String refusal = DcsMutationGuard.replaceError(schema, request.address, catalogues);
             if (refusal != null) return Result.failure(refusal);
         }
+        if (DcsTemplateWriter.handles(request.type, request.address.segments()))
+        {
+            // Templates and grouping bindings (#662): planned on the attached schema, committed
+            // with minimal list operations so untouched templates keep their objects.
+            DcsTemplateWriter.PlanResult planned = DcsTemplateWriter.plan(schema, request.action,
+                request.address, request.body, DcsTemplateBody.Context.of(catalogues, request.languages));
+            if (!planned.isSuccess()) return Result.failure(planned.error());
+            planned.plan().commit(schema);
+            return Result.success(null, planned.plan().summary());
+        }
+        DcsTemplateWriter.Plan rootTemplates = null;
+        if (TYPE_SCHEMA.equals(request.type) && request.address.segments().isEmpty() && request.body != null)
+        {
+            JsonObject members = DcsTemplateWriter.takeRootMembers(request.body);
+            if (members.size() > 0 || ACTION_REPLACE.equals(request.action))
+            {
+                DcsTemplateWriter.PlanResult planned = DcsTemplateWriter.planRoot(schema, request.action,
+                    request.address, members, DcsTemplateBody.Context.of(catalogues, request.languages));
+                if (!planned.isSuccess()) return Result.failure(planned.error());
+                rootTemplates = planned.plan();
+                if (members.size() > 0 && request.body.size() == 0 && !ACTION_REPLACE.equals(request.action))
+                {
+                    // Only template members: the legacy writer has nothing to apply.
+                    rootTemplates.commit(schema);
+                    return Result.success(null, rootTemplates.summary());
+                }
+            }
+        }
         String selectorError = selectorAmbiguityError(schema, request);
         if (selectorError != null) return Result.failure(selectorError);
         String referenceError = identityReferenceError(schema, request);
@@ -180,7 +208,8 @@ public final class DcsSchemaWriter
                 error = assembledReferenceError(working, request.address.rootFqn());
                 if (error != null) return Result.failure(error);
                 commitSchemaLayer(schema, working);
-                return Result.success(null);
+                if (rootTemplates != null) rootTemplates.commit(schema);
+                return Result.success(null, rootTemplates == null ? null : rootTemplates.summary());
             }
         }
         DcsWriter.DataSetValidationContext dataSetValidation =
@@ -200,7 +229,8 @@ public final class DcsSchemaWriter
         String assembledError = assembledReferenceError(working, request.address.rootFqn());
         if (assembledError != null) return Result.failure(assembledError);
         commitSchemaLayer(schema, working);
-        return Result.success(applied);
+        if (rootTemplates != null) rootTemplates.commit(schema);
+        return Result.success(applied, rootTemplates == null ? null : rootTemplates.summary());
     }
 
     private static Result applyDataSetLinkMutation(DataCompositionSchema schema,
@@ -2117,7 +2147,7 @@ public final class DcsSchemaWriter
 
     private static boolean isExactNode(String type, List<String> segments)
     {
-        if (isDataSetLinkPath(type, segments)) return true;
+        if (isDataSetLinkPath(type, segments) || DcsTemplateWriter.isNodePath(type, segments)) return true;
         if (TYPE_FIELD.equals(type) || TYPE_FIELD_FOLDER.equals(type))
         {
             return isFieldPath(segments, true);
@@ -2756,29 +2786,37 @@ public final class DcsSchemaWriter
     public static final class Result
     {
         private final DcsWriter.Result applied;
+        private final DcsTemplateWriter.Summary templates;
         private final String error;
         private final boolean errorJson;
 
-        private Result(DcsWriter.Result applied, String error, boolean errorJson)
+        private Result(DcsWriter.Result applied, DcsTemplateWriter.Summary templates, String error,
+            boolean errorJson)
         {
             this.applied = applied;
+            this.templates = templates;
             this.error = error;
             this.errorJson = errorJson;
         }
 
         private static Result success(DcsWriter.Result applied)
         {
-            return new Result(applied, null, false);
+            return new Result(applied, null, null, false);
+        }
+
+        private static Result success(DcsWriter.Result applied, DcsTemplateWriter.Summary templates)
+        {
+            return new Result(applied, templates, null, false);
         }
 
         private static Result failure(String error)
         {
-            return new Result(null, error, false);
+            return new Result(null, null, error, false);
         }
 
         private static Result failureJson(String error)
         {
-            return new Result(null, error, true);
+            return new Result(null, null, error, true);
         }
 
         public boolean isSuccess()
@@ -2789,6 +2827,12 @@ public final class DcsSchemaWriter
         public DcsWriter.Result applied()
         {
             return applied;
+        }
+
+        /** What the call did to templates and grouping bindings, or {@code null} when it wrote none. */
+        public DcsTemplateWriter.Summary templates()
+        {
+            return templates;
         }
 
         public String error()

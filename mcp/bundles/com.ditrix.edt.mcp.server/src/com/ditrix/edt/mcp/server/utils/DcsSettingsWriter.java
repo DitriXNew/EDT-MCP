@@ -3701,6 +3701,123 @@ public final class DcsSettingsWriter
         return appearance(body, current, languages, available, Version.LATEST, "appearance"); //$NON-NLS-1$
     }
 
+    /**
+     * The typed appearance grammar for an area-template cell or field (#662): the same
+     * merge-on-update builder conditional appearance uses, run against detached copies of
+     * {@code current} and returned as a detached item list. An item this call wrote - one equal to no
+     * input item - that is a plain {@link SettingsParameterValue}, the holder the builder creates for
+     * a dotted key, becomes the core {@link DataCompositionParameterValue} EDT's template designer
+     * writes into a cell. A written item that carries a settings member is refused: a template cell
+     * has no place for it.
+     *
+     * @param body the appearance body (keyed map or {@code {items:[...]}})
+     * @param current the items to merge into, or {@code null}/empty for a fresh appearance
+     * @param languages the mutation's language context
+     * @param available the platform appearance catalogue
+     * @param version the project platform version
+     * @param namedColors the named-color resolver, or {@code null}
+     * @param path where an error says the body came from
+     * @return the built items, or the writer's error
+     */
+    static AppearanceItemsResult buildAppearanceItems(JsonObject body,
+        List<DataCompositionParameterValue> current, DcsPresentationParser.LanguageContext languages,
+        DcsAvailableParameterCollection available, Version version,
+        StyleValueBuilder.NamedColorResolver namedColors, String path)
+    {
+        try (var scope = ThreadLocalScope.openIfAbsent(PARSE_SCRATCH, ParseScratch::new))
+        {
+            DataCompositionAppearance holder = com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE
+                .createDataCompositionAppearance();
+            List<DataCompositionParameterValue> inputs = new ArrayList<>();
+            if (current != null)
+            {
+                for (DataCompositionParameterValue item : current)
+                {
+                    inputs.add(EcoreUtil.copy(item));
+                    holder.getItems().add(EcoreUtil.copy(item));
+                }
+            }
+            AppearanceResult built = withNamedColors(namedColors,
+                () -> appearance(body, holder, languages, available, version, path));
+            if (built.error != null) return AppearanceItemsResult.failure(built.error);
+            List<DataCompositionParameterValue> items = new ArrayList<>();
+            for (DataCompositionParameterValue item : new ArrayList<>(built.value.getItems()))
+            {
+                boolean written = inputs.stream().noneMatch(input -> EcoreUtil.equals(input, item));
+                DataCompositionParameterValue result = written ? coreAppearanceItem(item) : item;
+                if (result == null)
+                {
+                    return AppearanceItemsResult.failure("Appearance item '" //$NON-NLS-1$
+                        + (item.getParameter() == null ? "" : item.getParameter().getValue()) //$NON-NLS-1$
+                        + "' at '" + path + "' carries viewMode, userSettingID or " //$NON-NLS-1$ //$NON-NLS-2$
+                        + "userSettingPresentation, which an area template cannot store. Remove them."); //$NON-NLS-1$
+                }
+                items.add(result);
+            }
+            return AppearanceItemsResult.success(items);
+        }
+    }
+
+    /** The core item EDT writes into a template cell, or {@code null} when settings members would be lost. */
+    private static DataCompositionParameterValue coreAppearanceItem(DataCompositionParameterValue item)
+    {
+        if (item instanceof SettingsParameterValue)
+        {
+            SettingsParameterValue settings = (SettingsParameterValue)item;
+            if (!java.util.Objects.equals(settings.getViewMode(),
+                DcsPackage.Literals.SETTINGS_PARAMETER_VALUE__VIEW_MODE.getDefaultValue())
+                || settings.getUserSettingID() != null
+                || settings.getUserSettingPresentation() != null)
+            {
+                return null;
+            }
+        }
+        DataCompositionParameterValue result = com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE
+            .createDataCompositionParameterValue();
+        result.setUse(item.isUse());
+        result.setParameter(item.getParameter() == null ? null : EcoreUtil.copy(item.getParameter()));
+        result.getValues().addAll(EcoreUtil.copyAll(item.getValues()));
+        for (DataCompositionParameterValue child : item.getNestedParameterValues())
+        {
+            DataCompositionParameterValue converted = coreAppearanceItem(child);
+            if (converted == null) return null;
+            result.getNestedParameterValues().add(converted);
+        }
+        return result;
+    }
+
+    /** The untyped ValueSpec parser every untyped slot uses, for an area-template field value (#662). */
+    static ValueResult untypedValue(JsonElement raw, String path)
+    {
+        try (var scope = ThreadLocalScope.openIfAbsent(PARSE_SCRATCH, ParseScratch::new))
+        {
+            return value(raw, path);
+        }
+    }
+
+    /** Built template appearance items, or the writer's error. */
+    static final class AppearanceItemsResult
+    {
+        final List<DataCompositionParameterValue> items;
+        final String error;
+
+        private AppearanceItemsResult(List<DataCompositionParameterValue> items, String error)
+        {
+            this.items = items;
+            this.error = error;
+        }
+
+        static AppearanceItemsResult success(List<DataCompositionParameterValue> items)
+        {
+            return new AppearanceItemsResult(items, null);
+        }
+
+        static AppearanceItemsResult failure(String error)
+        {
+            return new AppearanceItemsResult(null, error);
+        }
+    }
+
     private static AppearanceResult appearance(JsonObject body, DataCompositionAppearance current,
         DcsPresentationParser.LanguageContext languages, DcsAvailableParameterCollection available,
         Version version, String path)
@@ -3974,7 +4091,7 @@ public final class DcsSettingsWriter
         return body;
     }
 
-    private static JsonObject appearanceItemBody(DataCompositionParameterValue item)
+    static JsonObject appearanceItemBody(DataCompositionParameterValue item)
     {
         if (item.getParameter() == null) return null;
         JsonObject body = new JsonObject();

@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
@@ -28,9 +29,9 @@ import com._1c.g5.v8.dt.dcs.model.schema.DcsPackage;
 import com.ditrix.edt.mcp.server.utils.DcsTargetResolver.TargetKind;
 
 /**
- * #662: the read-only exposure of a schema's area templates and their grouping bindings. They
- * are counted and listed in the root summary and read under {@code type='schema'}, exactly like
- * data-set links, because the typed write vocabulary deliberately has no template type.
+ * #662: the read of a schema's area templates and their grouping bindings. They are counted and
+ * listed in the root summary and read under {@code type='schema'}, exactly like data-set links,
+ * and the reproducibility guard judges each of them as a unit.
  *
  * <p>The area-template body classes live in a package this bundle does not import, so the
  * fixtures build them through the model's own EClasses.
@@ -179,17 +180,80 @@ public class DcsTemplateReadTest
     public void testReplaceRefusalAddressesTemplatesByTheSameNameTheReadPrints()
     {
         DataCompositionSchema schema = templatedSchema();
+        // A runtime appearance index has no body form, so this template is not restatable.
+        EObject area = (EObject)schema.getTemplates().get(0).eGet(
+            DcsPackage.Literals.DATA_COMPOSITION_SCHEMA_TEMPLATE_DESCRIPTION__TEMPLATE);
+        EObject cell = list(list(area, "items").get(0), "cells").get(0); //$NON-NLS-1$ //$NON-NLS-2$
+        set(cell, "appIndex", Integer.valueOf(2)); //$NON-NLS-1$
         List<DcsReadProjection.Unmodellable> refused =
             DcsReadProjection.unmodellableNodes(schema, ROOT, DcsReplaceTestCatalogues.schema());
         boolean byName = false;
         for (DcsReadProjection.Unmodellable node : refused)
         {
-            byName |= (ROOT + "#/templates/TotalRow").equals(node.address()); //$NON-NLS-1$
+            byName |= (ROOT + "#/templates/TotalRow").equals(node.address()) //$NON-NLS-1$
+                && node.reason().contains("appearance index 2"); //$NON-NLS-1$
         }
         assertTrue(refused.toString(), byName);
         // ...and that address resolves to the template it names.
         assertContains(success(render(schema, ROOT + "#/templates/TotalRow", "schema")), //$NON-NLS-1$ //$NON-NLS-2$
             "| name | TotalRow |"); //$NON-NLS-1$
+        String guard = DcsMutationGuard.replaceError(schema, DcsAddress.parse(ROOT).address(),
+            DcsReplaceTestCatalogues.schema());
+        assertContains(guard, ROOT + "#/templates/TotalRow"); //$NON-NLS-1$
+        assertContains(guard, "body.cells"); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testRestatableTemplatesAndBindingsNoLongerBlockARootReplaceButFieldTemplatesDo()
+    {
+        DataCompositionSchema schema = templatedSchema();
+        assertTrue(DcsReadProjection.unmodellableNodes(schema, ROOT, DcsReplaceTestCatalogues.schema())
+            .toString(), DcsReadProjection.unmodellableNodes(schema, ROOT,
+                DcsReplaceTestCatalogues.schema()).isEmpty());
+        assertEquals(null, DcsMutationGuard.replaceError(schema, DcsAddress.parse(ROOT).address(),
+            DcsReplaceTestCatalogues.schema()));
+
+        schema.getFieldTemplates().add(DcsFactory.eINSTANCE.createDataCompositionSchemaFieldTemplate());
+        assertTrue(DcsMutationGuard.replaceError(schema, DcsAddress.parse(ROOT).address(),
+            DcsReplaceTestCatalogues.schema()) != null);
+    }
+
+    @Test
+    public void testTemplateReferencesAreFoundInAllFourCollections()
+    {
+        DataCompositionSchema schema = templatedSchema();
+        var field = DcsFactory.eINSTANCE.createDataCompositionSchemaFieldTemplate();
+        field.setTemplate("TotalRow"); //$NON-NLS-1$
+        schema.getFieldTemplates().add(field);
+        var total = DcsFactory.eINSTANCE.createDataCompositionSchemaTotalFieldsTemplate();
+        total.setTemplate("totalrow"); //$NON-NLS-1$
+        schema.getTotalFieldsTemplates().add(total);
+        assertEquals(List.of(ROOT + "#/fieldTemplates/0", ROOT + "#/groupHeaderTemplates/1", //$NON-NLS-1$ //$NON-NLS-2$
+            ROOT + "#/groupTemplates/0", ROOT + "#/totalFieldsTemplates/0"), //$NON-NLS-1$ //$NON-NLS-2$
+            sorted(DcsReadProjection.referenceAddressesAt(schema, ROOT, "template", "TotalRow"))); //$NON-NLS-1$ //$NON-NLS-2$
+        String refusal = DcsMutationGuard.referenceError(schema,
+            DcsAddress.parse(ROOT + "#/templates/TotalRow").address(), "template", "TotalRow"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertContains(refusal, ROOT + "#/groupHeaderTemplates/1"); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTemplatePagePrintsTheBodyTheWriterAccepts()
+    {
+        String markdown = success(render(templatedSchema(), ROOT + "#/templates/TotalRow", "schema")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertContains(markdown, "## Body\n"); //$NON-NLS-1$
+        assertContains(markdown, "\"name\": \"TotalRow\""); //$NON-NLS-1$
+        assertContains(markdown, "\"kind\": \"details\""); //$NON-NLS-1$
+        assertFalse(markdown, markdown.contains("Read-only")); //$NON-NLS-1$
+        String binding = success(render(templatedSchema(), ROOT + "#/groupTemplates/0", "schema")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertContains(binding, "\"template\": \"TotalRow\""); //$NON-NLS-1$
+        assertFalse(binding, binding.contains("Read-only")); //$NON-NLS-1$
+    }
+
+    private static List<String> sorted(List<String> values)
+    {
+        List<String> copy = new java.util.ArrayList<>(values);
+        java.util.Collections.sort(copy);
+        return copy;
     }
 
     @Test
