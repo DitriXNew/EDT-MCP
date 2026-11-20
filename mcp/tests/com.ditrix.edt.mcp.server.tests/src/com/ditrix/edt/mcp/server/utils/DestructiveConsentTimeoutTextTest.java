@@ -96,11 +96,11 @@ public class DestructiveConsentTimeoutTextTest
     @Test
     public void theTextDoesNotPromiseADialogALateSessionAllowanceWouldSkip()
     {
-        // A post-cutoff "Allow for session" can land after this text is built (#997 review): the
-        // promise of another dialog must carry that exception.
+        // An "Allow for session" can land after this text is built, in this dialog after the cutoff or
+        // in another request's (#997 review): the promise of another dialog must carry that exception.
         String message = timeout();
-        assertTrue(message, message.contains("unless the user pressed 'Allow for session' just after the wait ended")); //$NON-NLS-1$
-        assertTrue(message, message.contains("the repeat runs without one")); //$NON-NLS-1$
+        assertTrue(message, message.contains("unless '" + TOOL + "' is allowed for this EDT session before the repeat")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(message, message.contains("then it runs without one")); //$NON-NLS-1$
     }
 
     @Test

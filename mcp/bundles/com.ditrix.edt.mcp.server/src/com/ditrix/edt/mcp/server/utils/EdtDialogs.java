@@ -36,16 +36,19 @@ public class EdtDialogs
 {
     private static final EdtDialogs INSTANCE = new EdtDialogs();
     private static final String HUMAN_KEY = EdtDialogs.class.getName() + ".humanOnly";
+    private static final String CUTOFF_KEY = EdtDialogs.class.getName() + ".cutoffNanos";
     private static final Object HUMAN_IDENTITY = new Object();
     private static final String HUMAN_REASON = "ask the user to answer it in EDT";
     private static final String ACKNOWLEDGE_REASON = "informational: only OK can be pressed, which closes it";
     private static final long UI_TIMEOUT_MS = 500;
     private final AtomicReference<Display> installing = new AtomicReference<>();
     private final Map<Shell, Entry> entries = new IdentityHashMap<>();
-    private volatile List<JsonObject> snapshot = List.of();
+    private volatile List<Listed> snapshot = List.of();
     private volatile Display installedDisplay;
     private Runnable filterDisposable;
     private final java.util.function.Supplier<Display> displaySource;
+    /** The {@link System#nanoTime()} scale a {@link #answerableUntil} cutoff is on. */
+    private final java.util.function.LongSupplier clock;
 
     public EdtDialogs()
     {
@@ -54,14 +57,25 @@ public class EdtDialogs
 
     public EdtDialogs(java.util.function.Supplier<Display> displaySource)
     {
+        this(displaySource, System::nanoTime);
+    }
+
+    EdtDialogs(java.util.function.Supplier<Display> displaySource, java.util.function.LongSupplier clock)
+    {
         this.displaySource = displaySource;
+        this.clock = clock;
     }
 
     private static final class Entry
     {
         final String id = UUID.randomUUID().toString();
         JsonObject data;
+        /** The shell's {@link #answerableUntil} cutoff, or {@code null}. */
+        Long cutoffNanos;
     }
+
+    /** One published dialog: what is listed, and until when an answer to it still counts. */
+    private record Listed(JsonObject data, Long cutoffNanos) {}
 
     public static EdtDialogs getInstance()
     {
@@ -72,6 +86,21 @@ public class EdtDialogs
     public static void protect(Shell shell)
     {
         shell.setData(HUMAN_KEY, HUMAN_IDENTITY);
+    }
+
+    /**
+     * Called by the owner of a dialog whose answer stops counting at a known instant, before its shell
+     * becomes visible: the consent prompt, whose verdict is TIMEOUT from its cutoff on. From that instant
+     * the dialog leaves the open-dialog list and the notice of every response, and {@code edt_dialog}
+     * treats it as closed - also while its close still waits for the UI thread, which can be busy past
+     * the cutoff on either of the gate's paths - so nobody is told to answer a prompt that is decided.
+     *
+     * @param shell the dialog's shell (UI thread)
+     * @param cutoffNanos the {@link System#nanoTime()} at which an answer stops counting
+     */
+    public static void answerableUntil(Shell shell, long cutoffNanos)
+    {
+        shell.setData(CUTOFF_KEY, Long.valueOf(cutoffNanos));
     }
 
     public void ensureInstalled()
@@ -304,30 +333,50 @@ public class EdtDialogs
             data.addProperty("dialogId", entry.id);
         }
         entry.data = data;
+        entry.cutoffNanos = shell.getData(CUTOFF_KEY) instanceof Long cutoff ? cutoff : null;
         publish();
     }
 
     private void publish()
     {
         snapshot = entries.values().stream().filter(entry -> entry.data != null)
-            .map(entry -> entry.data).sorted((a, b) -> a.get("dialogId").getAsString()
-                .compareTo(b.get("dialogId").getAsString())).toList();
+            .map(entry -> new Listed(entry.data, entry.cutoffNanos))
+            .sorted((a, b) -> a.data().get("dialogId").getAsString()
+                .compareTo(b.data().get("dialogId").getAsString())).toList();
         synchronized (this)
         {
             notifyAll();
         }
     }
 
+    /**
+     * @param cutoffNanos a dialog's {@link #answerableUntil} cutoff, or {@code null}
+     * @return whether an answer to it no longer counts
+     */
+    private boolean pastCutoff(Long cutoffNanos)
+    {
+        return cutoffNanos != null && clock.getAsLong() - cutoffNanos.longValue() >= 0;
+    }
+
+    /**
+     * @return the published dialogs whose answer still counts, from any thread: one past its
+     *         {@link #answerableUntil} cutoff is decided, even while its shell waits to be closed
+     */
+    private List<JsonObject> undecided()
+    {
+        return snapshot.stream().filter(listed -> !pastCutoff(listed.cutoffNanos())).map(Listed::data).toList();
+    }
+
     public JsonArray cachedDialogs()
     {
         JsonArray result = new JsonArray();
-        snapshot.forEach(data -> result.add(data.deepCopy()));
+        undecided().forEach(data -> result.add(data.deepCopy()));
         return result;
     }
 
     public String notice()
     {
-        List<JsonObject> current = snapshot;
+        List<JsonObject> current = undecided();
         if (current.isEmpty())
         {
             return null;
@@ -384,7 +433,8 @@ public class EdtDialogs
     {
         Shell shell = entries.entrySet().stream().filter(e -> e.getValue().id.equals(dialogId))
             .map(Map.Entry::getKey).findFirst().orElse(null);
-        if (shell == null || !openModal(shell))
+        // Past its cutoff the dialog's question is decided and its close is queued: it has closed.
+        if (shell == null || !openModal(shell) || pastCutoff(entries.get(shell).cutoffNanos))
         {
             return ToolResult.error("Dialog '" + dialogId
                 + "' has closed or been replaced. Call edt_dialog with action=list again.").toJson();
@@ -454,7 +504,7 @@ public class EdtDialogs
             return new JsonArray();
         }
         long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs);
-        while (snapshot.isEmpty())
+        while (undecided().isEmpty())
         {
             long remaining = deadline - System.nanoTime();
             if (remaining <= 0)

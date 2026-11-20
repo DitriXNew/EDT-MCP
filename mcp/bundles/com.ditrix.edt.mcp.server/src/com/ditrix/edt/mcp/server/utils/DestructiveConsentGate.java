@@ -406,54 +406,48 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
             Integer used = TIMED_OUT_WAIT.get();
             TIMED_OUT_WAIT.remove();
             int waitSeconds = used != null ? used.intValue() : promptWaitSeconds();
-            // "Allow for session" pressed after the cutoff is still remembered (#277), so a repeat of
-            // the same call runs WITHOUT a dialog - the usual "the dialog opens again" would be false.
-            return INSTANCE.isSessionAllowed(toolName)
-                ? lateSessionAllowMessage(toolName, waitSeconds)
-                : timeoutMessage(toolName, waitSeconds);
+            return timeoutMessage(toolName, waitSeconds, INSTANCE.isSessionAllowed(toolName));
         }
         return "Operation declined by user"; //$NON-NLS-1$
     }
 
-    /**
-     * The {@link ConsentDecision#TIMEOUT} text when the user pressed "Allow for session" after the
-     * cutoff: this call stays refused, but the tool is now allowed for the session, so a repeat runs
-     * without a dialog and the caller must hear that instead of "the dialog opens again".
-     *
-     * @param toolName the gated tool's name
-     * @param waitSeconds the wait that elapsed, in seconds
-     * @return the message text
-     */
-    static String lateSessionAllowMessage(String toolName, int waitSeconds)
-    {
-        return "Destructive operation '" + toolName + "' was not confirmed within " + waitSeconds //$NON-NLS-1$ //$NON-NLS-2$
-            + " s, so this call was refused and nothing was changed. The user then chose 'Allow for " //$NON-NLS-1$
-            + "session' after the wait had ended, so repeating the same call now runs it WITHOUT a " //$NON-NLS-1$
-            + "dialog: repeat it only if the operation is still wanted."; //$NON-NLS-1$
-    }
+    /** The ways on that every {@link ConsentDecision#TIMEOUT} text ends with, up to the tool name. */
+    private static final String WAYS_ON_HEAD = "To proceed without the dialog: Preferences -> MCP Server -> " //$NON-NLS-1$
+        + "Destructive operations ('Allow all', or allow '"; //$NON-NLS-1$
 
     /**
      * The {@link ConsentDecision#TIMEOUT} text: nobody answered and nothing was applied - a click
      * after the timeout cannot apply the operation any more, because the timeout already won the
-     * {@link ConsentArbiter} and the dialog is closed or never opens - followed by the two ways on:
-     * repeat the call while the user watches EDT, or allow the tool without a dialog. Worded to be true
-     * also when the dialog never got to open because EDT's UI thread stayed busy for the whole wait.
+     * {@link ConsentArbiter} and the dialog is closed or never opens - then what repeating the call
+     * does, then the ways to proceed without the dialog. Worded to be true also when the dialog never
+     * got to open because EDT's UI thread stayed busy for the whole wait.
+     *
+     * <p>What a repeat does depends on the tool's "Allow for session" allowance, which belongs to the
+     * TOOL, not to a prompt: any dialog of that tool may have granted it - another request's, before
+     * this prompt's cutoff, as well as this one's, after it (#277 keeps a late press). So the text says
+     * only whether the tool is allowed for the session NOW, never when or in which dialog that
+     * happened; and while it is not, the promise of another dialog carries that exception.</p>
      *
      * @param toolName the gated tool's name
      * @param waitSeconds the wait that elapsed, in seconds
+     * @param sessionAllowed whether the tool is allowed for this EDT session when the text is built
      * @return the message text
      */
-    static String timeoutMessage(String toolName, int waitSeconds)
+    static String timeoutMessage(String toolName, int waitSeconds, boolean sessionAllowed)
     {
-        return "Destructive operation '" + toolName + "' was not confirmed within " + waitSeconds //$NON-NLS-1$ //$NON-NLS-2$
+        String head = "Destructive operation '" + toolName + "' was not confirmed within " + waitSeconds //$NON-NLS-1$ //$NON-NLS-2$
             + " s: nobody answered the confirmation dialog in EDT, so the call was refused, the dialog " //$NON-NLS-1$
-            + "does not stay open, and nothing was changed. " //$NON-NLS-1$
-            + "Ask the user to watch the EDT window, then repeat the same call - the dialog opens " //$NON-NLS-1$
-            + "again (unless the user pressed 'Allow for session' just after the wait ended: then the " //$NON-NLS-1$
-            + "repeat runs without one, so repeat only if the operation is still wanted). " //$NON-NLS-1$
-            + "To proceed without the dialog: Preferences -> MCP Server -> Destructive " //$NON-NLS-1$
-            + "operations ('Allow all', or allow '" + toolName + "' per tool), or " //$NON-NLS-1$ //$NON-NLS-2$
-            + ENV_DESTRUCTIVE_CONSENT + "=allow on the EDT process at launch. The wait itself is " //$NON-NLS-1$
+            + "does not stay open, and nothing was changed. "; //$NON-NLS-1$
+        String repeat = sessionAllowed
+            ? "'" + toolName + "' is allowed for this EDT session ('Allow for session'), so repeating the " //$NON-NLS-1$ //$NON-NLS-2$
+                + "same call now runs it WITHOUT a dialog: repeat it only if the operation is still wanted. " //$NON-NLS-1$
+            : "Ask the user to watch the EDT window, then repeat the same call - the dialog opens again " //$NON-NLS-1$
+                + "unless '" + toolName + "' is allowed for this EDT session before the repeat ('Allow for " //$NON-NLS-1$ //$NON-NLS-2$
+                + "session' in any of its dialogs): then it runs without one, so repeat only if the " //$NON-NLS-1$
+                + "operation is still wanted. "; //$NON-NLS-1$
+        return head + repeat + WAYS_ON_HEAD
+            + toolName + "' per tool), or " + ENV_DESTRUCTIVE_CONSENT //$NON-NLS-1$
+            + "=allow on the EDT process at launch. The wait itself is " //$NON-NLS-1$
             + "'Confirmation wait' on the same page; keep it below your MCP client's request timeout."; //$NON-NLS-1$
     }
 
@@ -595,6 +589,8 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
         ConsentArbiter arbiter = ConsentArbiter.until(deadlineNanos);
         DestructiveConsentDialog dialog = new DestructiveConsentDialog(shell, toolName, preview,
             remainingSeconds(deadlineNanos, System.nanoTime()));
+        // Past the cutoff the open-dialog list drops the dialog, even while a busy UI thread delays the closer.
+        dialog.setCutoffNanos(deadlineNanos);
         // The closer is tied to the arbiter's absolute cutoff, not to a delay counted from when it was
         // scheduled: it re-reads the time left and re-arms itself in short slices until the cutoff, so a
         // UI thread that stalled after scheduling does not keep the dialog open past it.
@@ -679,6 +675,8 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
                 return;
             }
             DestructiveConsentDialog dialog = new DestructiveConsentDialog(shell, toolName, preview, secondsLeft);
+            // Past the cutoff the open-dialog list drops the dialog, before the queued close runs.
+            dialog.setCutoffNanos(deadlineNanos);
             // create() BEFORE open() so dialogRef is populated before open()'s blocking nested event
             // loop starts — a close request queued while that loop is pumping is what lets the
             // worker's timeout close the shell (see closeDialogIfOpen).
@@ -801,6 +799,11 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
      * {@link #closeOnUiThread(DestructiveConsentDialog)}. Never throws — a workbench
      * shutdown racing this close is not a reason to fail the timeout verdict that
      * already won.
+     *
+     * <p>The close only runs when the UI thread gets to it, while this call's TIMEOUT response - and
+     * the response of any call made meanwhile - is assembled at once and carries the open-dialog
+     * notice. The dialog is out of that notice already: its shell carries the prompt's cutoff
+     * ({@link DestructiveConsentDialog#setCutoffNanos}), past which {@link EdtDialogs} no longer lists it.</p>
      *
      * @param display the workbench display
      * @param dialog the dialog instance captured by {@link #promptWithTimeout}, or

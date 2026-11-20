@@ -50,6 +50,8 @@ public class DestructiveConsentDialog extends Dialog
     private final int waitSeconds;
     /** When a button was pressed ({@link System#nanoTime()}); empty until then. UI thread only. */
     private OptionalLong answeredAtNanos = OptionalLong.empty();
+    /** The prompt's cutoff ({@link System#nanoTime()}); empty when the owner set none. */
+    private OptionalLong cutoffNanos = OptionalLong.empty();
     private AnswerListener answerListener;
 
     /** Told of a button press at the press, before the dialog closes. */
@@ -84,8 +86,34 @@ public class DestructiveConsentDialog extends Dialog
     protected void configureShell(Shell newShell)
     {
         super.configureShell(newShell);
-        com.ditrix.edt.mcp.server.utils.EdtDialogs.protect(newShell);
+        mark(newShell, cutoffNanos);
         newShell.setText("Confirm destructive operation"); //$NON-NLS-1$
+    }
+
+    /**
+     * What the open-dialog list needs to know about this dialog's shell before it shows: only the user
+     * may answer it, and from the prompt's cutoff on an answer no longer counts.
+     *
+     * @param shell the dialog's shell
+     * @param cutoffNanos the prompt's cutoff, or empty
+     */
+    static void mark(Shell shell, OptionalLong cutoffNanos)
+    {
+        com.ditrix.edt.mcp.server.utils.EdtDialogs.protect(shell);
+        if (cutoffNanos.isPresent())
+        {
+            com.ditrix.edt.mcp.server.utils.EdtDialogs.answerableUntil(shell, cutoffNanos.getAsLong());
+        }
+    }
+
+    /**
+     * Sets the prompt's cutoff; call before the dialog is created.
+     *
+     * @param cutoff the {@link System#nanoTime()} at which the gate stops accepting an answer
+     */
+    public void setCutoffNanos(long cutoff)
+    {
+        cutoffNanos = OptionalLong.of(cutoff);
     }
 
     @Override

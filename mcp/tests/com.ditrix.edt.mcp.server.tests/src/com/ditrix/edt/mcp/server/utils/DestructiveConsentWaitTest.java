@@ -108,7 +108,7 @@ public class DestructiveConsentWaitTest
     @Test
     public void theTimeoutTextNamesTheWaitThatElapsed()
     {
-        String message = DestructiveConsentGate.timeoutMessage("delete_metadata", 17); //$NON-NLS-1$
+        String message = DestructiveConsentGate.timeoutMessage("delete_metadata", 17, false); //$NON-NLS-1$
         assertTrue(message, message.startsWith(
             "Destructive operation 'delete_metadata' was not confirmed within 17 s: ")); //$NON-NLS-1$
     }
