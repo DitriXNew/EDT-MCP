@@ -33,7 +33,8 @@ resolve the query sources or use explicit fields/parameters with auto-fill disab
 Nested data sets are deliberately excluded from the typed authoring surface. `get` renders
 existing ones and their addresses read-only; carry a schema containing them through the lossless
 XML channel below (`action='replace'`, `type='schema'`, `body={xml:...}` on a bare schema root),
-which preserves them untouched. A chart's appearance values nested under its `ChartType` output
+which preserves them untouched. Field and resource templates (`fieldTemplates`,
+`totalFieldsTemplates`) and the templates of nested schemas are XML-only in the same way. A chart's appearance values nested under its `ChartType` output
 parameter (label type, legend, axes and the like) are not authorable either: an update keeps them,
 and a `replace` that would drop them is refused. A `replace` is also refused when it would drop a
 value its writer cannot restate, in settings data parameters and output parameters (including
@@ -230,7 +231,8 @@ and a `Drawn` column, `no` when it, its chart, or a group or folder above it is 
 Area templates (`#/templates/<name>`, or `#/templates/<index>` when the name is empty, shared or
 numeric) and their grouping bindings (`#/groupTemplates/<i>`, `#/groupHeaderTemplates/<i>`) are
 counted in the root summary and read with `type='schema'`; a template page summarises its body,
-parameters and bindings. They are read-only: change them through the lossless XML channel below.
+parameters and bindings and prints its `## Body`. They are written with `type='schema'` too; see
+"Area templates and grouping bindings" below.
 
 If a segment cannot be resolved, the error names that segment and lists the keys or
 indices that exist at its parent. Copy one of the listed values or read the parent
@@ -366,7 +368,7 @@ ValueTypeSpec = {"types":[{"kind":"String","length"?:int,"fixed"?:bool} | {"kind
 
 | `type` | Target / body shape |
 | --- | --- |
-| `schema` | Root schema: `{dataSources?, dataSets?, dataSetLinks?, calculatedFields?, totalFields?, parameters?, defaultSettings?, variants?}`. A link is `{sourceDataSet, destinationDataSet, sourceExpression, destinationExpression, parameter?, parameterListAllowed?, linkConditionExpression?, startExpression?, required?}`; supplying `parameterListAllowed` sets the model's unsettable feature. The legacy alias `linkCondition` is accepted, but reads use the canonical `linkConditionExpression`. Links have no natural key, so they are addressed by index (`#/dataSetLinks/<i>`) and read under this same `type="schema"`. For a lossless bare-root replacement, use only `{xml:"<DataCompositionSchema ...>..."}`. Structured `replace` is authoritative and will refuse unsupported designer content rather than drop it. |
+| `schema` | Root schema: `{dataSources?, dataSets?, dataSetLinks?, calculatedFields?, totalFields?, parameters?, templates?, groupTemplates?, groupHeaderTemplates?, defaultSettings?, variants?}`; the template members are described under "Area templates and grouping bindings". A link is `{sourceDataSet, destinationDataSet, sourceExpression, destinationExpression, parameter?, parameterListAllowed?, linkConditionExpression?, startExpression?, required?}`; supplying `parameterListAllowed` sets the model's unsettable feature. The legacy alias `linkCondition` is accepted, but reads use the canonical `linkConditionExpression`. Links have no natural key, so they are addressed by index (`#/dataSetLinks/<i>`) and read under this same `type="schema"`. For a lossless bare-root replacement, use only `{xml:"<DataCompositionSchema ...>..."}`. Structured `replace` is authoritative and will refuse unsupported designer content rather than drop it. |
 | `dynamicList` | Dynamic-list ext-info: `{queryText?, mainTable?, dynamicDataRead?, autoFillAvailableFields?, customQuery?, autoSaveUserSettings?, getInvisibleFieldPresentations?, keyType?, keyField?, fields?, calculatedFields?, parameters?, listSettings?}`. Existing dynamic-list conversion safety gates still apply. |
 | `dataSource` | `{name, type?}`; natural key is `name`; `type` defaults to `"Local"`. |
 | `dataSet` | Query data set: `{name, type:"query", dataSource?, query?, autoFillFields?, fields?}`; natural key is `name`. Creating one requires `query`; an existing node may omit it. Object data set: `{name, type:"object", objectName}`. Union data set: `{name, type:"union", items:[...nested data sets]}`. Field entries may declare `kind:"field"` (the default) or `kind:"folder"`; a folder's `fields` recursively carries its children. Every child keeps its full dotted `dataPath`. An exact `replace` may declare a different `type` to change the subtype in place; omitting `type` keeps the existing one. |
@@ -404,6 +406,51 @@ body and either the root/collection address (`upsert`) or exact returned node ad
 Enum values are platform literals such as `Equal`, `AndGroup`, `Asc`, `Items`, and
 `Normal`. An invalid comparison, order direction, grouping kind, or similar token is
 rejected; the error names the bad value and lists every allowed platform literal.
+
+### Area templates and grouping bindings
+
+Write them with `type='schema'` at the addresses the read prints, or as the root-body members
+`templates`, `groupTemplates` and `groupHeaderTemplates` (one call can create a template and bind it).
+
+- Template: `{name, rows?:[{cells:[Cell]}], cells?:[{row, col, ...Cell}], parameters?:[Param]}`.
+  `rows` and `parameters` replace the stored list. `cells` patches single stored cells by their
+  zero-based position and needs `expectedHash`; `rows` and `cells` exclude each other.
+- Cell: `{text?:PresentationSpec | parameter?:"<template parameter>" | items?:[Field], appearance?}`;
+  Field: `{text | parameter, appearance?}` (EDT stores no other value in a template field; a template
+  parameter's expression computes it). In a `cells` patch, content members replace that cell's
+  fields and `appearance` merges key by key; the rest of the cell is kept.
+- Appearance: the conditional-appearance appearance body (keyed map or `{items:[...]}`, schema
+  catalogue, English or Russian keys, written in the configuration's spelling) plus three
+  template-only keys: `HorizontalMerge` and `VerticalMerge` (boolean) and `Details` (the name of
+  the template parameter that carries the cell's details).
+- Param: `{name, expression}` or `{name, kind:"details", fieldExpression?:[{field, expression}], mainAction?}`;
+  `mainAction` is `None`, `DrillDown`, `Filter`, `Order`, `Group`, `OpenValue` or `ApplyAppearance`.
+- Binding: `{groupName | groupFields:[dataPath], templateType?, template}`; `templateType` is `Header`
+  (default), `Footer`, `HierarchicalHeader`, `HierarchicalFooter`, `OverallHeader` or `OverallFooter`.
+  A non-empty `groupName` clears `groupFields` and vice versa. `upsert` at a binding collection, or in
+  the root body, updates the binding with the same grouping and `templateType` instead of adding one.
+
+`upsert` at `#/templates` or in the root body creates or finds a template by name; a name must be
+unique (case-insensitive) and not a number. `update` at `#/templates/<name>` may carry a new `name`.
+A binding must name an existing template spelled exactly (EDT resolves it case-sensitively), and a
+template that a binding, field template or resource template names cannot be removed or renamed. A
+root body names each template, and binds each grouping and `templateType`, once. An unknown
+grouping name and a cell parameter the
+template does not declare only produce warnings, because EDT checks neither. Send the node page's
+`## Body` back with `replace` to restate the node. `replace`, and `rows`/`parameters` in an update,
+are refused when the stored part holds a value this writer cannot rebuild exactly (another spelling
+or an old alias of an appearance key, a runtime appearance index, a settings parameter value, a
+`groupID`); a `cells` patch keeps such values. A structured root `replace` clears the templates and
+bindings its body omits.
+
+```json
+{"projectName":"P","fqn":"Report.Sales","action":"upsert","type":"schema","body":{
+ "templates":[{"name":"Totals","rows":[{"cells":[{"text":"Total"},{"parameter":"Amount"}]}],
+  "parameters":[{"name":"Amount","expression":"Amount"}]}],
+ "groupTemplates":[{"groupName":"Customer","templateType":"Footer","template":"Totals"}]}}
+{"projectName":"P","fqn":"Report.Sales#/templates/Totals","action":"update","type":"schema",
+ "expectedHash":"<hash from get>","body":{"cells":[{"row":0,"col":1,"appearance":{"HorizontalAlign":"Right"}}]}}
+```
 
 ### Settings examples
 
