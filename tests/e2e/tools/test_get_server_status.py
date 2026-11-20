@@ -9,7 +9,9 @@ r.text — for a JSON tool r.text is just the placeholder/content text).
 It returns a fixed snapshot of the running server:
   port, running, transports { http, ipc }, protocolVersion, pluginVersion, edtVersion,
   enabledTools, totalTools, plainTextMode, checksFolderConfigured, authEnabled,
-  formRenderFlags { nativeFormLayoutRender, nativeFormBufferedLayoutRender }.
+  formRenderFlags { nativeFormLayoutRender, nativeFormBufferedLayoutRender },
+  activeCalls [ {tool, projectName?, startedAtMs, elapsedMs, responseSent?} ] and
+  runningJobs [ {jobId, tool, startedAtMs, elapsedMs} ] (#993: what is running now).
 
 Stable, code-anchored expectations (from the real impl, verified against source):
   - protocolVersion == McpConstants.PROTOCOL_VERSION == "2025-11-25"
@@ -40,8 +42,14 @@ Every test ends with assert_no_diff(): a read/diagnosis tool must never mutate
 the project on disk.
 """
 
+import json
+import threading
+import time
+import urllib.request
+
+import harness
 from harness import (
-    call, assert_ok, assert_no_diff, e2e_test,
+    call, assert_ok, assert_no_diff, e2e_test, PROJECT,
 )
 
 # Code-anchored constant from McpConstants.PROTOCOL_VERSION; if the server spoke a
@@ -192,3 +200,113 @@ def test_ignores_unexpected_argument_gracefully():
             % (EXPECTED_PROTOCOL_VERSION, s.get("protocolVersion")))
 
     assert_no_diff("an ignored-arg call must not touch the project on disk")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Running work (#993): a call that is still executing is visible to a second request
+# ──────────────────────────────────────────────────────────────────────────────
+
+# wait_for_break with an applicationId no session can have blocks for exactly its `timeout`
+# and then answers {hit:false, reason:"timeout"} (see test_wait_for_break.py): a call whose
+# duration is set by the test, not by the stand's load, and that touches no model.
+SLOW_TOOL = "wait_for_break"
+SLOW_SECONDS = 8
+NO_SUCH_APP = "attach:NoSuchApp_ZZZ_e2e993"
+
+
+def _post_on_this_session(request_id, tool, arguments):
+    """A tools/call on the harness's session, sent from a background thread. harness._post keeps
+    a global request counter, so the thread sends its own envelope with its own id instead."""
+    body = json.dumps({"jsonrpc": "2.0", "id": request_id, "method": "tools/call",
+                       "params": {"name": tool, "arguments": arguments}}).encode("utf-8")
+    headers = {
+        "Content-Type": "application/json; charset=utf-8",
+        "Accept": "application/json, text/event-stream",
+        "MCP-Protocol-Version": harness.PROTOCOL_VERSION,
+    }
+    if harness._SESSION_ID:
+        headers["Mcp-Session-Id"] = harness._SESSION_ID
+    req = urllib.request.Request(harness.MCP_URL, data=body, headers=headers)
+    with urllib.request.urlopen(req, timeout=harness.CALL_TIMEOUT) as resp:
+        return resp.read().decode("utf-8", "replace")
+
+
+def _entries(snapshot, tool):
+    return [c for c in (snapshot.get("activeCalls") or []) if c.get("tool") == tool]
+
+
+@e2e_test(tool="get_server_status", kind="read")
+def test_lists_a_running_call_of_another_request_and_drops_it_once_answered():
+    """A call still executing is listed by get_server_status asked on another request, with its
+    tool, its projectName argument and a growing elapsedMs; the asking call itself is not listed;
+    once the slow call has answered its entry is gone. The registry keeps the projectName argument
+    of ANY call (wait_for_break ignores it), so the test passes one to see it reported - and an
+    applicationId value it must NOT report."""
+    outcome = {}
+
+    def slow():
+        try:
+            outcome["response"] = _post_on_this_session(
+                993001, SLOW_TOOL,
+                {"applicationId": NO_SUCH_APP, "timeout": SLOW_SECONDS, "projectName": PROJECT})
+        except Exception as e:  # reported by the main thread
+            outcome["error"] = e
+
+    worker = threading.Thread(target=slow, name="e2e-993-slow-call", daemon=True)
+    started = time.time()
+    worker.start()
+    seen = None
+    last = None
+    try:
+        # Poll, never sleep for a fixed time: the entry must appear while the slow call runs.
+        while time.time() - started < SLOW_SECONDS - 1 and worker.is_alive():
+            r = call("get_server_status", {})
+            assert_ok(r, "get_server_status while another call runs")
+            last = r.structured or {}
+            if "activeCalls" not in last:
+                raise AssertionError(
+                    "get_server_status must report activeCalls (the calls running now); keys=%r"
+                    % sorted(last))
+            if any(c.get("tool") == "get_server_status" for c in last["activeCalls"]):
+                raise AssertionError(
+                    "the asking get_server_status call must not list itself: %r"
+                    % (last["activeCalls"],))
+            found = _entries(last, SLOW_TOOL)
+            if found and found[0].get("elapsedMs", 0) > 0:
+                seen = found[0]
+                break
+            time.sleep(0.2)
+    finally:
+        worker.join(SLOW_SECONDS + harness.CALL_TIMEOUT)
+
+    if "error" in outcome:
+        raise AssertionError("the slow %s call failed: %r" % (SLOW_TOOL, outcome["error"]))
+    if seen is None:
+        raise AssertionError(
+            "a running %s call was never listed in activeCalls within %ss; last snapshot=%r"
+            % (SLOW_TOOL, SLOW_SECONDS, last))
+    if seen.get("projectName") != PROJECT:
+        raise AssertionError("the entry must carry the call's projectName %r: %r" % (PROJECT, seen))
+    if not isinstance(seen.get("startedAtMs"), int) or abs(seen["startedAtMs"] / 1000.0 - started) > 60:
+        raise AssertionError("startedAtMs must be the call's epoch start in ms: %r" % (seen,))
+    if "responseSent" in seen:
+        raise AssertionError("nobody interrupted the call, so no responseSent: %r" % (seen,))
+    if NO_SUCH_APP in json.dumps(seen, ensure_ascii=False):
+        raise AssertionError("an argument other than projectName must never be reported: %r" % (seen,))
+    if not isinstance(last.get("runningJobs"), list):
+        raise AssertionError("runningJobs must always be present as an array: %r" % (last,))
+
+    # The reply may arrive as an SSE frame (the request accepts text/event-stream): parse it like the harness.
+    answered = harness.Result(harness._parse_response(outcome["response"]))
+    assert_ok(answered, "the slow call itself must succeed with its timeout status")
+    if (answered.structured or {}).get("reason") != "timeout":
+        raise AssertionError("the slow call must answer reason=timeout: %r" % (answered.structured,))
+
+    # The entry is removed before the response is built, so the first look after the answer is final.
+    after = call("get_server_status", {})
+    assert_ok(after, "get_server_status after the slow call answered")
+    if _entries(after.structured or {}, SLOW_TOOL):
+        raise AssertionError(
+            "an answered call must no longer be listed: %r" % ((after.structured or {}).get("activeCalls"),))
+
+    assert_no_diff("listing running calls must not touch the project on disk")

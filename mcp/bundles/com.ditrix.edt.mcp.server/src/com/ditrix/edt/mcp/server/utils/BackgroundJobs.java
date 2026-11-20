@@ -865,6 +865,32 @@ public final class BackgroundJobs implements AutoCloseable
     }
 
     /**
+     * The jobs whose status is {@link Status#RUNNING}, oldest first (admission order). The records
+     * are collected under the registry lock and snapshotted outside it, as {@link #get} does, so a
+     * reader never holds the registry while it waits on a record.
+     *
+     * @return snapshots of the running jobs; never {@code null}
+     */
+    public List<JobSnapshot> running()
+    {
+        List<JobRecord> records;
+        synchronized (jobsLock)
+        {
+            records = new ArrayList<>(jobs.values());
+        }
+        List<JobSnapshot> running = new ArrayList<>();
+        for (JobRecord record : records)
+        {
+            JobSnapshot snapshot = record.snapshot();
+            if (snapshot.getStatus() == Status.RUNNING)
+            {
+                running.add(snapshot);
+            }
+        }
+        return running;
+    }
+
+    /**
      * Waits at most the caller-provided budget for a job to become terminal.
      *
      * @param jobId job identifier

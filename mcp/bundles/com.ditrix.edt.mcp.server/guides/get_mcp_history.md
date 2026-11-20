@@ -57,3 +57,4 @@ With `includeBodies: true` the returned bodies contain **whatever the recorded t
 - Read-only: a snapshot only — never opens a session, never touches the model, never mutates the ring or the history view.
 - An empty `records` with `recording: false` means recording is off, not that nothing happened — enable it in Preferences.
 - This tool records itself: a later call will show the earlier `get_mcp_history` exchange in the history.
+- A call appears here when it has answered; a running one is in `get_server_status.activeCalls`.

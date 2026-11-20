@@ -132,12 +132,13 @@ public class RefactoringEntryBoundaryTest
             });
             Method rename = MetadataRenameService.class.getDeclaredMethod("renameFormMember",
                 org.eclipse.core.resources.IProject.class,
-                com._1c.g5.v8.dt.metadata.mdclass.Configuration.class, String.class, String.class,
+                com.ditrix.edt.mcp.server.utils.MetadataScope.class, String.class, String.class,
                 boolean.class, DisableRequest.class, String.class, int.class,
                 RenameProgress.class, FormElementWriter.FormMemberRef.class);
             String fqn = "CommonForm.BoundaryForm.Group.Before";
             String result = (String)invoke(rename, new MetadataRenameService(), fixture.project(),
-                fixture.config, fqn, "After", false, null, null, 0, null, FormElementWriter.parse(fqn));
+                com.ditrix.edt.mcp.server.utils.MetadataScope.ofConfiguration(fixture.config), fqn, "After", false,
+                null, null, 0, null, FormElementWriter.parse(fqn));
             assertEquals(1, entries[0]);
             assertTrue(result, result.contains(fqn));
             assertTrue(result, result.contains("Nothing was renamed"));
