@@ -395,7 +395,8 @@ public class RenameMetadataObjectTool implements IMcpTool
                 "EDT project name.", true) //$NON-NLS-1$
             .stringProperty(KEY_OBJECT_FQN,
                 "FQN of the rename target: an object ('Catalog.Products'), a member " + //$NON-NLS-1$
-                "('Document.SalesOrder.Attribute.Amount'), a predefined item " + //$NON-NLS-1$
+                "('Document.SalesOrder.Attribute.Amount', 'DataProcessor.Import.Command.Open', " + //$NON-NLS-1$
+                "'Catalog.Products.Form.ItemForm'), a predefined item " + //$NON-NLS-1$
                 "('Catalog.Units.Predefined.Piece'), or a managed-form element " + //$NON-NLS-1$
                 "('Catalog.Products.Form.ItemForm.Field.Price', " + //$NON-NLS-1$
                 "'CommonForm.Settings.Group.Main', " + //$NON-NLS-1$
@@ -506,6 +507,13 @@ public class RenameMetadataObjectTool implements IMcpTool
         {
             return ToolResult.error(badName).toJson();
         }
+        // The same holds for an address with an empty or padded segment: it can never resolve, so it is
+        // refused here rather than behind the settle or in a preview job slot (the service checks too).
+        String malformedAddress = MetadataRenameService.malformedAddressRefusal(MetadataTypeUtils.normalizeFqn(objectFqn));
+        if (malformedAddress != null)
+        {
+            return ToolResult.error(malformedAddress).toJson();
+        }
 
         // Same place and the same reason as the name check above: an entry that cannot be an index
         // under ANY tree is a defect of the REQUEST, and no amount of waiting or project state can
@@ -557,10 +565,15 @@ public class RenameMetadataObjectTool implements IMcpTool
             if (HostKind.current() == HostKind.HEADLESS && progress.getPhase() == RenameProgress.Phase.APPLIED)
             {
                 // Native rename exports the object; explicitly export its registering root before answering.
+                // An external-objects project has no Configuration: its root object is the top object.
+                com.ditrix.edt.mcp.server.utils.MetadataScope externalRoot = externalObjectsScope(projectName);
+                boolean externalObjects = externalRoot != null;
+                String exportFqn = headlessExportFqn(objectFqn, newName, externalObjects,
+                    top -> storedTopFqn(projectName, externalRoot, top));
                 WriteScope scope = new WriteScope();
                 AtomicBoolean queued = new AtomicBoolean();
                 WriteScope.runWithScope(scope, () -> queued.set(BmTransactions.forceExportToDisk(
-                    ProjectContext.of(projectName).project(), "Configuration")));
+                    ProjectContext.of(projectName).project(), exportFqn)));
                 WriteExportBarrier.Outcome export = queued.get()
                     ? WriteExportBarrier.await(scope, WriteExportBarrier.DEADLINE_MS, WriteExportBarrier.PLATFORM)
                     : new WriteExportBarrier.Outcome(false, null);
@@ -568,7 +581,7 @@ public class RenameMetadataObjectTool implements IMcpTool
                     return WriteExportBarrier.notConfirmedAfterMutation(projectName, export.pendingProject() != null
                         ? BuildUtils.DiskExportState.PENDING : BuildUtils.DiskExportState.UNOBSERVABLE);
                 return withAutoBuildNote(finishHeadlessRename(projectName, objectFqn, newName, renamed,
-                    queued.get(), export.drained()), BuildUtils.isAutoBuilding());
+                    queued.get(), export.drained(), externalObjects), BuildUtils.isAutoBuilding());
             }
             return withAutoBuildNote(renamed, BuildUtils.isAutoBuilding());
         };
@@ -676,6 +689,77 @@ public class RenameMetadataObjectTool implements IMcpTool
     static String finishHeadlessRename(String projectName, String oldFqn, String newName, String result,
         boolean queued, boolean drained)
     {
+        return finishHeadlessRename(projectName, oldFqn, newName, result, queued, drained, false);
+    }
+
+    /**
+     * Whether {@code projectName} is an external data processors/reports project: it has no
+     * {@code Configuration}, so a headless rename there exports and confirms its own root object instead.
+     */
+    static com.ditrix.edt.mcp.server.utils.MetadataScope externalObjectsScope(String projectName)
+    {
+        ProjectContext.ConfigurationResult root = ProjectContext.resolveMetadataRoot(projectName);
+        return root.ok() && root.scope() != null && root.scope().isExternalObjects() ? root.scope() : null;
+    }
+
+    /**
+     * The stored BM FQN of the external root {@code top} ({@code Type.Name}) names: the address resolves its
+     * Name ignoring case, BM's top-object lookup does not, so the export must use the Name as stored.
+     * Falls back to {@code top} when the root does not resolve.
+     */
+    private static String storedTopFqn(String projectName,
+        com.ditrix.edt.mcp.server.utils.MetadataScope scope, String top)
+    {
+        String[] parts = top.split("\\.", 2); //$NON-NLS-1$
+        if (parts.length != 2)
+        {
+            return top;
+        }
+        String stored = ReadToolExecution.readOnHost(ProjectContext.of(projectName).project(),
+            "Resolve the renamed external root", () -> { //$NON-NLS-1$
+                com._1c.g5.v8.dt.metadata.mdclass.MdObject root = scope.findObject(parts[0], parts[1]);
+                return root instanceof com._1c.g5.v8.bm.core.IBmObject bm && bm.bmIsTop() ? bm.bmGetFqn() : null;
+            });
+        return stored == null ? top : stored;
+    }
+
+    /**
+     * The top object a headless rename exports before answering: the {@code Configuration} that registers
+     * a configuration's objects, or - in an external-objects project, which has none - the root object the
+     * renamed target belongs to, under its NEW name when the root itself was renamed (issue #994).
+     *
+     * @param objectFqn the rename target as the caller addressed it
+     * @param newName the new Name
+     * @param externalObjects whether the project is an external-objects one
+     * @param storedTop maps a member's root {@code Type.Name} as addressed to the root's stored FQN (the
+     *     address matches the Name ignoring case, the BM lookup of the export does not)
+     * @return the FQN of the top object to export
+     */
+    static String headlessExportFqn(String objectFqn, String newName, boolean externalObjects,
+        java.util.function.UnaryOperator<String> storedTop)
+    {
+        if (!externalObjects)
+        {
+            return "Configuration"; //$NON-NLS-1$
+        }
+        String[] parts = MetadataTypeUtils.toCanonicalEnglishFqn(objectFqn).split("\\."); //$NON-NLS-1$
+        // A renamed root carries the new Name exactly as given; a member's root keeps its stored Name.
+        return parts.length == 2 ? parts[0] + "." + newName : storedTop.apply(parts[0] + "." + parts[1]); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * {@link #finishHeadlessRename(String, String, String, String, boolean, boolean)} for either kind of
+     * project: in an external-objects project there is no {@code Configuration.mdo} registration to
+     * confirm, so the drained export of the root object is the confirmation.
+     */
+    static String finishHeadlessRename(String projectName, String oldFqn, String newName, String result,
+        boolean queued, boolean drained, boolean externalObjects)
+    {
+        if (externalObjects)
+        {
+            return queued && drained ? result
+                : WriteExportBarrier.notConfirmedAfterMutation(projectName, BuildUtils.DiskExportState.UNOBSERVABLE);
+        }
         if (queued && !drained)
             return WriteExportBarrier.notConfirmedAfterMutation(projectName, BuildUtils.DiskExportState.UNOBSERVABLE);
         String canonical = MetadataTypeUtils.toCanonicalEnglishFqn(oldFqn);

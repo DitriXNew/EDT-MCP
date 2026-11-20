@@ -134,6 +134,24 @@ public class GeneralTabTest
         assertFalse(store.getBoolean(PreferenceConstants.PREF_HTTP_ENABLED));
     }
 
+    /** Issue #997: the confirmation wait is a bounded spinner that Apply saves and Restore Defaults resets. */
+    @Test
+    public void confirmationWaitIsBoundedSavedAndRestored() throws Exception
+    {
+        Spinner wait = field("consentWaitSpinner", Spinner.class);
+        assertEquals(45, wait.getSelection());
+        assertEquals(15, wait.getMinimum());
+        assertEquals(600, wait.getMaximum());
+        assertEquals(Messages.GeneralTab_ConsentWait_Tooltip, wait.getToolTipText());
+        wait.setSelection(90);
+        tab.performOk();
+        assertEquals(90, ConsentSettingsService.getInstance().getPromptWaitSeconds());
+        tab.performDefaults();
+        assertEquals(45, wait.getSelection());
+        assertEquals("Restore Defaults alone does not save", 90, store.getInt( //$NON-NLS-1$
+            PreferenceConstants.PREF_DESTRUCTIVE_CONSENT_WAIT_SECONDS));
+    }
+
     @Test
     public void applyingOffStopsHttpAndApplyingOnStartsOnlyWithAutoStart() throws Exception
     {

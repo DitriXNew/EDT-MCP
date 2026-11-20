@@ -761,9 +761,8 @@ def test_nonexistent_object_errors_and_is_actionable():
         "confirm": True,  # even with confirm, an unresolved object must error, not mutate
     })
     err = assert_error(r, "rename of a non-existent object")
-    # MetadataRenameService: "Object not found: <fqn>. Check the FQN format ...
-    # Supported child types: Attribute, TabularSection, Dimension, Resource."
-    # Names the bad value AND is actionable (states the expected format + child types).
+    # MetadataRenameService.notFoundMessage: "Object not found: <fqn>. Check the FQN format ..."
+    # Names the bad value AND is actionable (states the accepted address shapes).
     assert_error_quality(err, names=[bad], suggests=["not found", "format"],
                          ctx="non-existent object names value + states FQN format")
     assert_no_diff("a rejected rename must not change the project on disk")
@@ -771,7 +770,7 @@ def test_nonexistent_object_errors_and_is_actionable():
 
 @e2e_test(tool="rename_metadata_object", kind="write-metadata")
 def test_malformed_fqn_without_dot_errors():
-    # No "Type.Name" separator -> resolveObject returns null -> "Object not found".
+    # No "Type.Name" separator -> resolveTarget returns null -> "Object not found".
     bad = "JustAName"
     r = rename_call({
         "projectName": PROJECT,
@@ -786,8 +785,8 @@ def test_malformed_fqn_without_dot_errors():
 
 @e2e_test(tool="rename_metadata_object", kind="write-metadata")
 def test_nonexistent_child_attribute_errors():
-    # Top-level resolves but the nested Attribute does not -> findChild returns null
-    # -> resolveObject null -> "Object not found".
+    # Top-level resolves but the nested Attribute does not -> resolveTarget returns null
+    # -> "Object not found" (naming the owner's member kinds).
     bad = "Catalog.Catalog.Attribute.NoSuchAttr_e2e"
     r = rename_call({
         "projectName": PROJECT,

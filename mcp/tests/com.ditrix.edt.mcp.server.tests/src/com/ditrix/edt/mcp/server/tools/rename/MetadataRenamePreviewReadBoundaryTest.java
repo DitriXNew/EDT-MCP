@@ -103,9 +103,10 @@ public class MetadataRenamePreviewReadBoundaryTest
         Method render = MetadataRenameService.class.getDeclaredMethod("renderPreview", String.class, String.class,
             String.class, Collection.class, int.class, Map.class, List.class);
         render.setAccessible(true);
+        // ... followed by the fixed mdclass note on the reference updates the rows cannot list (#994).
         assertEquals("The preview must be exactly the render of what the passes produced",
             render.invoke(new MetadataRenameService(), "CommonModule.Old", "New", "Old", refactorings, 0,
-                Map.of(), List.of()), preview);
+                Map.of(), List.of()) + MetadataRenameService.crossReferenceNote(), preview);
     }
 
     @Test

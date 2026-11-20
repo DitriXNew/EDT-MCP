@@ -154,7 +154,7 @@ public class EdtDialogToolTest
     @Test
     public void consentIdentityWinsEvenWhenTitleLooksAllowlisted() throws Exception
     {
-        DestructiveConsentDialog consent = new DestructiveConsentDialog(null, "delete_project", null);
+        DestructiveConsentDialog consent = new DestructiveConsentDialog(null, "delete_project", null, 45);
         Method configure = DestructiveConsentDialog.class.getDeclaredMethod("configureShell", Shell.class);
         configure.setAccessible(true);
         configure.invoke(consent, shell);
@@ -321,7 +321,7 @@ public class EdtDialogToolTest
     public void consentIdentityWinsOverLockQuestion() throws Exception
     {
         Button[] buttons = question("Action selection", "Cancel", "Retry", "Dynamic update");
-        DestructiveConsentDialog consent = new DestructiveConsentDialog(null, "delete_project", null);
+        DestructiveConsentDialog consent = new DestructiveConsentDialog(null, "delete_project", null, 45);
         Method configure = DestructiveConsentDialog.class.getDeclaredMethod("configureShell", Shell.class);
         configure.setAccessible(true);
         configure.invoke(consent, shell);

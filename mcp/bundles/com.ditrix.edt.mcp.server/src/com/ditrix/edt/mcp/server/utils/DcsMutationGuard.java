@@ -46,6 +46,7 @@ public final class DcsMutationGuard
         List<String> blocked = new ArrayList<>();
         String deliberateRefusal = null;
         boolean parameterRefusal = false;
+        boolean templateRefusal = false;
         for (DcsReadProjection.Unmodellable node :
             DcsReadProjection.unmodellableNodes(root, target.rootFqn(), catalogues, scope.outsideScope()))
         {
@@ -56,6 +57,8 @@ public final class DcsMutationGuard
                 blocked.add(node + " (" + node.reason() + ")"); //$NON-NLS-1$ //$NON-NLS-2$
                 parameterRefusal |= "SettingsParameterValue".equals(node.className()) //$NON-NLS-1$
                     || "DataCompositionParameterValue".equals(node.className()); //$NON-NLS-1$
+                templateRefusal |= "DataCompositionSchemaTemplateDescription".equals(node.className()) //$NON-NLS-1$
+                    || "DataCompositionSchemaGroupTemplate".equals(node.className()); //$NON-NLS-1$
                 if (deliberateRefusal == null)
                 {
                     deliberateRefusal = DcsUnsupportedAuthoring.refusal(node.className(), address);
@@ -68,9 +71,16 @@ public final class DcsMutationGuard
             + "' because it contains content this writer cannot model: " //$NON-NLS-1$
             + String.join(", ", blocked) //$NON-NLS-1$
             + (parameterRefusal ? parameterWayOut(catalogues != null && catalogues.isSchemaRoot())
+                : templateRefusal ? TEMPLATE_WAY_OUT
                 : ". Remove or relocate those nodes in the DCS designer, or replace a narrower " //$NON-NLS-1$
                     + "fully modelled node."); //$NON-NLS-1$
     }
+
+    /** The way out of a template refusal: a patch that keeps the stored value, or the XML channel. */
+    private static final String TEMPLATE_WAY_OUT = ". Nothing was written. Patch single cells of " //$NON-NLS-1$
+        + "that template with action='update' and body.cells (it keeps every stored value it does not " //$NON-NLS-1$
+        + "name), or carry the whole schema through the lossless XML channel (action='replace', " //$NON-NLS-1$
+        + "type='schema', body={xml:...} on the bare schema root)."; //$NON-NLS-1$
 
     /**
      * The way out of a parameter-value refusal. The lossless XML channel replaces a bare
