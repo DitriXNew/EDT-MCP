@@ -152,6 +152,39 @@ public class DcsToolChunkedReplaceTest
         assertEquals(0, tool.commits.size());
     }
 
+    /** #989 P2-1: a refused call that names the upload ends it even when its body is no longer a chunk. */
+    @Test
+    public void testARefusedCallWithoutXmlChunkStillDiscardsTheUploadItNames()
+    {
+        Recording tool = new Recording();
+        Map<String, Map<String, String>> refusals = new LinkedHashMap<>();
+        refusals.put("expectedHash is required", Map.of("expectedHash", "")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        refusals.put("body.xml is mutually exclusive", Map.of()); //$NON-NLS-1$
+        for (Map.Entry<String, Map<String, String>> refusal : refusals.entrySet())
+        {
+            String id = issued(tool.execute(chunkCall(null, DOC.substring(0, 20), 0, DOC.length())));
+            Map<String, String> call = chunkCall(id, DOC.substring(20, 40), 20, DOC.length());
+            JsonObject body = new JsonObject();
+            if (refusal.getValue().containsKey("expectedHash")) //$NON-NLS-1$
+            {
+                // xmlChunk misspelled and the hash dropped: the structured-body path refuses it.
+                call.remove("expectedHash"); //$NON-NLS-1$
+                body.addProperty("xmlchunk", DOC.substring(20, 40)); //$NON-NLS-1$
+            }
+            else
+            {
+                body.addProperty("xml", "   "); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            body.addProperty("uploadId", id); //$NON-NLS-1$
+            call.put("body", body.toString()); //$NON-NLS-1$
+            String result = tool.execute(call);
+            assertTrue(result, ToolResult.isErrorPayload(result));
+            assertTrue(result, result.contains(refusal.getKey()));
+            assertEquals(refusal.getKey(), -1, DcsXmlChunkUpload.SHARED.receivedChars(id));
+        }
+        assertEquals(0, tool.commits.size());
+    }
+
     @Test
     public void testXmlAndXmlChunkTogetherAreRefusedWithoutWriting()
     {

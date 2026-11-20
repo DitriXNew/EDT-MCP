@@ -245,6 +245,8 @@ public final class DcsXmlChunkUpload
         final int totalChars;
         final StringBuilder received;
         long lastTouched;
+        /** Bumped by every accepted append; a restart commits only over the state it checked. */
+        long version;
 
         Staging(String projectName, String target, String expectedHash, int totalChars, long now)
         {
@@ -294,33 +296,63 @@ public final class DcsXmlChunkUpload
     }
 
     /**
-     * Ends the upload a chunk names when that chunk's call was refused anywhere - also before the call
-     * reached {@link #accept(Request, HashProbe)} (an invalid action, type, fqn, format or top-level
-     * argument). Without it such a refusal would leave the staging alive, and "every refusal
-     * discards the upload" would not hold.
+     * The one rule for ending an upload on a refusal: a refused {@code dcs} call whose {@code body} is a
+     * JSON object carrying a string {@code uploadId} ends that upload - whatever else the body holds or
+     * lacks (a chunk, a misspelled or missing {@code xmlChunk}, a {@code body.xml}, structured members)
+     * and wherever the refusal came from (the staging itself, the tool's argument checks before it, or
+     * the structured-body path a body without {@code xmlChunk} takes). A body that names no upload
+     * (not an object, not JSON, no string {@code uploadId}) ends nothing: only an id's holder can name it.
      *
      * @param body the raw {@code body} argument of the call
      * @param result the call's result
      */
     public void discardIfRefused(String body, String result)
     {
-        if (result != null && ToolResult.isErrorPayload(result) && isChunkBody(body))
+        if (result == null || body == null || !ToolResult.isErrorPayload(result))
         {
-            discard(uploadIdOf(JsonParser.parseString(body).getAsJsonObject()));
+            return;
+        }
+        JsonElement parsed;
+        try
+        {
+            parsed = JsonParser.parseString(body);
+        }
+        catch (RuntimeException e)
+        {
+            return;
+        }
+        if (parsed.isJsonObject())
+        {
+            discard(uploadIdOf(parsed.getAsJsonObject()));
         }
     }
 
     private Step start(Request request, Chunk chunk, HashProbe probe)
     {
-        if (chunk.uploadId() != null && !isActive(chunk.uploadId()))
-        {
-            return unknownUpload(chunk);
-        }
         boolean completes = chunk.text().length() == chunk.totalChars();
         if (completes)
         {
-            discard(chunk.uploadId());
+            // Claim and remove in one step: of two simultaneous completing restarts only one commits.
+            if (chunk.uploadId() != null && !claim(chunk.uploadId()))
+            {
+                return unknownUpload(chunk);
+            }
             return new Step(null, chunk.text());
+        }
+        long observedVersion = -1;
+        Staging observedStaging = null;
+        if (chunk.uploadId() != null)
+        {
+            synchronized (this)
+            {
+                sweep(clock.getAsLong());
+                observedStaging = uploads.get(chunk.uploadId());
+                if (observedStaging == null)
+                {
+                    return unknownUpload(chunk);
+                }
+                observedVersion = observedStaging.version;
+            }
         }
         // The probe reads the model on the UI thread; never hold the staging lock across it.
         ProbeResult current = probe.currentHash();
@@ -341,10 +373,23 @@ public final class DcsXmlChunkUpload
             long now = clock.getAsLong();
             sweep(now);
             String uploadId = chunk.uploadId();
-            if (uploadId != null && !uploads.containsKey(uploadId))
+            if (uploadId != null)
             {
-                // It ended while the hash was being read.
-                return unknownUpload(chunk);
+                Staging live = uploads.get(uploadId);
+                if (live == null)
+                {
+                    // It ended while the hash was being read.
+                    return unknownUpload(chunk);
+                }
+                if (live != observedStaging || live.version != observedVersion)
+                {
+                    // Another call restarted or continued it meanwhile: neither prefix may be continued.
+                    uploads.remove(uploadId);
+                    return new Step(ToolResult.error("Upload '" + uploadId + "' changed while this restart " //$NON-NLS-1$ //$NON-NLS-2$
+                        + "was being checked: another call restarted or continued it at the same time. " //$NON-NLS-1$
+                        + "Upload '" + uploadId + "' was discarded; " + RESTART + " Nothing was written.") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                        .toJson(), null);
+                }
             }
             if (uploadId == null && uploads.size() >= MAX_UPLOADS)
             {
@@ -386,6 +431,7 @@ public final class DcsXmlChunkUpload
         }
         staging.received.append(chunk.text());
         staging.lastTouched = now;
+        staging.version++;
         if (staging.received.length() == staging.totalChars)
         {
             uploads.remove(chunk.uploadId());
@@ -403,10 +449,11 @@ public final class DcsXmlChunkUpload
             + "action='get' first: a changed hash means that replace was applied.").toJson(), null); //$NON-NLS-1$
     }
 
-    private synchronized boolean isActive(String uploadId)
+    /** @return whether {@code uploadId} was active and is now removed by this call alone */
+    private synchronized boolean claim(String uploadId)
     {
         sweep(clock.getAsLong());
-        return uploads.containsKey(uploadId);
+        return uploads.remove(uploadId) != null;
     }
 
     private static String uploadIdOf(JsonObject body)

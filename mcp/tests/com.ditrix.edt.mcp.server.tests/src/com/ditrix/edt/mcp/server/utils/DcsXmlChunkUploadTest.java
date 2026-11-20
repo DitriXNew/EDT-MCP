@@ -17,6 +17,11 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
@@ -499,6 +504,87 @@ public class DcsXmlChunkUploadTest
         uploads.discardIfRefused("{\"xml\":\"<a/>\"}", ToolResult.error("x").toJson()); //$NON-NLS-1$ //$NON-NLS-2$
         assertEquals("a whole-document refusal names no upload", 10, uploads.receivedChars(id)); //$NON-NLS-1$
         uploads.discardIfRefused(body, ToolResult.error("Unknown format 'bogus'.").toJson()); //$NON-NLS-1$
+        assertEquals(-1, uploads.receivedChars(id));
+    }
+
+    /** #989 P2-1: a refused call naming an active upload ends it even without a usable xmlChunk. */
+    @Test
+    public void testARefusedCallNamingAnUploadDiscardsItWhateverElseTheBodyHolds()
+    {
+        String refusal = ToolResult.error("refused").toJson(); //$NON-NLS-1$
+        for (String shape : new String[] {
+            "{\"xmlchunk\":\"<a\",\"offset\":10,\"totalChars\":57,\"uploadId\":\"%s\"}", //$NON-NLS-1$
+            "{\"offset\":10,\"totalChars\":57,\"uploadId\":\"%s\"}", //$NON-NLS-1$
+            "{\"xml\":\"<a/>\",\"uploadId\":\"%s\"}", //$NON-NLS-1$
+            "{\"xmlChunk\":42,\"uploadId\":\"%s\"}", //$NON-NLS-1$
+            "{\"dataSets\":[],\"uploadId\":\"%s\"}"}) //$NON-NLS-1$
+        {
+            String id = begin(10);
+            uploads.discardIfRefused(String.format(shape, id), refusal);
+            assertEquals(shape, -1, uploads.receivedChars(id));
+        }
+        String kept = begin(10);
+        for (String body : new String[] {null, "not json {", "[\"" + kept + "\"]", "\"" + kept + "\"", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "{\"uploadId\":7}", "{}"}) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            uploads.discardIfRefused(body, refusal);
+            assertEquals("a body that names no upload id ends nothing: " + body, 10, uploads.receivedChars(kept)); //$NON-NLS-1$
+        }
+    }
+
+    /** #989 P2-2: two simultaneous completing restarts of one upload commit at most once. */
+    @Test
+    public void testConcurrentCompletingRestartsOfOneUploadCommitAtMostOnce() throws Exception
+    {
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try
+        {
+            for (int round = 0; round < 500; round++)
+            {
+                String id = begin(10);
+                CyclicBarrier start = new CyclicBarrier(2);
+                Callable<Boolean> restart = () -> {
+                    start.await();
+                    return Boolean.valueOf(send(id, DOC, 0, DOC.length()).isComplete());
+                };
+                Future<Boolean> a = pool.submit(restart);
+                Future<Boolean> b = pool.submit(restart);
+                int commits = (a.get().booleanValue() ? 1 : 0) + (b.get().booleanValue() ? 1 : 0);
+                assertEquals("round " + round + ": exactly one restart may reach the commit", 1, commits); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+        }
+        finally
+        {
+            pool.shutdownNow();
+        }
+    }
+
+    /** #989 P2-2: a staged restart loses to a call that changed the upload while its hash was read. */
+    @Test
+    public void testAStagedRestartRacingAnotherRestartIsRefusedAndEndsTheUpload()
+    {
+        String id = begin(10);
+        DcsXmlChunkUpload.Step loser = uploads.accept(request(chunk(id, DOC.substring(0, 4), 0, DOC.length())), () -> {
+            // Another call of the same holder restarts the upload while this one reads the hash.
+            issued(send(id, DOC.substring(0, 6), 0, DOC.length()));
+            return DcsXmlChunkUpload.ProbeResult.hash(HASH);
+        });
+        String text = error(loser);
+        assertTrue(text, text.contains("changed while this restart was being checked")); //$NON-NLS-1$
+        assertTrue(text, text.contains("Start again at body.offset=0 without uploadId.")); //$NON-NLS-1$
+        assertEquals("neither prefix survives to be continued", -1, uploads.receivedChars(id)); //$NON-NLS-1$
+    }
+
+    /** #989 P2-2: a staged restart loses to a chunk appended while its hash was read. */
+    @Test
+    public void testAStagedRestartRacingAnAppendIsRefusedAndEndsTheUpload()
+    {
+        String id = begin(10);
+        DcsXmlChunkUpload.Step loser = uploads.accept(request(chunk(id, DOC.substring(0, 4), 0, DOC.length())), () -> {
+            issued(send(id, DOC.substring(10, 20), 10, DOC.length()));
+            return DcsXmlChunkUpload.ProbeResult.hash(HASH);
+        });
+        assertTrue(error(loser), error(loser).contains("changed while this restart was being checked")); //$NON-NLS-1$
         assertEquals(-1, uploads.receivedChars(id));
     }
 
