@@ -108,8 +108,32 @@ destination's current hash, then replace it:
 {"projectName":"MyProject","fqn":"Report.SalesCopy","action":"replace","type":"schema","expectedHash":"<hash from the destination schema get>","body":{"xml":"<DataCompositionSchema ...>...</DataCompositionSchema>"}}
 ```
 
-Send the reassembled WHOLE document in that one `replace`; `body.xml` is not chunked and
-must never receive an individual page. It is mutually exclusive with every structured
+`body.xml` takes the WHOLE document and must never receive an individual page. To send a large
+document in parts, replace `xml` with `xmlChunk` plus `offset`, `totalChars` and a client-chosen
+`uploadId` (1-64 of `A-Za-z0-9._-`), repeating the same `expectedHash` on every call:
+
+```text
+total = len(xml); offset = 0; id = "sales-1"   # lengths/offsets count UTF-16 chars, as get does
+while offset < total:
+  part = xml[offset : offset + 40000]
+  r = dcs(replace schema, expectedHash=hash,
+          body={xmlChunk: part, offset: offset, totalChars: total, uploadId: id})
+  require r is not an error          # any refusal discards the upload: restart at offset 0
+  offset += len(part)
+# the chunk that reaches totalChars returns the normal replace result
+```
+
+Nothing is written until the chunk that brings the received length to `totalChars`; that call
+runs exactly the whole-document `body.xml` replace below and returns its result. Earlier chunks
+answer `chunk staged, not written` with `Received` and `Next offset`. The first chunk is checked
+against the current hash; every chunk must keep the same `projectName`, `fqn`, `expectedHash`,
+`totalChars` and `uploadId` and start at the received length, else the upload is discarded. An
+`offset:0` chunk restarts its `uploadId`. A finished, refused or expired upload cannot continue:
+re-sending its last chunk is refused, so after a lost final answer re-read with `get` (a changed
+hash means the replace was applied). Limits: 4194304 characters per document, 4 uploads at a
+time, 10 idle minutes. `xmlChunk` is refused together with `xml` or other body members.
+
+`body.xml` is mutually exclusive with every structured
 schema member, is accepted only for `replace` + `schema` at a bare root, and still requires
 `expectedHash`. The XML is deserialized before the write; malformed or truncated XML is
 refused without mutation. Inside the existing BM write transaction, every imported schema feature
