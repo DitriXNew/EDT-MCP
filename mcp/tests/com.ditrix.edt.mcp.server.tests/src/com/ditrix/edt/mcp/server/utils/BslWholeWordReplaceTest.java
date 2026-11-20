@@ -209,6 +209,105 @@ public class BslWholeWordReplaceTest
         assertEquals(0, result.caseVariants());
     }
 
+    /** Review #999 (2): a cased letter outside the BMP - Deseret capital/small long I - is seen by code point. */
+    @Test
+    public void aSupplementaryLetterInAnotherCaseIsReported()
+    {
+        String capital = "𐐀"; // U+10400 DESERET CAPITAL LETTER LONG I
+        String small = "𐐨"; // U+10428 DESERET SMALL LETTER LONG I
+        BslWholeWordReplace.Result result = BslWholeWordReplace.replace(small + " = 1;", capital, "X");
+        assertFalse(result.replaced());
+        assertEquals(1, result.caseVariants());
+        BslWholeWordReplace.Result glued = BslWholeWordReplace.replace(capital + small + " = 1;", capital, "X");
+        assertFalse("a following supplementary letter continues the identifier", glued.replaced());
+        assertEquals(0, glued.caseVariants());
+    }
+
+    /**
+     * Review #999 (3): a long fragment that nearly matches at every offset of a repetitive module is scanned in
+     * linear time - the other-case scan compared almost the whole fragment at each offset.
+     */
+    @Test(timeout = 20_000)
+    public void aLongNearMatchInAnotherCaseIsScannedInLinearTime()
+    {
+        String content = "a".repeat(2_000_000);
+        BslWholeWordReplace.Result result = BslWholeWordReplace.replace(content, "A".repeat(200_000) + "B", "X");
+        assertFalse(result.replaced());
+        assertEquals(0, result.caseVariants());
+    }
+
+    /** Review #999 (3): the same for the exact scan - a fragment that matches all but its last character. */
+    @Test(timeout = 20_000)
+    public void aLongNearMatchIsScannedInLinearTime()
+    {
+        String content = "a".repeat(3_000_000);
+        BslWholeWordReplace.Result result = BslWholeWordReplace.replace(content, "a".repeat(1_000_000) + "b", "X");
+        assertFalse(result.replaced());
+        assertEquals(0, result.insideIdentifiers());
+    }
+
+    /**
+     * Local review of #999: the scans read the module in place - no char[] copy of it, no folded copy. Measured as
+     * the bytes this thread allocates during a no-match scan of a 4,000,000-character module (a copy alone is 8 MB).
+     */
+    @Test
+    public void aScanDoesNotCopyTheModule() throws Exception
+    {
+        Object threads = java.lang.management.ManagementFactory.getThreadMXBean();
+        Class<?> extended;
+        try
+        {
+            extended = ClassLoader.getPlatformClassLoader().loadClass("com.sun.management.ThreadMXBean"); //$NON-NLS-1$
+        }
+        catch (ClassNotFoundException e)
+        {
+            org.junit.Assume.assumeNoException("no per-thread allocation counter in this JVM", e); //$NON-NLS-1$
+            return;
+        }
+        org.junit.Assume.assumeTrue("no per-thread allocation counter in this JVM", extended.isInstance(threads)); //$NON-NLS-1$
+        java.lang.reflect.Method allocated = extended.getMethod("getCurrentThreadAllocatedBytes"); //$NON-NLS-1$
+        String content = "x".repeat(4_000_000); //$NON-NLS-1$
+        BslWholeWordReplace.replace("x y", "Old", "New"); // warm up the classes outside the measurement //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        long before = (Long) allocated.invoke(threads);
+        BslWholeWordReplace.Result result = BslWholeWordReplace.replace(content, "Old", "New"); //$NON-NLS-1$ //$NON-NLS-2$
+        long used = (Long) allocated.invoke(threads) - before;
+        assertFalse(result.replaced());
+        assertTrue("a no-match scan allocated " + used + " bytes", used < 2_000_000); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** An occurrence that starts inside one rejected as part of an identifier is still found. */
+    @Test
+    public void aMatchStartingInsideARejectedOneIsFound()
+    {
+        assertEquals("Xa.N", replaced("Xa.a.a", "a.a", "N"));
+    }
+
+    /** A fragment that overlaps itself is found right after a false start ("..x" at offset 1 of "...x"). */
+    @Test
+    public void aSelfOverlappingFragmentIsFoundAfterAFalseStart()
+    {
+        assertEquals(".N", replaced("...x", "..x", "N"));
+    }
+
+    /** Every offset of a repetitive text matching in another case still yields non-overlapping, whole-word spans. */
+    @Test
+    public void repetitiveOtherCaseMatchesDoNotOverlap()
+    {
+        BslWholeWordReplace.Result result = BslWholeWordReplace.replace("AA.AA.AA", "aa.aa", "X");
+        assertFalse(result.replaced());
+        assertEquals(1, result.caseVariants());
+    }
+
+    /** Review #999 (5): a bare carriage return ends a line, as it does for read_module_source and the write. */
+    @Test
+    public void bareCarriageReturnsSeparateLines()
+    {
+        BslWholeWordReplace.Result result = BslWholeWordReplace.replace("A = 1;\rOld = 2;\rx\rOld = 3;\r", "Old", "New");
+        assertEquals("2, 4", result.replacedLinesText());
+        BslWholeWordReplace.Result mixed = BslWholeWordReplace.replace("A\r\nB\nC\rOld\n", "Old", "New");
+        assertEquals("4", mixed.replacedLinesText());
+    }
+
     @Test
     public void aFragmentWithoutLettersHasNoCaseVariants()
     {

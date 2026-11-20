@@ -321,6 +321,68 @@ public class WriteModuleSourceReplaceAllTest
         assertEquals(ENGLISH, tree.text(module));
     }
 
+    /**
+     * Review #999 (1): with normalizeInvalidCharacters (the default) an en dash in source becomes '-', so replacing
+     * '-' with it rewrites nothing - refused like an equal source, nothing written.
+     */
+    @Test
+    public void aSourceThatNormalizesToOldSourceIsNothingToReplace() throws Exception
+    {
+        String text = "Procedure Run()\n\tA = 1 - 2;\nEndProcedure\n"; //$NON-NLS-1$
+        IFile module = tree.module("src/" + MODULE, text); //$NON-NLS-1$
+        String error = refused(write(Map.of("mode", "replaceAll", "oldSource", "-", "source", "–"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+        assertTrue(error, error.startsWith("source equals oldSource once normalizeInvalidCharacters replaced")); //$NON-NLS-1$
+        assertTrue(error, error.contains("normalizeInvalidCharacters=false")); //$NON-NLS-1$
+        assertEquals(text, tree.text(module));
+    }
+
+    /** The same request with the normalization off writes the en dash as sent. */
+    @Test
+    public void withoutNormalizationTheCharacterIsWrittenAsSent() throws Exception
+    {
+        IFile module = tree.module("src/" + MODULE, "Procedure Run()\n\tA = 1 - 2;\nEndProcedure\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        String response = write(Map.of("mode", "replaceAll", "oldSource", "-", "source", "–", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+            "normalizeInvalidCharacters", "false")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(response, response.contains("\nreplacements: 1\n")); //$NON-NLS-1$
+        assertTrue(tree.text(module), tree.text(module).contains("A = 1 – 2;")); //$NON-NLS-1$
+    }
+
+    /**
+     * Review #999 (4): the bound is on the text WRITTEN. A CRLF module whose LF-normalized result fits the bound but
+     * whose written text, with its own line delimiter, does not, is refused - nothing written.
+     */
+    @Test
+    public void theBoundIsOnTheTextWrittenWithItsLineDelimiter() throws Exception
+    {
+        StringBuilder sb = new StringBuilder("Old = 1;\r\n"); //$NON-NLS-1$
+        for (int line = 1; line < 1_100_000; line++)
+        {
+            sb.append("Value=1;\r\n"); //$NON-NLS-1$
+        }
+        String text = sb.toString(); // 9,900,000 characters LF-normalized, 11,000,000 as written
+        IFile module = tree.module("src/" + MODULE, text); //$NON-NLS-1$
+        String error = refused(write(Map.of("mode", "replaceAll", "oldSource", "Old", "source", "New"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+        assertEquals("replaceAll would write a module of 11000000 characters (its line delimiters included), more " //$NON-NLS-1$
+            + "than the 10000000 allowed. Nothing was written.", error); //$NON-NLS-1$
+        assertEquals(text, tree.text(module));
+    }
+
+    /** The bound's length is the writer's text length, computed without building it - every trailing-line shape. */
+    @Test
+    public void theComputedLengthIsTheLengthOfTheTextTheWriterBuilds()
+    {
+        List<List<String>> shapes = List.of(List.of(), List.of("a"), List.of(""), List.of("a", ""), List.of("", ""), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+            List.of("a", "\n"), List.of("a", "\r"), List.of("ab", "c"), List.of("x\r\n"), List.of("a", "b\r\n")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$ //$NON-NLS-7$ //$NON-NLS-8$ //$NON-NLS-9$ //$NON-NLS-10$
+        for (String delimiter : List.of("\n", "\r\n")) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            for (List<String> lines : shapes)
+            {
+                assertEquals(lines + " / " + delimiter.length(), WriteModuleSourceTool.fileContent(lines, delimiter).length(), //$NON-NLS-1$
+                    WriteModuleSourceTool.fileContentLength(lines, delimiter));
+            }
+        }
+    }
+
     @Test
     public void methodNameIsRefused() throws Exception
     {

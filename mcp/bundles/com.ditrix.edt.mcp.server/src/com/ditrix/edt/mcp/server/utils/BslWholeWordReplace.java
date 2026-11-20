@@ -72,23 +72,25 @@ public final class BslWholeWordReplace
         List<Integer> exact = new ArrayList<>();
         List<Integer> inside = new ArrayList<>();
         int insideEnd = 0;
-        int from = 0;
-        int index;
-        while ((index = content.indexOf(oldText, from)) >= 0)
+        int acceptedEnd = 0;
+        // Every occurrence in one linear pass (#999 review): String.indexOf compares the fragment afresh at each
+        // offset, which is quadratic for a long fragment that nearly matches a repetitive module.
+        Occurrences occurrences = new Occurrences(content, oldText.toCharArray(), false);
+        for (int index = occurrences.next(); index >= 0; index = occurrences.next())
         {
+            if (index < acceptedEnd)
+            {
+                continue;
+            }
             if (isWholeWord(content, index, index + width, checkLeft, checkRight))
             {
                 exact.add(index);
-                from = index + width;
+                acceptedEnd = index + width;
             }
-            else
+            else if (index >= insideEnd)
             {
-                if (index >= insideEnd)
-                {
-                    inside.add(index);
-                    insideEnd = index + width;
-                }
-                from = index + 1;
+                inside.add(index);
+                insideEnd = index + width;
             }
         }
 
@@ -132,13 +134,15 @@ public final class BslWholeWordReplace
         }
         int width = oldText.length();
         int next = 0;
-        int index = 0;
-        while (index + width <= content.length())
+        int acceptedEnd = 0;
+        // The case-insensitive candidates come from one linear pass over the case-folded texts (#999 review), not
+        // from a comparison of the whole fragment at every offset. An occurrence spelled exactly like oldText is
+        // never a candidate here: when it is a whole word it is an exact match or overlaps one.
+        Occurrences occurrences = new Occurrences(content, fold(oldText), true);
+        for (int index = occurrences.next(); index >= 0; index = occurrences.next())
         {
-            if (!content.regionMatches(true, index, oldText, 0, width) || content.startsWith(oldText, index)
-                || !isWholeWord(content, index, index + width, checkLeft, checkRight))
+            if (index < acceptedEnd || !isWholeWord(content, index, index + width, checkLeft, checkRight))
             {
-                index++;
                 continue;
             }
             while (next < exact.size() && exact.get(next) + width <= index)
@@ -147,27 +151,122 @@ public final class BslWholeWordReplace
             }
             if (next < exact.size() && exact.get(next) < index + width)
             {
-                index++;
                 continue;
             }
             starts.add(index);
             spellings.computeIfAbsent(content.substring(index, index + width), key -> new ArrayList<>()).add(index);
-            index += width;
+            acceptedEnd = index + width;
         }
         return starts;
     }
 
+    /** Whether the text holds a letter that has another case - by code point, so a letter outside the BMP counts. */
     private static boolean hasCasedLetter(String text)
     {
-        for (int offset = 0; offset < text.length(); offset++)
+        return text.codePoints().anyMatch(codePoint -> Character.toUpperCase(codePoint) != codePoint
+            || Character.toLowerCase(codePoint) != codePoint);
+    }
+
+    /** The fragment case-folded char by char with {@link #foldedAt}. */
+    private static char[] fold(String text)
+    {
+        char[] folded = new char[text.length()];
+        for (int offset = 0; offset < folded.length; offset++)
         {
-            char ch = text.charAt(offset);
-            if (Character.toUpperCase(ch) != Character.toLowerCase(ch))
+            folded[offset] = foldedAt(text, offset);
+        }
+        return folded;
+    }
+
+    /**
+     * The UTF-16 char at {@code offset} of the text case-folded by code point the way
+     * {@link String#regionMatches(boolean, int, String, int, int)} compares ignoring case
+     * ({@code toLowerCase(toUpperCase(c))}), keeping the UTF-16 length, so an offset in the folded text is the same
+     * offset in the text - computed in place, without a folded copy of the module (#999 review). A code point whose
+     * fold would change its length is kept as it is.
+     */
+    private static char foldedAt(String text, int offset)
+    {
+        char ch = text.charAt(offset);
+        if (Character.isHighSurrogate(ch) && offset + 1 < text.length()
+            && Character.isLowSurrogate(text.charAt(offset + 1)))
+        {
+            int codePoint = Character.toCodePoint(ch, text.charAt(offset + 1));
+            return Character.highSurrogate(foldedSupplementary(codePoint));
+        }
+        if (Character.isLowSurrogate(ch) && offset > 0 && Character.isHighSurrogate(text.charAt(offset - 1)))
+        {
+            int codePoint = Character.toCodePoint(text.charAt(offset - 1), ch);
+            return Character.lowSurrogate(foldedSupplementary(codePoint));
+        }
+        int folded = Character.toLowerCase(Character.toUpperCase((int) ch));
+        return Character.isBmpCodePoint(folded) ? (char) folded : ch;
+    }
+
+    private static int foldedSupplementary(int codePoint)
+    {
+        int folded = Character.toLowerCase(Character.toUpperCase(codePoint));
+        return Character.isSupplementaryCodePoint(folded) ? folded : codePoint;
+    }
+
+    /**
+     * Every start offset of a pattern in a text, ascending, overlapping ones included - Knuth-Morris-Pratt, linear in
+     * the text and the pattern whatever their content.
+     */
+    private static final class Occurrences
+    {
+        /** Read in place, char by char (folded on the fly when {@link #folded}): no copy of the module. */
+        private final String text;
+        private final char[] pattern;
+        private final boolean folded;
+        private final int[] failure;
+        private int position;
+        private int matched;
+
+        Occurrences(String text, char[] pattern, boolean folded)
+        {
+            this.text = text;
+            this.pattern = pattern;
+            this.folded = folded;
+            this.failure = new int[pattern.length];
+            int length = 0;
+            for (int index = 1; index < pattern.length; index++)
             {
-                return true;
+                while (length > 0 && pattern[index] != pattern[length])
+                {
+                    length = failure[length - 1];
+                }
+                if (pattern[index] == pattern[length])
+                {
+                    length++;
+                }
+                failure[index] = length;
             }
         }
-        return false;
+
+        /** The next start offset, or -1 when there is none. */
+        int next()
+        {
+            while (position < text.length())
+            {
+                char ch = folded ? foldedAt(text, position) : text.charAt(position);
+                position++;
+                while (matched > 0 && pattern[matched] != ch)
+                {
+                    matched = failure[matched - 1];
+                }
+                if (pattern[matched] == ch)
+                {
+                    matched++;
+                }
+                if (matched == pattern.length)
+                {
+                    matched = failure[matched - 1];
+                    return position - pattern.length;
+                }
+            }
+            return -1;
+        }
     }
 
     private static boolean isWholeWord(String content, int start, int end, boolean checkLeft, boolean checkRight)
@@ -240,7 +339,7 @@ public final class BslWholeWordReplace
     /** A spelling quoted for a one-line message: line breaks shown as {@code \n}, a long one shortened. */
     private static String quoted(String spelling)
     {
-        String shown = spelling.replace("\n", "\\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        String shown = spelling.replace("\r", "\\r").replace("\n", "\\n"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
         if (shown.length() > MAX_SPELLING_LENGTH)
         {
             shown = shown.substring(0, MAX_SPELLING_LENGTH) + "..."; //$NON-NLS-1$
@@ -248,7 +347,10 @@ public final class BslWholeWordReplace
         return "'" + shown + "'"; //$NON-NLS-1$ //$NON-NLS-2$
     }
 
-    /** Character offsets to 1-based line numbers of one text. */
+    /**
+     * Character offsets to 1-based line numbers of one text. A line ends at {@code \r\n}, {@code \n} or a bare
+     * {@code \r} - the separators read_module_source and the write split on (#999 review).
+     */
     private static final class LineIndex
     {
         private final int[] lineStarts;
@@ -257,9 +359,14 @@ public final class BslWholeWordReplace
         {
             List<Integer> starts = new ArrayList<>();
             starts.add(0);
-            for (int offset = content.indexOf('\n'); offset >= 0; offset = content.indexOf('\n', offset + 1))
+            for (int offset = 0; offset < content.length(); offset++)
             {
-                starts.add(offset + 1);
+                char ch = content.charAt(offset);
+                boolean crlf = ch == '\r' && offset + 1 < content.length() && content.charAt(offset + 1) == '\n';
+                if ((ch == '\n' || ch == '\r') && !crlf)
+                {
+                    starts.add(offset + 1);
+                }
             }
             lineStarts = starts.stream().mapToInt(Integer::intValue).toArray();
         }

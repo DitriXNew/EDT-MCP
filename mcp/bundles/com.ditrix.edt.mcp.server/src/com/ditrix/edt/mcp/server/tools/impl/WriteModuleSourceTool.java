@@ -751,6 +751,11 @@ public class WriteModuleSourceTool implements IMcpTool
             return WritePlan.refused(computed.error);
         }
         List<String> newLines = computed.newLines;
+        String tooLarge = replaceAllSizeRefusal(computed.replaceAll, newLines, lineDelimiter);
+        if (tooLarge != null)
+        {
+            return WritePlan.refused(tooLarge);
+        }
         List<String> stillCalled = computed.stillCalled;
         List<String> deletedMethods = computed.deletedMethods;
 
@@ -773,6 +778,29 @@ public class WriteModuleSourceTool implements IMcpTool
         }
         return new WritePlan(null, newLines, hasBom, lineDelimiter, totalOriginal, stillCalled, deletedMethods)
             .withDuplicateWarning(duplicates.warning).withReplaceAll(computed.replaceAll);
+    }
+
+    /**
+     * The bound of a replaceAll (#996) on the text it WRITES (#999 review): the rule measured the {@code \n}-normalized
+     * text, and a module written with {@code \r\n} is one character longer per line.
+     *
+     * @return the refusal JSON, or {@code null} when the request is not a replaceAll or the text fits
+     */
+    private static String replaceAllSizeRefusal(BslWholeWordReplace.Result replaceAll, List<String> newLines,
+        String lineDelimiter)
+    {
+        if (replaceAll == null)
+        {
+            return null;
+        }
+        long written = fileContentLength(newLines, lineDelimiter);
+        if (written <= BslWholeWordReplace.MAX_RESULT_LENGTH)
+        {
+            return null;
+        }
+        return ToolResult.error("replaceAll would write a module of " + written //$NON-NLS-1$
+            + " characters (its line delimiters included), more than the " + BslWholeWordReplace.MAX_RESULT_LENGTH //$NON-NLS-1$
+            + " allowed. Nothing was written.").toJson(); //$NON-NLS-1$
     }
 
     /** The outcome of {@link #checkDuplicateMethods}: a ready refusal, or a warning for the response, or neither. */
@@ -1325,9 +1353,18 @@ public class WriteModuleSourceTool implements IMcpTool
                 // The text and normalization searchReplace matches against (#996), so the spelling search_in_code
                 // finds is the spelling replaced. Under the modify rule this runs on the text the file holds then,
                 // and the count it reports is the count of that text.
+                String oldText = req.oldSource.replace("\r\n", "\n"); //$NON-NLS-1$ //$NON-NLS-2$
+                // source is normalized by now (writeModule): an en dash sent for a hyphen is a hyphen again, and
+                // replacing a text with itself would report replacements and rewrite nothing (#999 review).
+                if (oldText.equals(source))
+                {
+                    return new NewLinesResult(ToolResult.error("source equals oldSource once " //$NON-NLS-1$
+                        + "normalizeInvalidCharacters replaced the forbidden characters in source (the dashes, the " //$NON-NLS-1$
+                        + "no-break space and the soft hyphen): nothing to replace. Nothing was written. Pass " //$NON-NLS-1$
+                        + "normalizeInvalidCharacters=false to write the characters as sent.").toJson(), null); //$NON-NLS-1$
+                }
                 String currentContent = BslModuleUtils.readFileText(file).replace("\r\n", "\n"); //$NON-NLS-1$ //$NON-NLS-2$
-                BslWholeWordReplace.Result replaced = BslWholeWordReplace.replace(currentContent,
-                    req.oldSource.replace("\r\n", "\n"), source); //$NON-NLS-1$ //$NON-NLS-2$
+                BslWholeWordReplace.Result replaced = BslWholeWordReplace.replace(currentContent, oldText, source);
                 if (!replaced.replaced())
                 {
                     return new NewLinesResult(ToolResult.error(replaced.failureMessage()).toJson(), null);
@@ -2207,6 +2244,43 @@ public class WriteModuleSourceTool implements IMcpTool
     }
 
     /**
+     * The text {@link #writeFile} writes for these lines: joined with the file's own delimiter and ending with it.
+     * A module with no lines stays empty (#978: deleting every method): a lone delimiter would be one empty line to
+     * every reader, against linesAfter=0. Package-visible for tests.
+     */
+    static String fileContent(List<String> lines, String lineDelimiter)
+    {
+        String content = String.join(lineDelimiter, lines);
+        if (!lines.isEmpty() && !content.endsWith(lineDelimiter))
+        {
+            content += lineDelimiter;
+        }
+        return content;
+    }
+
+    /**
+     * The length of {@link #fileContent} for these lines, computed from the line lengths without building the text
+     * (#999 review): the size bound of a replaceAll runs in both planning passes. Package-visible for tests.
+     */
+    static long fileContentLength(List<String> lines, String lineDelimiter)
+    {
+        if (lines.isEmpty())
+        {
+            return 0;
+        }
+        long length = (long) lineDelimiter.length() * (lines.size() - 1);
+        for (String line : lines)
+        {
+            length += line.length();
+        }
+        // The joined text ends with the delimiter exactly when its last delimiter.length() characters spell it; they
+        // lie in the last line, or in the delimiter before it and the last line.
+        String last = lines.get(lines.size() - 1);
+        String tail = lines.size() > 1 && last.length() < lineDelimiter.length() ? lineDelimiter + last : last;
+        return tail.endsWith(lineDelimiter) ? length : length + lineDelimiter.length();
+    }
+
+    /**
      * Writes lines to the file, preserving BOM if needed. {@code lineDelimiter} is the module's own
      * separator (see {@link #resolveLineDelimiter}); {@code lines} are LF-normalized (no {@code \r}),
      * so joining with it re-applies the file's convention verbatim.
@@ -2219,14 +2293,7 @@ public class WriteModuleSourceTool implements IMcpTool
     private String writeFile(IFile file, List<String> lines, boolean withBom,
         boolean fileExists, String lineDelimiter) throws Exception
     {
-        String content = String.join(lineDelimiter, lines);
-
-        // Ensure file ends with a newline, in the file's own delimiter. A module with no lines stays empty (#978:
-        // deleting every method): a lone delimiter would be one empty line to every reader, against linesAfter=0.
-        if (!lines.isEmpty() && !content.endsWith(lineDelimiter))
-        {
-            content += lineDelimiter;
-        }
+        String content = fileContent(lines, lineDelimiter);
 
         byte[] contentBytes = content.getBytes("UTF-8"); //$NON-NLS-1$
 
