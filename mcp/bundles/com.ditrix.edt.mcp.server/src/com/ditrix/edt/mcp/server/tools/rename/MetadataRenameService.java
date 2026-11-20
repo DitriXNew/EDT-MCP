@@ -6,7 +6,6 @@
 
 package com.ditrix.edt.mcp.server.tools.rename;
 
-import java.util.Locale;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -71,11 +70,13 @@ import com.ditrix.edt.mcp.server.utils.AdoptedPropertyRouter;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
 import com.ditrix.edt.mcp.server.utils.FormValidationException;
+import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.ReferencedTopObjects;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
+import com.ditrix.edt.mcp.server.utils.SubsystemUtils;
 import com.ditrix.edt.mcp.server.utils.VendorSupportGuard;
 
 /**
@@ -362,7 +363,7 @@ public class MetadataRenameService
         // A FQN addressing a FORM element (attribute / column / command / field / button / group /
         // decoration / table) is handled by a dedicated branch BEFORE the mdclass path, mirroring how
         // delete_metadata dispatches the same shapes: form elements live on the form's content model,
-        // not the mdclass tree, so resolveObject below can never see them. The dispatch precedes the
+        // not the mdclass tree, so resolveTarget below can never see them. The dispatch precedes the
         // IMdRefactoringService lookup on purpose - a form rename must not fail because an unrelated
         // mdclass service is unavailable (issue #381).
         FormElementWriter.FormMemberRef formRef = FormElementWriter.parse(objectFqn);
@@ -392,20 +393,17 @@ public class MetadataRenameService
             Configuration currentConfig = com.ditrix.edt.mcp.server.HostKind.current()
                 == com.ditrix.edt.mcp.server.HostKind.HEADLESS
                 ? Activator.getDefault().getConfigurationProvider().getConfiguration(project) : config;
-            MdObject targetObject = resolveObject(currentConfig, normalizedFqn);
+            MetadataScope scope = MetadataScope.of(project, currentConfig);
+            MdObject targetObject = resolveTarget(scope, normalizedFqn);
             if (targetObject == null)
             {
-                return (java.util.function.Supplier<String>)() -> ToolResult.error("Object not found: " + normalizedFqn + ". " + //$NON-NLS-1$
-                    "Check the FQN format: 'Type.Name' for top-level objects (e.g. 'Catalog.Products'), " + //$NON-NLS-1$
-                    "'Type.Name.ChildType.ChildName' for nested (e.g. 'Document.Order.Attribute.Amount'). " + //$NON-NLS-1$
-                    "Supported child types: Attribute, TabularSection, Dimension, Resource. " + //$NON-NLS-1$
-                    "A managed-form ELEMENT is addressed through its form instead: " + //$NON-NLS-1$
-                    "'Type.Object.Form.FormName.<Kind>.Name' or 'CommonForm.FormName.<Kind>.Name', " + //$NON-NLS-1$
-                    "Kind = Attribute / Command / Parameter / Field / Button / Group / Decoration / " + //$NON-NLS-1$
-                    "Table (an " + //$NON-NLS-1$
-                    "attribute column as '...Attribute.AttrName.Column.ColName' or " + //$NON-NLS-1$
-                    "'...Attribute.AttrName.Column.TabularSection.ColName'). A form itself " + //$NON-NLS-1$
-                    "('Type.Object.Form.FormName') is not a rename target - only its elements are.").toJson(); //$NON-NLS-1$
+                String notFound = notFoundMessage(scope, normalizedFqn);
+                return (java.util.function.Supplier<String>)() -> ToolResult.error(notFound).toJson();
+            }
+            String clash = nameClashRefusal(scope, normalizedFqn, targetObject, newName);
+            if (clash != null)
+            {
+                return (java.util.function.Supplier<String>)() -> ToolResult.error(clash).toJson();
             }
 
             // NB: an ADOPTED object in a configuration extension CAN be renamed - exactly as the EDT UI rename
@@ -718,7 +716,7 @@ public class MetadataRenameService
             Configuration currentConfig = com.ditrix.edt.mcp.server.HostKind.current()
                 == com.ditrix.edt.mcp.server.HostKind.HEADLESS
                 ? Activator.getDefault().getConfigurationProvider().getConfiguration(project) : config;
-            MdObject owner = resolveObject(currentConfig, ref.ownerFqn());
+            MdObject owner = resolveTarget(MetadataScope.of(project, currentConfig), ref.ownerFqn());
             if (owner == null)
             {
                 refusal[0] = ToolResult.error("Owner object not found: " + ref.ownerFqn() //$NON-NLS-1$
@@ -1025,8 +1023,25 @@ public class MetadataRenameService
             Map<String, ExactMatchInfo> exactMatches = exactMatchesOf(exact);
             List<ChangePoint> edtBslPreviewChanges = edtBslPreviewChangesOf(edtChange, exactMatches, oldName);
             return renderPreview(objectFqn, newName, oldName, refactorings, maxResults,
-                exactMatches, edtBslPreviewChanges);
+                exactMatches, edtBslPreviewChanges) + crossReferenceNote();
         });
+    }
+
+    /**
+     * The preview note of an mdclass rename: EDT rewrites the references OTHER objects hold to the target
+     * (a section's command interface, role rights, an owner's default form) in its generic cross-reference
+     * pass, and that pass produces no change point the table could list - measured on EDT 2026.2 for a
+     * command (the {@code .cmi} and {@code Rights.rights} change, the preview has one row) and an owned form
+     * (the owner's default-form property changes, one row). Without the note a "think twice" preview
+     * understates what the confirm writes (issue #994).
+     *
+     * @return the note, ending with a line break
+     */
+    static String crossReferenceNote()
+    {
+        return "> EDT also rewrites the metadata references OTHER objects hold to the target (a section's " //$NON-NLS-1$
+            + "command interface, role rights, an owner's default form, ...) when the rename is confirmed; " //$NON-NLS-1$
+            + "those updates may not be listed as rows above.\n"; //$NON-NLS-1$
     }
 
     /** What the exact-match pass produced: EDT's text-search matches for the plain rename change. */
@@ -3736,121 +3751,135 @@ public class MetadataRenameService
     }
 
     /**
-     * Resolves a metadata object from FQN.
-     * Supports both top-level objects (Catalog.Products) and nested objects
-     * (Document.SalesOrder.Attribute.Amount, Catalog.Products.TabularSection.Prices).
+     * Resolves the object a rename addresses through the ONE shared resolver every other metadata
+     * tool uses ({@link MetadataNodeResolver#resolveAddress}), exactly - no yo retry, as before: a top
+     * object ({@code Catalog.Products}), any member its grammar has a kind token for
+     * ({@code ...Attribute.X}, {@code ...TabularSection.T.Attribute.X}, {@code ...Command.C},
+     * {@code ...Template.T}, {@code Enum.E.EnumValue.V}, ...), an owned form OBJECT
+     * ({@code Catalog.X.Form.F}) and a subsystem by its chain. EDT's
+     * {@code createMdObjectRenameRefactoring} takes any {@link MdObject} - it is what EDT's own Name
+     * editor calls for every metadata object - so the kinds a rename accepts are the kinds this
+     * resolver addresses, with no second list to keep in step (issue #994). An address with an odd
+     * number of segments ({@code Catalog.X.Attribute}) names nothing: it never falls back to its owner.
+     *
+     * @param scope the resolution root (may be {@code null})
+     * @param fqn the normalized FQN (may be {@code null})
+     * @return the object, or {@code null} when the address names nothing in this root
      */
-    private MdObject resolveObject(Configuration config, String fqn)
+    static MdObject resolveTarget(MetadataScope scope, String fqn)
     {
-        if (fqn == null || fqn.isEmpty())
+        // An empty segment ('Catalog.X.Form.F.', 'Catalog..X') is malformed: the shared parser's split
+        // drops a trailing one, so without this a cascading write would run on the shorter address.
+        if (fqn == null || hasEmptySegment(fqn))
         {
             return null;
         }
+        return MetadataNodeResolver.resolveAddress(scope, fqn, false);
+    }
 
+    private static boolean hasEmptySegment(String fqn)
+    {
+        for (String part : fqn.split("\\.", -1)) //$NON-NLS-1$
+        {
+            if (part.isEmpty())
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * The refusal when {@code newName} is already the Name of another object the address grammar puts
+     * at the same place - the target's address with its last segment replaced resolves to a different
+     * object (a sibling member of the same kind, a top object of the same type, a nested subsystem of the
+     * same parent, a form of the same owner), letter case ignored as 1C does - or {@code null}. EDT's
+     * rename operation sets the Name without such a check, so a confirm would leave two members of one
+     * name and rewrite references to an ambiguous one. A rename that only changes the letter case of the
+     * target's own name is not a clash. Reads the model: call it inside a read boundary.
+     *
+     * @param scope the resolution root
+     * @param fqn the normalized address of the target (resolved by {@link #resolveTarget})
+     * @param target the resolved target
+     * @param newName the requested new Name
+     * @return the refusal message, or {@code null}
+     */
+    static String nameClashRefusal(MetadataScope scope, String fqn, MdObject target, String newName)
+    {
+        int dot = fqn.lastIndexOf('.');
+        if (dot < 0 || newName == null)
+        {
+            return null;
+        }
+        MdObject other = resolveTarget(scope, fqn.substring(0, dot + 1) + newName);
+        if (other == null || other == target)
+        {
+            return null;
+        }
+        return "Cannot rename '" + fqn + "' to '" + newName + "': '" + fqn.substring(0, dot + 1) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + other.getName() + "' already exists (names are compared ignoring letter case). Choose another " //$NON-NLS-1$
+            + "name. Nothing was renamed."; //$NON-NLS-1$
+    }
+
+    /**
+     * The "Object not found" refusal for an address {@link #resolveTarget} resolved to nothing. It
+     * states the accepted shapes; for an address with an odd number of segments it says so, and when
+     * the OWNER of a member address exists it names the member kinds that owner really has, so a
+     * caller can tell a misspelled kind from a missing member. Reads the model: call it inside the
+     * read boundary the resolution ran in.
+     *
+     * @param scope the resolution root (may be {@code null})
+     * @param fqn the normalized FQN that resolved to nothing (not {@code null})
+     * @return the message, never {@code null}
+     */
+    static String notFoundMessage(MetadataScope scope, String fqn)
+    {
+        if (hasEmptySegment(fqn))
+        {
+            return "Object not found: " + fqn + ". The address has an empty segment (a doubled, leading or " //$NON-NLS-1$ //$NON-NLS-2$
+                + "trailing '.'); write it as 'Type.Name' or 'Type.Name.Kind.Name'."; //$NON-NLS-1$
+        }
+        if (SubsystemUtils.parseSubsystemPath(fqn) != null)
+        {
+            // A subsystem chain is no containment path: its "owner" has no member kinds to name.
+            return "Object not found: " + fqn + ". " + SubsystemUtils.addressingHint() + "."; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        }
+        StringBuilder sb = new StringBuilder("Object not found: ").append(fqn).append(". ") //$NON-NLS-1$ //$NON-NLS-2$
+            .append("Check the FQN format: 'Type.Name' for a top object (e.g. 'Catalog.Products'), ") //$NON-NLS-1$
+            .append("'Type.Name.Kind.Name' for a member (e.g. 'Document.Order.Attribute.Amount', ") //$NON-NLS-1$
+            .append("'DataProcessor.Import.Command.Open', 'Catalog.Products.Form.ItemForm', ") //$NON-NLS-1$
+            .append("'Catalog.Products.Template.Label', 'Enum.Status.EnumValue.Open'). ") //$NON-NLS-1$
+            .append("A managed-form ELEMENT is addressed through its form instead: ") //$NON-NLS-1$
+            .append("'Type.Object.Form.FormName.<Kind>.Name' or 'CommonForm.FormName.<Kind>.Name', ") //$NON-NLS-1$
+            .append("Kind = Attribute / Command / Parameter / Field / Button / Group / Decoration / Table ") //$NON-NLS-1$
+            .append("(an attribute column as '...Attribute.AttrName.Column.ColName' or ") //$NON-NLS-1$
+            .append("'...Attribute.AttrName.Column.TabularSection.ColName')."); //$NON-NLS-1$
         String[] parts = fqn.split("\\."); //$NON-NLS-1$
-        if (parts.length < 2)
+        if (parts.length > 2 && !MetadataNodeResolver.isValidArity(parts.length))
         {
-            return null;
+            sb.append(" The address has an odd number of segments: every kind token ('") //$NON-NLS-1$
+                .append(parts[parts.length - 1])
+                .append("') must be followed by a name."); //$NON-NLS-1$
+            return sb.toString();
         }
-
-        // Find top-level object: Type.Name
-        MdObject topObject = MetadataTypeUtils.findObject(config, parts[0], parts[1]);
-        if (topObject == null || parts.length == 2)
+        if (parts.length >= 4)
         {
-            return topObject;
-        }
-
-        // Navigate nested: Type.Name.ChildType.ChildName
-        MdObject current = topObject;
-        for (int i = 2; i + 1 < parts.length; i += 2)
-        {
-            String childType = parts[i];
-            String childName = parts[i + 1];
-            MdObject child = findChild(current, childType, childName);
-            if (child == null)
+            String ownerFqn = String.join(".", java.util.Arrays.copyOf(parts, parts.length - 2)); //$NON-NLS-1$
+            MdObject owner = resolveTarget(scope, ownerFqn);
+            if (owner != null)
             {
-                return null;
-            }
-            current = child;
-        }
-        return current;
-    }
-
-    /**
-     * Finds a child MdObject within a parent by type and name.
-     * Supports: Attribute, TabularSection.
-     */
-    @SuppressWarnings("unchecked")
-    private MdObject findChild(MdObject parent, String childType, String childName)
-    {
-        String type = childType.toLowerCase(Locale.ROOT);
-
-        // Determine which getter to use based on child type
-        String getterName = resolveChildGetterName(type);
-
-        if (getterName == null)
-        {
-            return null;
-        }
-
-        // Use EMF reflection to get the child collection
-        try
-        {
-            java.lang.reflect.Method method = parent.getClass().getMethod(getterName);
-            Object result = method.invoke(parent);
-            if (result instanceof org.eclipse.emf.common.util.EList)
-            {
-                org.eclipse.emf.common.util.EList<? extends MdObject> children =
-                    (org.eclipse.emf.common.util.EList<? extends MdObject>) result;
-                for (MdObject child : children)
+                List<String> kinds = new ArrayList<>(MetadataNodeResolver.childKindsFor(owner));
+                if (parts.length == 4 && owner.eClass().getEStructuralFeature("forms") != null) //$NON-NLS-1$
                 {
-                    if (childName.equalsIgnoreCase(child.getName()))
-                    {
-                        return child;
-                    }
+                    kinds.add("Form"); //$NON-NLS-1$
                 }
+                sb.append(" '").append(ownerFqn).append("' exists; its member kinds: ") //$NON-NLS-1$ //$NON-NLS-2$
+                    .append(kinds.isEmpty() ? "none" : String.join(", ", kinds)) //$NON-NLS-1$ //$NON-NLS-2$
+                    .append(". List its members with get_metadata_details on '").append(ownerFqn) //$NON-NLS-1$
+                    .append("'."); //$NON-NLS-1$
             }
         }
-        catch (Exception e)
-        {
-            Activator.logError("Error finding child " + childType + "." + childName, e); //$NON-NLS-1$ //$NON-NLS-2$
-        }
-        return null;
-    }
-
-    /**
-     * Maps a (lower-cased) child-type token - English singular/plural or its Russian
-     * equivalent - to the EMF collection getter that holds children of that kind, or
-     * {@code null} when the token names no supported child collection.
-     */
-    private String resolveChildGetterName(String type)
-    {
-        String getterName = null;
-        if ("attribute".equals(type) || "attributes".equals(type) //$NON-NLS-1$ //$NON-NLS-2$
-            || "реквизит".equals(type) //$NON-NLS-1$ // реквизит
-            || "реквизиты".equals(type)) //$NON-NLS-1$ // реквизиты
-        {
-            getterName = "getAttributes"; //$NON-NLS-1$
-        }
-        else if ("tabularsection".equals(type) || "tabularsections".equals(type) //$NON-NLS-1$ //$NON-NLS-2$
-            || "табличнаячасть".equals(type) //$NON-NLS-1$ // табличнаячасть
-            || "табличныечасти".equals(type)) //$NON-NLS-1$ // табличныечасти
-        {
-            getterName = "getTabularSections"; //$NON-NLS-1$
-        }
-        else if ("dimension".equals(type) || "dimensions".equals(type) //$NON-NLS-1$ //$NON-NLS-2$
-            || "измерение".equals(type) //$NON-NLS-1$ // измерение
-            || "измерения".equals(type)) //$NON-NLS-1$ // измерения
-        {
-            getterName = "getDimensions"; //$NON-NLS-1$
-        }
-        else if ("resource".equals(type) || "resources".equals(type) //$NON-NLS-1$ //$NON-NLS-2$
-            || "ресурс".equals(type) //$NON-NLS-1$ // ресурс
-            || "ресурсы".equals(type)) //$NON-NLS-1$ // ресурсы
-        {
-            getterName = "getResources"; //$NON-NLS-1$
-        }
-        return getterName;
+        return sb.toString();
     }
 
     /**

@@ -395,7 +395,8 @@ public class RenameMetadataObjectTool implements IMcpTool
                 "EDT project name.", true) //$NON-NLS-1$
             .stringProperty(KEY_OBJECT_FQN,
                 "FQN of the rename target: an object ('Catalog.Products'), a member " + //$NON-NLS-1$
-                "('Document.SalesOrder.Attribute.Amount'), a predefined item " + //$NON-NLS-1$
+                "('Document.SalesOrder.Attribute.Amount', 'DataProcessor.Import.Command.Open', " + //$NON-NLS-1$
+                "'Catalog.Products.Form.ItemForm'), a predefined item " + //$NON-NLS-1$
                 "('Catalog.Units.Predefined.Piece'), or a managed-form element " + //$NON-NLS-1$
                 "('Catalog.Products.Form.ItemForm.Field.Price', " + //$NON-NLS-1$
                 "'CommonForm.Settings.Group.Main', " + //$NON-NLS-1$
