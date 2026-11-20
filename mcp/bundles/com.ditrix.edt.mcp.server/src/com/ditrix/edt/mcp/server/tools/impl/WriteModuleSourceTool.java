@@ -42,6 +42,7 @@ import com.ditrix.edt.mcp.server.utils.BslDuplicateMethods;
 import com.ditrix.edt.mcp.server.utils.BslMethodTransfer;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
 import com.ditrix.edt.mcp.server.utils.BslSyntaxChecker;
+import com.ditrix.edt.mcp.server.utils.BslWholeWordReplace;
 import com.ditrix.edt.mcp.server.utils.ContentHash;
 import com.ditrix.edt.mcp.server.utils.FrontMatter;
 import com.ditrix.edt.mcp.server.utils.InvalidFileCharacters;
@@ -70,6 +71,8 @@ public class WriteModuleSourceTool implements IMcpTool
     private static final String MODE_INSERT_AFTER = "insertAfter"; //$NON-NLS-1$
     /** Deletes the methods named in {@code methodNames} (#978). */
     private static final String MODE_DELETE_METHODS = "deleteMethods"; //$NON-NLS-1$
+    /** Replaces every whole-word occurrence of {@code oldSource} with {@code source} (#996). */
+    private static final String MODE_REPLACE_ALL = "replaceAll"; //$NON-NLS-1$
 
     private static final String PROJECT_NAME = "projectName"; //$NON-NLS-1$
     private static final String MODULE_PATH = "modulePath"; //$NON-NLS-1$
@@ -130,11 +133,12 @@ public class WriteModuleSourceTool implements IMcpTool
                 "Methods to copy (with fromModulePath) or delete (mode=deleteMethods), up to " //$NON-NLS-1$
                 + BslMethodTransfer.MAX_METHOD_NAMES + ".") //$NON-NLS-1$
             .stringProperty("oldSource", //$NON-NLS-1$
-                "Fragment to find and replace; required for searchReplace, must match exactly once.") //$NON-NLS-1$
+                "Fragment to find and replace; required for searchReplace (must match exactly once) and " //$NON-NLS-1$
+                + "replaceAll (every whole-word occurrence).") //$NON-NLS-1$
             .enumProperty("mode", //$NON-NLS-1$
                 "Write mode (default searchReplace).", //$NON-NLS-1$
                 MODE_SEARCH_REPLACE, MODE_REPLACE, MODE_APPEND,
-                MODE_REPLACE_METHOD, MODE_INSERT_BEFORE, MODE_INSERT_AFTER, MODE_DELETE_METHODS)
+                MODE_REPLACE_METHOD, MODE_INSERT_BEFORE, MODE_INSERT_AFTER, MODE_DELETE_METHODS, MODE_REPLACE_ALL)
             .stringProperty("methodName", //$NON-NLS-1$
                 "Existing anchor method; required for replaceMethod, insertBefore, and insertAfter.") //$NON-NLS-1$
             .stringProperty("formName", //$NON-NLS-1$
@@ -498,6 +502,11 @@ public class WriteModuleSourceTool implements IMcpTool
         {
             return MODE_DELETE_METHODS.equals(mode);
         }
+
+        boolean isReplaceAll()
+        {
+            return MODE_REPLACE_ALL.equals(mode);
+        }
     }
 
     /**
@@ -638,6 +647,8 @@ public class WriteModuleSourceTool implements IMcpTool
         List<String> stillCalled = plan.stillCalled;
         List<String> deletedMethods = plan.deletedMethods;
         String duplicateWarning = plan.duplicateWarning;
+        // The facts of the plan the write ran on - the one computed under the modify rule for an existing module.
+        BslWholeWordReplace.Result replaceAll = plan.replaceAll;
 
         // The module of an object ADOPTED into an extension gets the state EDT's UI records in the owner's
         // .mdo when code is added to an adopted module - Extended - recorded at once (#711): EDT's own
@@ -649,7 +660,7 @@ public class WriteModuleSourceTool implements IMcpTool
             () -> AdoptedModuleState.ensureExtended(file.getProject(), scope, file.getProjectRelativePath().toString()),
             moduleState -> buildSuccessResponse(req.projectName, req.modulePath, req.mode, req.skipSyntaxCheck,
                 newLines, fileExists, totalOriginal, contentHash, charFix.summary(), moduleState,
-                methodFacts(req, deletedMethods, stillCalled, duplicateWarning)));
+                methodFacts(req, deletedMethods, stillCalled, duplicateWarning, replaceAll)));
     }
 
     /** What {@link #planWrite} found: a ready refusal, or the lines to write and how to write them. */
@@ -664,6 +675,8 @@ public class WriteModuleSourceTool implements IMcpTool
         final List<String> deletedMethods;
         /** What the write does to repeated method names that does not block it (#987), or {@code null}. */
         private String duplicateWarning;
+        /** mode=replaceAll: the count, lines and other-case spellings of the text this plan rewrites (#996). */
+        private BslWholeWordReplace.Result replaceAll;
 
         WritePlan(String error, List<String> newLines, boolean hasBom, String lineDelimiter, int totalOriginal,
             List<String> stillCalled, List<String> deletedMethods)
@@ -681,6 +694,13 @@ public class WriteModuleSourceTool implements IMcpTool
         WritePlan withDuplicateWarning(String warning)
         {
             this.duplicateWarning = warning;
+            return this;
+        }
+
+        /** Attaches what a replaceAll found in the text it rewrites (#996) and returns this plan. */
+        WritePlan withReplaceAll(BslWholeWordReplace.Result replaced)
+        {
+            this.replaceAll = replaced;
             return this;
         }
 
@@ -752,7 +772,7 @@ public class WriteModuleSourceTool implements IMcpTool
             return WritePlan.refused(duplicates.error);
         }
         return new WritePlan(null, newLines, hasBom, lineDelimiter, totalOriginal, stillCalled, deletedMethods)
-            .withDuplicateWarning(duplicates.warning);
+            .withDuplicateWarning(duplicates.warning).withReplaceAll(computed.replaceAll);
     }
 
     /** The outcome of {@link #checkDuplicateMethods}: a ready refusal, or a warning for the response, or neither. */
@@ -798,7 +818,7 @@ public class WriteModuleSourceTool implements IMcpTool
      * {@code null} when there are none.
      */
     private static MethodFacts methodFacts(WriteRequest req, List<String> deletedMethods, List<String> stillCalled,
-        String duplicateWarning)
+        String duplicateWarning, BslWholeWordReplace.Result replaceAll)
     {
         MethodFacts facts = null;
         if (req.copy != null)
@@ -808,6 +828,10 @@ public class WriteModuleSourceTool implements IMcpTool
         else if (req.isDelete())
         {
             facts = MethodFacts.deleted(deletedMethods, stillCalled);
+        }
+        else if (replaceAll != null)
+        {
+            facts = MethodFacts.replacedAll(replaceAll);
         }
         if (duplicateWarning == null)
         {
@@ -830,9 +854,12 @@ public class WriteModuleSourceTool implements IMcpTool
         final List<String> stillCalled;
         /** What the write does to repeated method names that does not block it (#987), or {@code null}. */
         final String duplicateWarning;
+        /** mode=replaceAll: the occurrences replaced and the other-case spellings left (#996), or {@code null}. */
+        final BslWholeWordReplace.Result replaceAll;
 
         private MethodFacts(List<String> copiedMethods, String fromModulePath, String fromContentHash,
-            List<String> deletedMethods, List<String> stillCalled, String duplicateWarning)
+            List<String> deletedMethods, List<String> stillCalled, String duplicateWarning,
+            BslWholeWordReplace.Result replaceAll)
         {
             this.copiedMethods = copiedMethods;
             this.fromModulePath = fromModulePath;
@@ -840,29 +867,37 @@ public class WriteModuleSourceTool implements IMcpTool
             this.deletedMethods = deletedMethods;
             this.stillCalled = stillCalled;
             this.duplicateWarning = duplicateWarning;
+            this.replaceAll = replaceAll;
         }
 
         static MethodFacts copied(List<String> methods, String fromModulePath, String fromContentHash)
         {
-            return new MethodFacts(methods, fromModulePath, fromContentHash, null, List.of(), null);
+            return new MethodFacts(methods, fromModulePath, fromContentHash, null, List.of(), null, null);
         }
 
         static MethodFacts deleted(List<String> methods, List<String> stillCalled)
         {
-            return new MethodFacts(null, null, null, methods, stillCalled == null ? List.of() : stillCalled, null);
+            return new MethodFacts(null, null, null, methods, stillCalled == null ? List.of() : stillCalled, null,
+                null);
+        }
+
+        /** A replaceAll (#996): the count and lines of the replaced occurrences, the other-case spellings left. */
+        static MethodFacts replacedAll(BslWholeWordReplace.Result replaced)
+        {
+            return new MethodFacts(null, null, null, null, List.of(), null, replaced);
         }
 
         /** No copy and no deletion: only the warning a later {@link #withDuplicateWarning} attaches. */
         static MethodFacts none()
         {
-            return new MethodFacts(null, null, null, null, List.of(), null);
+            return new MethodFacts(null, null, null, null, List.of(), null, null);
         }
 
         /** These facts plus the repeated-method-name warning of the write (#987). */
         MethodFacts withDuplicateWarning(String warning)
         {
             return new MethodFacts(copiedMethods, fromModulePath, fromContentHash, deletedMethods, stillCalled,
-                warning);
+                warning, replaceAll);
         }
     }
 
@@ -957,11 +992,12 @@ public class WriteModuleSourceTool implements IMcpTool
 
         // Validate mode
         if (!MODE_REPLACE.equals(req.mode) && !MODE_APPEND.equals(req.mode)
-            && !MODE_SEARCH_REPLACE.equals(req.mode) && !isMethodTargetedMode(req.mode) && !req.isDelete())
+            && !MODE_SEARCH_REPLACE.equals(req.mode) && !isMethodTargetedMode(req.mode) && !req.isDelete()
+            && !req.isReplaceAll())
         {
             return ToolResult.error("invalid mode '" + req.mode + "'. " + //$NON-NLS-1$ //$NON-NLS-2$
                 "Allowed: searchReplace, replace, append, replaceMethod, insertBefore, " + //$NON-NLS-1$
-                "insertAfter, deleteMethods").toJson(); //$NON-NLS-1$
+                "insertAfter, deleteMethods, replaceAll").toJson(); //$NON-NLS-1$
         }
         if (req.isDelete() && (req.expectedHash == null || req.expectedHash.trim().isEmpty()))
         {
@@ -975,6 +1011,14 @@ public class WriteModuleSourceTool implements IMcpTool
             && (req.oldSource == null || req.oldSource.isEmpty()))
         {
             return ToolResult.error("oldSource is required for searchReplace mode").toJson(); //$NON-NLS-1$
+        }
+        if (req.isReplaceAll())
+        {
+            String replaceAllError = validateReplaceAllArguments(req);
+            if (replaceAllError != null)
+            {
+                return ToolResult.error(replaceAllError).toJson();
+            }
         }
         if (isMethodTargetedMode(req.mode))
         {
@@ -1023,6 +1067,39 @@ public class WriteModuleSourceTool implements IMcpTool
                     + req.mode + " takes source."; //$NON-NLS-1$
         }
         return BslMethodTransfer.validateNames(req.methodNames);
+    }
+
+    /**
+     * The argument rules of {@code mode=replaceAll} (#996): it takes {@code oldSource} and {@code source} (an empty
+     * {@code source} deletes the occurrences) and none of the arguments that address a method or guard a whole-file
+     * replace - they would be silently ignored otherwise. {@code methodNames} and {@code fromModulePath} are refused
+     * by {@link #validateMethodsArguments} already.
+     *
+     * @param req the parsed request
+     * @return the refusal message, or {@code null}
+     */
+    private static String validateReplaceAllArguments(WriteRequest req)
+    {
+        if (req.oldSource == null || req.oldSource.isEmpty())
+        {
+            return "oldSource is required for replaceAll mode: the fragment whose every whole-word occurrence is " //$NON-NLS-1$
+                + "replaced with source."; //$NON-NLS-1$
+        }
+        if (req.methodName != null && !req.methodName.isEmpty())
+        {
+            return "methodName does not apply to mode=replaceAll: it replaces every whole-word occurrence of " //$NON-NLS-1$
+                + "oldSource in the whole module. Drop methodName, or use mode=replaceMethod for one method."; //$NON-NLS-1$
+        }
+        if (req.expectedSource != null || req.overwrite)
+        {
+            return "expectedSource and overwrite apply only to mode=replace; mode=replaceAll is guarded by " //$NON-NLS-1$
+                + "expectedHash (the contentHash of your last read)."; //$NON-NLS-1$
+        }
+        if (req.oldSource.replace("\r\n", "\n").equals(req.source.replace("\r\n", "\n"))) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        {
+            return "oldSource and source are the same text: nothing to replace. Nothing was written."; //$NON-NLS-1$
+        }
+        return null;
     }
 
     private static boolean isMethodTargetedMode(String mode)
@@ -1125,19 +1202,33 @@ public class WriteModuleSourceTool implements IMcpTool
         /** mode=deleteMethods: the deleted methods as declared, and those still called (#978). */
         final List<String> deletedMethods;
         final List<String> stillCalled;
+        /** mode=replaceAll: how many occurrences were replaced, where, and what was left (#996). */
+        final BslWholeWordReplace.Result replaceAll;
 
         private NewLinesResult(String error, List<String> newLines)
         {
-            this(error, newLines, null, null);
+            this(error, newLines, null, null, null);
         }
 
         private NewLinesResult(String error, List<String> newLines, List<String> deletedMethods,
             List<String> stillCalled)
         {
+            this(error, newLines, deletedMethods, stillCalled, null);
+        }
+
+        private NewLinesResult(String error, List<String> newLines, List<String> deletedMethods,
+            List<String> stillCalled, BslWholeWordReplace.Result replaceAll)
+        {
             this.error = error;
             this.newLines = newLines;
             this.deletedMethods = deletedMethods;
             this.stillCalled = stillCalled;
+            this.replaceAll = replaceAll;
+        }
+
+        static NewLinesResult replacedAll(BslWholeWordReplace.Result replaced)
+        {
+            return new NewLinesResult(null, splitSourceLines(replaced.newContent()), null, null, replaced);
         }
     }
 
@@ -1227,6 +1318,21 @@ public class WriteModuleSourceTool implements IMcpTool
                 }
 
                 return new NewLinesResult(null, splitSourceLines(sr.newContent));
+            }
+
+            case MODE_REPLACE_ALL:
+            {
+                // The text and normalization searchReplace matches against (#996), so the spelling search_in_code
+                // finds is the spelling replaced. Under the modify rule this runs on the text the file holds then,
+                // and the count it reports is the count of that text.
+                String currentContent = BslModuleUtils.readFileText(file).replace("\r\n", "\n"); //$NON-NLS-1$ //$NON-NLS-2$
+                BslWholeWordReplace.Result replaced = BslWholeWordReplace.replace(currentContent,
+                    req.oldSource.replace("\r\n", "\n"), source); //$NON-NLS-1$ //$NON-NLS-2$
+                if (!replaced.replaced())
+                {
+                    return new NewLinesResult(ToolResult.error(replaced.failureMessage()).toJson(), null);
+                }
+                return NewLinesResult.replacedAll(replaced);
             }
 
             case MODE_REPLACE_METHOD:
@@ -1603,6 +1709,12 @@ public class WriteModuleSourceTool implements IMcpTool
         {
             fm.putList("deletedMethods", facts.deletedMethods); //$NON-NLS-1$
         }
+        // A replaceAll (#996) names how many occurrences it replaced and on which lines of the text before it.
+        if (facts != null && facts.replaceAll != null)
+        {
+            fm.put("replacements", facts.replaceAll.replacements()) //$NON-NLS-1$
+                .put("replacedLines", facts.replaceAll.replacedLinesText()); //$NON-NLS-1$
+        }
         List<String> warnings = new ArrayList<>();
         if (facts != null && !facts.stillCalled.isEmpty())
         {
@@ -1613,6 +1725,11 @@ public class WriteModuleSourceTool implements IMcpTool
         if (facts != null && facts.duplicateWarning != null)
         {
             warnings.add(facts.duplicateWarning);
+        }
+        String caseVariants = facts == null || facts.replaceAll == null ? null : facts.replaceAll.caseVariantWarning();
+        if (caseVariants != null)
+        {
+            warnings.add(caseVariants);
         }
 
         // Only when something WAS replaced: a key that is always there would be noise on every

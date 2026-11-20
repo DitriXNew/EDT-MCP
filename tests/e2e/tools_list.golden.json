@@ -7169,7 +7169,8 @@
             "replaceMethod",
             "insertBefore",
             "insertAfter",
-            "deleteMethods"
+            "deleteMethods",
+            "replaceAll"
           ],
           "type": "string"
         },
@@ -7195,7 +7196,7 @@
           "type": "string"
         },
         "oldSource": {
-          "description": "Fragment to find and replace; required for searchReplace, must match exactly once.",
+          "description": "Fragment to find and replace; required for searchReplace (must match exactly once) and replaceAll (every whole-word occurrence).",
           "type": "string"
         },
         "overwrite": {

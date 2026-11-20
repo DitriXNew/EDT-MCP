@@ -945,10 +945,12 @@ public final class BslModuleUtils
      * points cuts a supplementary letter into two halves that are neither.
      * </p>
      *
+     * Package-visible: {@link BslWholeWordReplace} draws its word boundary with the same class (#996).
+     *
      * @param codePoint the code point to test
      * @return whether it belongs in a pragma name
      */
-    private static boolean isIdentifierCharacter(int codePoint)
+    static boolean isIdentifierCharacter(int codePoint)
     {
         if (codePoint == '_')
         {
