@@ -598,6 +598,39 @@ public final class MetadataNodeResolver
     }
 
     /**
+     * Resolves the metadata object of a form - the {@code BasicForm} EDT keeps in its owner's
+     * {@code forms} containment (in the owner's {@code .mdo}), next to the form's content root in
+     * {@code Form.form} (issue #995). An owned form ({@code Type.Object.forms.FormName}) is a member of
+     * its owner; a common form ({@code CommonForm.Name}) is a top object and resolves exactly as
+     * {@link #resolveExisting(MetadataScope, String)} resolves it.
+     *
+     * <p>The form kind is deliberately not a token of the child grammar: that grammar also drives
+     * {@link #resolveForCreate}, and a form created there would have no content.</p>
+     *
+     * @param scope the resolution root (may be {@code null})
+     * @param formPath a form path as {@code FormElementWriter.parseFormPath} returns it
+     * @return the form's node, or {@code null} when the path names no existing form
+     */
+    public static MetadataNode formNode(MetadataScope scope, String formPath)
+    {
+        MdObject form = FormStructureReader.resolveMdForm(scope, formPath);
+        if (form == null)
+        {
+            return null;
+        }
+        if (formPath.split("\\.").length == 2) //$NON-NLS-1$
+        {
+            return resolveExisting(scope, formPath);
+        }
+        if (!(form.eContainer() instanceof MdObject owner)
+            || !(form.eContainingFeature() instanceof EReference feature))
+        {
+            return null;
+        }
+        return new MetadataNode(form, owner, feature, false);
+    }
+
+    /**
      * Result of {@link #resolveExistingWithYoFallback}: the resolved node (or {@code null}),
      * the FQN that actually resolved, and whether the yo-normalized retry was the form that hit.
      */

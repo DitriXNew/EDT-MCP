@@ -1,4 +1,4 @@
-﻿/**
+/**
  * MCP Server for EDT
  * Copyright (C) 2025 DitriX (https://github.com/DitriXNew)
  * Licensed under AGPL-3.0-or-later
@@ -655,9 +655,9 @@ public class GetMetadataDetailsTool implements IMcpTool
     }
 
     /**
-     * Renders the ASSIGNABLE-property view for one FQN of the request: an owned-form root or form
-     * member is routed through the form resolver (issues #549 / #235), while a common form first
-     * takes the shared mdclass resolver and then adds its content-root table.
+     * Renders the ASSIGNABLE-property view for one FQN of the request: a form member is routed
+     * through the form resolver (issues #549 / #235); an owned form and a common form render their
+     * metadata object's table and then their content root's table (issue #995).
      * Appends the table to {@code sb}, or records a {@code {fqn, reason}} row in {@code failures}
      * when the node cannot be resolved.
      */
@@ -678,28 +678,33 @@ public class GetMetadataDetailsTool implements IMcpTool
             return;
         }
         String normFqn = MetadataTypeUtils.normalizeFqn(fqn);
-        // A four-part owned-form ROOT has no mdclass node at that address. Resolve it through the
-        // form seams before the mdclass resolver and render the editable form:Form object's own
-        // assignable features inside readEditableForm's BM READ transaction. A two-part
-        // CommonForm.Name is deliberately deferred: it needs the mdclass table plus an additive
-        // content-root section below.
+        // A four-part owned-form FQN names the form's metadata object (a BasicForm in its owner's
+        // forms, which the mdclass resolver's grammar has no step to) and the form's content root, and
+        // modify_metadata writes either by property name (issue #995). Both tables are rendered, the
+        // layout CommonForm.Name has below: the metadata object's first, then the editable form:Form
+        // object's own assignable features (inside readEditableForm's BM READ transaction) under their
+        // own heading.
         String formRootPath = FormElementWriter.parseFormPath(normFqn);
         if (FormElementWriter.parseFormObjectCreate(normFqn) != null)
         {
-            if (resolveFormRootForAssignable(ctx.scope, normFqn) == null)
+            MdObject mdForm = resolveFormRootForAssignable(ctx.scope, normFqn);
+            if (mdForm == null)
             {
                 failures.add(new String[] { fqn, formRootNotFoundReason(formRootPath) });
                 return;
             }
+            sb.append(formatAssignableSection("## Assignable properties: ", normFqn, mdForm, ctx.project)); //$NON-NLS-1$
             String rootAssignable = ctx.bmModel == null ? null
-                : renderFormRootAssignable(ctx.project, ctx.scope, formRootPath, normFqn, false);
+                : renderFormRootAssignable(ctx.project, ctx.scope, formRootPath, normFqn);
             if (rootAssignable == null)
             {
                 failures.add(new String[] { fqn, "the managed form root has no editable content " //$NON-NLS-1$
                     + "model (the project may still be building, or the form may be empty/legacy)" }); //$NON-NLS-1$
-                return;
             }
-            sb.append(rootAssignable);
+            else
+            {
+                sb.append('\n').append(rootAssignable);
+            }
             sb.append(SECTION_SEPARATOR);
             return;
         }
@@ -770,7 +775,7 @@ public class GetMetadataDetailsTool implements IMcpTool
         {
             formRootPath = FormElementWriter.parseFormPath(normFqn);
             String rootAssignable = formRootPath == null || ctx.bmModel == null ? null
-                : renderFormRootAssignable(ctx.project, ctx.scope, formRootPath, normFqn, true);
+                : renderFormRootAssignable(ctx.project, ctx.scope, formRootPath, normFqn);
             if (rootAssignable == null)
             {
                 failures.add(new String[] { fqn, "the common form's content root has no editable " //$NON-NLS-1$
@@ -1557,7 +1562,7 @@ public class GetMetadataDetailsTool implements IMcpTool
      * {@link FormElementWriter#readEditableForm}, so no transaction-bound model object escapes.
      */
     private static String renderFormRootAssignable(IProject project, MetadataScope scope,
-        String formRootPath, String normFqn, boolean commonFormSection)
+        String formRootPath, String normFqn)
     {
         if (project == null)
         {
@@ -1568,9 +1573,7 @@ public class GetMetadataDetailsTool implements IMcpTool
             FormElementWriter.FormEditContext fctx = FormElementWriter.resolveForEdit(project, scope,
                 formRootPath, formRootNotFoundReason(formRootPath));
             return FormElementWriter.readEditableForm(fctx, "GetMetadataDetailsFormRoot", //$NON-NLS-1$
-                (formModel, tx) -> commonFormSection
-                    ? formatFormContentRootAssignable(normFqn, formModel)
-                    : formatAssignable(normFqn, formModel));
+                (formModel, tx) -> formatFormContentRootAssignable(normFqn, formModel));
         }
         catch (RuntimeException e)
         {
