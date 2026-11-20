@@ -151,7 +151,8 @@ def test_insert_position_preserves_quick_setting_order_and_existing_properties_6
     before = _get(address, "filter")
     assert_ok(before)
     snapshot = tree_snapshot()
-    missing_hash = _write(address, "upsert", "filter", {"insertPosition": 2, "items": [item("middle665")]})
+    missing_hash = _write(address, "upsert", "filter", {"insertPosition": 2, "items": [item("middle665")]},
+                          expectedHash=_NO_HASH)
     assert_error_quality(assert_error(missing_hash), names=["insertPosition", "expectedHash"], suggests=["get"])
     assert_tree_unchanged(snapshot, "positional insertion requires the observed hash")
     assert_ok(_write(address, "upsert", "filter", {"insertPosition": 2, "items": [item("middle665")]},
@@ -371,7 +372,52 @@ def _options(fqn, target_type, *, limit=None, **extra):
     return call("dcs", args)
 
 
+_NO_HASH = object()
+"""Pass as ``expectedHash`` to send a write WITHOUT a hash (only tests of that refusal do)."""
+
+
+def _root_read_type(root):
+    """The ``type`` a bare root reads with: a form attribute is a dynamic list, a bare form holds
+    conditional appearance, everything else is a DCS template."""
+    tail = root.split(".")
+    if len(tail) >= 2 and tail[-2] in ("Attribute", "Реквизит"):
+        return "dynamicList"
+    if (len(tail) >= 2 and tail[-2] in ("Form", "Форма")) or (
+            len(tail) == 2 and tail[0] in ("CommonForm", "ОбщаяФорма")):
+        return "conditionalAppearance"
+    return "schema"
+
+
+def _read_first(fqn, project=PROJECT):
+    """The hash ``dcs get`` prints for ``fqn``'s root, or ``None`` when the root cannot be read yet.
+
+    Every write into a root that already holds a schema must carry it (#662: read before write);
+    a root that cannot be read (a plain attribute before its dynamic-list conversion) is a write that
+    creates the schema, which needs no hash.
+    """
+    root = fqn.split("#", 1)[0]
+    read = call("dcs", {"projectName": project, "fqn": root, "action": "get",
+                        "type": _root_read_type(root)})
+    if read.is_error:
+        return None
+    return _hash(read)
+
+
+def _with_read_hash(args):
+    """``args`` for a dcs write, with the root's current hash unless the caller passed one."""
+    if args.get("expectedHash", None) is _NO_HASH:
+        args = dict(args)
+        del args["expectedHash"]
+        return args
+    if "expectedHash" not in args:
+        observed = _read_first(args["fqn"], args.get("projectName", PROJECT))
+        if observed is not None:
+            args = dict(args, expectedHash=observed)
+    return args
+
+
 def _write(fqn, action, target_type, body, **extra):
+    """A dcs write through the public contract, reading the root first as every caller must."""
     args = {
         "projectName": PROJECT,
         "fqn": fqn,
@@ -380,7 +426,7 @@ def _write(fqn, action, target_type, body, **extra):
         "body": body,
     }
     args.update(extra)
-    return call("dcs", args)
+    return call("dcs", _with_read_hash(args))
 
 
 def _find_report_dcs(report_name):
@@ -2993,7 +3039,7 @@ def test_schema_summary_and_schema_collection_read_expose_data_set_links():
 
     unguarded = _write(root + "#/dataSetLinks/0", "update", "schema", {
         "sourceExpression": "ChangedKey",
-    })
+    }, expectedHash=_NO_HASH)
     unguarded_error = assert_error(unguarded,
                                    "update an index-selected link without expectedHash")
     assert_error_quality(unguarded_error, names=["expectedHash", "#/dataSetLinks/0"],

@@ -23,7 +23,16 @@ from harness import (
     wait_for_project_ready,
     PROJECT,
 )
-from tools.test_dcs import _get, _hash, _poll_report_dcs, _read_all_xml, _seed_report, _write
+from tools.test_dcs import (
+    MAIN_DCS_TEMPLATE,
+    _NO_HASH,
+    _get,
+    _hash,
+    _poll_report_dcs,
+    _read_all_xml,
+    _seed_report,
+    _write,
+)
 
 _AREA_NS = "http://v8.1c.ru/8.1/data-composition-system/area-template"
 _CORE_NS = "http://v8.1c.ru/8.1/data-composition-system/core"
@@ -228,6 +237,10 @@ def test_typed_root_upsert_writes_a_template_and_its_binding_to_template_dcs():
     assert "**Templates applied:** templates=1, groupTemplates=1, groupHeaderTemplates=0" in written.text, \
         written.text
     assert "Template warnings" not in written.text, written.text
+    # A typed template write is a schema write: it is validated as the schema's DCS content.
+    validated = re.search(r"\*\*Validated objects:\*\* `([^`]*)`", written.text)
+    assert re.search(r"\*\*Validation:\*\* `(complete|incomplete)`", written.text) and validated, written.text
+    assert validated.group(1) == root + ".Template." + MAIN_DCS_TEMPLATE + ".Template", written.text
     disk = poll_disk_contains_all(dcs_rel, [
         "<name>%s</name>" % _WRITTEN, 'xsi:type="dcsat:TableRow"', 'xsi:type="dcscor:Parameter"',
         "Amount662", "<templateType>Footer</templateType>", "<template>%s</template>" % _WRITTEN,
@@ -253,7 +266,8 @@ def test_a_cells_patch_changes_only_that_cell_and_replace_with_the_printed_body_
     assert_ok(page, "read the template before the patch")
 
     unhashed = assert_error(_write(address, "update", "schema",
-                                   {"cells": [{"row": 0, "col": 2, "appearance": {"HorizontalAlign": "Center"}}]}),
+                                   {"cells": [{"row": 0, "col": 2, "appearance": {"HorizontalAlign": "Center"}}]},
+                                   expectedHash=_NO_HASH),
                             "a cells patch without expectedHash")
     assert_error_quality(unhashed, names=["expectedHash", "body.cells"], suggests=["action='get'"])
 
@@ -327,7 +341,16 @@ def test_template_integrity_bindings_need_templates_and_bound_templates_stay():
     assert_ok(current, "read the hash")
     disk_before = read_disk(dcs_rel)
 
-    dangling = assert_error(_write(root + "#/groupHeaderTemplates", "upsert", "schema",
+    # Typed template and binding writes into an existing schema read first like every dcs write.
+    for address, body in ((root + "#/templates", _template_body("Unread662")),
+                          (root + "#/groupTemplates", {"groupName": "Totals", "template": _WRITTEN})):
+        unread = assert_error(_write(address, "upsert", "schema", body, expectedHash=_NO_HASH),
+                              "an unread typed write at " + address)
+        assert_error_quality(unread, names=["Read the schema first", root, _hash(current)],
+                             suggests=["action='get'", "expectedHash"], ctx="unread typed template write")
+    assert read_disk(dcs_rel) == disk_before, "an unread typed write must not change Template.dcs"
+
+    dangling =assert_error(_write(root + "#/groupHeaderTemplates", "upsert", "schema",
                                    {"groupName": "Totals", "template": "Missing662"}),
                             "a binding to a missing template")
     assert_error_quality(dangling, names=["Missing662", _WRITTEN], suggests=["Create the template first"])

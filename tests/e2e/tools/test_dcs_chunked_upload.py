@@ -74,6 +74,7 @@ def test_chunked_replace_writes_nothing_until_the_last_chunk_then_replaces_the_s
         assert "chunk staged, not written" in staged.text, staged.text
         assert "**Received:** `%d` of `%d` characters" % (received, len(changed)) in staged.text, staged.text
         assert "**Next offset:** `%d`" % received in staged.text, staged.text
+        assert "**Validation:**" not in staged.text, "a staged chunk wrote nothing to validate:\n" + staged.text
         assert read_disk(dcs_rel) == disk_before, "a non-final chunk must leave Template.dcs untouched"
         assert_tree_unchanged(tree_before, "a non-final chunk must not touch the project")
         still = _get(root, "schema")
@@ -85,6 +86,8 @@ def test_chunked_replace_writes_nothing_until_the_last_chunk_then_replaces_the_s
     assert_ok(committed, "the last chunk commits the assembled document")
     assert "xml=wholesale" in committed.text, committed.text
     assert "**Export drained:** `true`" in committed.text, committed.text
+    assert committed.text.count("**Validation:**") == 1, \
+        "the commit validates the replaced schema exactly once:\n" + committed.text
     assert _hash(committed) != before_hash, "the replace must move the hash:\n%s" % committed.text
 
     poll_disk_contains(dcs_rel, _NEW_QUERY, ctx="the chunked replace must reach Template.dcs")

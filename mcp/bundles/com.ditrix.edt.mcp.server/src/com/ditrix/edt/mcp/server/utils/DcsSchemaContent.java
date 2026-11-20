@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.server.utils;
 import java.util.UUID;
 
 import org.eclipse.emf.ecore.EObject;
+import org.eclipse.emf.ecore.EStructuralFeature;
 import org.eclipse.emf.ecore.EcorePackage;
 import org.eclipse.emf.ecore.util.EcoreUtil;
 
@@ -140,16 +141,17 @@ public final class DcsSchemaContent
         ITopObjectFqnGenerator generator, String fqn)
     {
         EObject content = template.getTemplate();
-        if (content instanceof DataCompositionSchema && content instanceof IBmObject)
+        // The tests the reader shares: an attached schema is the one written to (isWrittenSchema); a detached
+        // schema that holds content is refused (unattachedContentRefusal); an empty detached one falls through
+        // to be replaced by a fresh attached one below.
+        if (isWrittenSchema(content))
         {
-            // bmIsTop() does NOT mean attached - a detached top object still answers true and
-            // bmGetFqn() then throws - so the call is the test. A schema that is not attached yet
-            // falls through to be created/attached below.
-            String attached = attachedFqnOrNull((IBmObject)content);
-            if (attached != null)
-            {
-                return ResolveResult.success((DataCompositionSchema)content, attached);
-            }
+            return ResolveResult.success((DataCompositionSchema)content, attachedFqn(content));
+        }
+        String unattached = unattachedContentRefusal(content, fqn);
+        if (unattached != null)
+        {
+            return ResolveResult.failure(unattached);
         }
         // A template DECLARED as a DCS whose content resource does not exist yet answers with an
         // unresolved placeholder (eClass degrades to the bare EObject), not null - that is an empty
@@ -272,6 +274,70 @@ public final class DcsSchemaContent
         {
             return error;
         }
+    }
+
+    /**
+     * Whether a template's content is the schema a write mutates: a {@link DataCompositionSchema} attached to
+     * the model. No content, an unresolved placeholder or an EMPTY detached schema is replaced by
+     * {@link #resolveTemplateContent} with a fresh attached schema, so the reader that computes the write's hash
+     * treats it as no schema yet ({@code DcsRootReader}); a detached schema holding content is refused by both
+     * ({@link #unattachedContentRefusal}). One test for both sides keeps the hash on the object the write then
+     * changes (#662).
+     *
+     * @param content a template's content, may be {@code null}
+     * @return whether the write would mutate this very object
+     */
+    public static boolean isWrittenSchema(EObject content)
+    {
+        return content instanceof DataCompositionSchema && attachedFqn(content) != null;
+    }
+
+    /**
+     * The refusal for a template whose content is a schema that is not attached to the model and either holds
+     * content or is an unresolved reference to a stored schema: the write cannot change it (it is not the stored schema) and must not replace it with an empty one
+     * (that would drop what it holds), so the reader and the resolver both refuse it. An EMPTY detached schema
+     * is no content and is replaced like a missing one.
+     *
+     * @param content a template's content, may be {@code null}
+     * @param fqn the root, for the message
+     * @return the refusal, or {@code null} when the content is attached, absent or an empty detached schema
+     */
+    public static String unattachedContentRefusal(EObject content, String fqn)
+    {
+        // An unresolved schema reference shows no content of its own but stands for a stored schema: not empty.
+        if (!(content instanceof DataCompositionSchema) || isWrittenSchema(content)
+            || !content.eIsProxy() && isEmpty(content))
+        {
+            return null;
+        }
+        return "The DCS content of '" + fqn + "' is a schema that is not attached to the EDT model" //$NON-NLS-1$ //$NON-NLS-2$
+            + (content.eIsProxy() ? " (an unresolved reference)" : "") //$NON-NLS-1$ //$NON-NLS-2$
+            + ", so it can be neither read for a hash nor written; nothing was written. Save any unsaved edits " //$NON-NLS-1$
+            + "in EDT first (clean_project discards them), then re-open or clean the project and re-run dcs " //$NON-NLS-1$
+            + "action='get'."; //$NON-NLS-1$
+    }
+
+    private static boolean isEmpty(EObject content)
+    {
+        for (EStructuralFeature feature : content.eClass().getEAllStructuralFeatures())
+        {
+            if (!feature.isDerived() && !feature.isTransient() && content.eIsSet(feature))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * The object's BM FQN when it is an ATTACHED BM object, else {@code null}.
+     *
+     * @param object any model object, may be {@code null}
+     * @return the FQN, or {@code null}
+     */
+    public static String attachedFqn(EObject object)
+    {
+        return object instanceof IBmObject ? attachedFqnOrNull((IBmObject)object) : null;
     }
 
     /**
