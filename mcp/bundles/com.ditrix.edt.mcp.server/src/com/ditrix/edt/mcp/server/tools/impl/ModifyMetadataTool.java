@@ -116,6 +116,7 @@ import com.ditrix.edt.mcp.server.utils.MetadataMemberValues;
 import com.ditrix.edt.mcp.server.utils.FormChoiceParameters;
 import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector.PropertyInfo;
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
+import com.ditrix.edt.mcp.server.utils.OwnedFormMetadata;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeBuilder;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.ReferencedTopObjects;
@@ -1074,14 +1075,14 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     /**
      * Refuses a {@code formType} write on an owned form (issue #995): the enum alone would say Managed or
      * Ordinary while the form's content in {@code Form.form} stays of the kind it was created with, and
-     * nothing here converts it. {@code null} when the batch does not name {@code formType}.
+     * nothing here converts it. {@code null} when the batch does not name {@code formType}. The rule is
+     * {@link OwnedFormMetadata#isSettable}, which get_metadata_details' assignable table follows too.
      */
     static String formTypeRefusal(String fqn, List<JsonObject> properties)
     {
-        String feature = MdClassPackage.Literals.BASIC_FORM__FORM_TYPE.getName();
         for (JsonObject property : properties)
         {
-            if (feature.equalsIgnoreCase(asString(property.get("name")))) //$NON-NLS-1$
+            if (!OwnedFormMetadata.isSettable(asString(property.get("name")))) //$NON-NLS-1$
             {
                 return ToolResult.error("'" + MetadataTypeUtils.toCanonicalEnglishFqn(fqn) //$NON-NLS-1$
                     + "': formType of an existing form is not changed: the form's content in Form.form " //$NON-NLS-1$

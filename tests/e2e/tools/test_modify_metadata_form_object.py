@@ -185,6 +185,8 @@ def test_form_object_assignable_lists_the_metadata_object_then_the_content_root(
     for name in ("synonym", "comment", "usePurposes"):
         assert_contains(metadata, "| %s |" % name, "the metadata object offers " + name)
         assert_not_contains(root, "| %s |" % name, "the content root does not offer " + name)
+    # modify_metadata refuses an owned form's formType, so the table does not offer it (review of #1005).
+    assert_not_contains(metadata, "| formType |", "the table offers only what the write accepts")
     for name in ("title", "autoTitle"):
         assert_contains(root, "| %s |" % name, "the content root offers " + name)
         assert_not_contains(metadata, "| %s |" % name, "the metadata object does not offer " + name)

@@ -71,6 +71,7 @@ import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector;
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
+import com.ditrix.edt.mcp.server.utils.OwnedFormMetadata;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.ReferencedTopObjects;
 import com.ditrix.edt.mcp.server.utils.Pagination;
@@ -693,7 +694,9 @@ public class GetMetadataDetailsTool implements IMcpTool
                 failures.add(new String[] { fqn, formRootNotFoundReason(formRootPath) });
                 return;
             }
-            sb.append(formatAssignableSection("## Assignable properties: ", normFqn, mdForm, ctx.project)); //$NON-NLS-1$
+            // Only what modify_metadata writes on this FQN: the owned-form rule the write's refusal follows.
+            sb.append(formatAssignableSection("## Assignable properties: ", normFqn, mdForm, ctx.project, //$NON-NLS-1$
+                OwnedFormMetadata::isSettable));
             String rootAssignable = ctx.bmModel == null ? null
                 : renderFormRootAssignable(ctx.project, ctx.scope, formRootPath, normFqn);
             if (rootAssignable == null)
@@ -1071,6 +1074,16 @@ public class GetMetadataDetailsTool implements IMcpTool
 
     private static String formatAssignableSection(String heading, String fqn, EObject obj, IProject project)
     {
+        return formatAssignableSection(heading, fqn, obj, project, null);
+    }
+
+    /**
+     * The shared table, listing only the properties {@code admit} accepts when it is given - for a plain object
+     * (no extInfo, not the configuration root); {@code null} lists every assignable property.
+     */
+    private static String formatAssignableSection(String heading, String fqn, EObject obj, IProject project,
+        java.util.function.Predicate<String> admit)
+    {
         StringBuilder sb = new StringBuilder();
         sb.append(heading).append(fqn).append("\n\n"); //$NON-NLS-1$
         sb.append("Set these with `modify_metadata`. For an ENUM property the value must be one of " //$NON-NLS-1$
@@ -1109,7 +1122,8 @@ public class GetMetadataDetailsTool implements IMcpTool
         }
         else
         {
-            props = MetadataPropertyIntrospector.introspect(obj);
+            props = admit == null ? MetadataPropertyIntrospector.introspect(obj)
+                : MetadataPropertyIntrospector.introspectOnly(obj, admit);
         }
         List<String> atDefault = new ArrayList<>();
         for (MetadataPropertyIntrospector.PropertyInfo p : props)
