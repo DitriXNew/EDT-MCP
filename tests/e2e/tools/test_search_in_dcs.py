@@ -40,6 +40,7 @@ from harness import (
     split_markdown_row,
     wait_for_project_ready,
 )
+from tools.test_dcs import _with_read_hash
 
 
 MARKER = "E2EDCS541_MARKER_"
@@ -80,7 +81,8 @@ def _seed_common_template(name, marker):
         "properties": [{"name": "templateType", "value": "DataCompositionSchema"}],
     }), "declare " + fqn + " a DCS")
     wait_for_project_ready()
-    assert_ok(call("dcs", {
+    # The retype materialized an empty schema: read it first, as every write into one must (#662).
+    assert_ok(call("dcs", _with_read_hash({
         "projectName": PROJECT,
         "fqn": fqn,
         "action": "upsert",
@@ -92,7 +94,7 @@ def _seed_common_template(name, marker):
             "autoFillFields": False,
             "fields": [{"dataPath": "Amount"}],
         }]},
-    }), "author the DCS of " + fqn)
+    })), "author the DCS of " + fqn)
     wait_for_project_ready()
     return _poll_dcs_with(os.path.join("src", "CommonTemplates", name), marker)
 

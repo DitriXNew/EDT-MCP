@@ -285,6 +285,25 @@ public final class WrittenObjectMarkers
         {
             return reason;
         }
+
+        /** @return the total markers in the slice, before the cap */
+        public int count()
+        {
+            return count;
+        }
+
+        /**
+         * The same report naming other addresses in its re-check advice. A slice keyed by an internal
+         * top-object FQN that {@code get_project_errors objectFqns} cannot resolve (a DCS content
+         * resource, for one) names the metadata address that covers it instead.
+         *
+         * @param recheckObjects the addresses the re-check sentence names
+         * @return a copy with those addresses
+         */
+        public Report withRecheckObjects(List<String> recheckObjects)
+        {
+            return new Report(reason, count, rows, new ArrayList<>(recheckObjects), budgetMs);
+        }
     }
 
     /**
@@ -517,6 +536,35 @@ public final class WrittenObjectMarkers
         String existing = success.has(McpKeys.MESSAGE) && success.get(McpKeys.MESSAGE).isJsonPrimitive()
             ? success.get(McpKeys.MESSAGE).getAsString() : null;
         success.addProperty(McpKeys.MESSAGE, join(existing, sentence(report)));
+    }
+
+    /**
+     * The report as a Markdown section for a tool that answers in Markdown: the state, the count,
+     * the same sentence {@link #attach} adds to a JSON message, and the rows as an escaped table.
+     *
+     * @param report the report
+     * @return the section, starting with {@code **Validation:**}
+     */
+    public static String markdown(Report report)
+    {
+        StringBuilder md = new StringBuilder();
+        md.append("**Validation:** `").append(report.incomplete() ? "incomplete" : "complete") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            .append('`');
+        if (report.incomplete())
+        {
+            md.append(" (").append(report.reason.wire()).append(')'); //$NON-NLS-1$
+        }
+        md.append("\n\n**Markers:** `").append(report.count).append("`\n\n").append(sentence(report)); //$NON-NLS-1$ //$NON-NLS-2$
+        if (!report.rows.isEmpty())
+        {
+            md.append("\n\n").append(MarkdownUtils.tableHeader("Severity", "Check", "Message", "Location")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+            for (Row row : report.rows)
+            {
+                md.append(MarkdownUtils.tableRow(row.severity == null ? "" : row.severity.name(), //$NON-NLS-1$
+                    nullToEmpty(row.checkId), nullToEmpty(row.message), nullToEmpty(row.location)));
+            }
+        }
+        return md.toString().stripTrailing();
     }
 
     /**

@@ -1,6 +1,6 @@
 # dcs
 
-Read, author, and losslessly XML-round-trip 1C DCS schemas, settings variants, form conditional appearance, and form dynamic lists. Call action='get' first; replace, remove and any index-addressed edit require its hash as expectedHash. Query autoFillFields=true fills and exports fields and parameters in this call. Writes wait for disk export. Call get_tool_guide('dcs') for body shapes.
+Read, author, and losslessly XML-round-trip 1C DCS schemas, settings variants, form conditional appearance, and form dynamic lists. Call action='get' first; every write into an existing schema requires its hash as expectedHash. Query autoFillFields=true fills and exports fields and parameters in this call. Writes wait for disk export and return EDT's validation problems of the schema. Call get_tool_guide('dcs') for body shapes.
 
 ## Parameters
 | Parameter | Required | Type | Description |
@@ -10,7 +10,7 @@ Read, author, and losslessly XML-round-trip 1C DCS schemas, settings variants, f
 | action | yes | string (one of: get, options, upsert, update, replace, remove) | Operation; options lists version-aware writable vocabularies, replace resets omitted members, and remove deletes one node. |
 | type | yes | string (one of: schema, dynamicList, dataSource, dataSet, field, fieldFolder, parameter, calculatedField, totalField, variant, grouping, selection, filter, dataParameter, order, conditionalAppearance, table, chart, userField, outputParameter, userSettings) | Target kind; body shapes are in get_tool_guide('dcs'). |
 | body | — | object | Mutation body; forbidden for get/options/remove and required by the other mutations. insertPosition: 1-based new-item position for upsert into an ordered settings collection. |
-| expectedHash | — | string | Hash from get; conditionally required for mutation actions. |
+| expectedHash | — | string | Hash from get; required by every write into an existing schema. |
 | language | — | string | Optional declared configuration language code for localized values and presentations; parameter names always use the configuration's default language code. |
 | format | — | string (one of: md, xml) | Read output; defaults to md. xml is only for a bare schema get. |
 | limit | — | integer | Markdown collection/summary item count (default 100, maximum 1000), or exact-value/XML chunk characters (default 40000, bounded by the output envelope). |
@@ -119,7 +119,7 @@ concrete fields (including union/folder fields), schema parameters, and variants
 re-serialized and compared asymmetrically with the submitted document: EDT-added defaults and
 namespace-prefix/formatting changes are allowed. A model difference or a lost submitted XML path
 refuses and rolls back. All writes await export off the UI thread, outside the BM transaction,
-within a shared 60s budget. `Export scheduled` means submission; `Export drained: true` confirms
+within a shared 60s budget, then EDT's validation (see "Validation after the write"). `Export scheduled` means submission; `Export drained: true` confirms
 queue completion, not byte correctness. Pending/unobservable export returns an error with
 `mutationCommitted:true`; nothing is rolled back. Check `list_projects`, save/resync, then re-read
 before retrying. XML replacement also reports `xml=wholesale` and those model counts.
@@ -250,8 +250,8 @@ at `#/items/<index>`. This is distinct from a dynamic-list attribute below that 
 | --- | --- | --- | --- | --- |
 | `get` | Read a root summary, collection page, or full node | Must be absent | Must be absent; the current `hash` is returned | Implemented |
 | `options` | Read version-aware parameter keys, declared types, and enum literals accepted by writes | Must be absent | Must be absent | Conditional appearance, output parameters, and enum-bearing body members; supports `limit`/`offset` |
-| `upsert` | Create by natural key, append to an ordered collection, or partially update an exact target; omitted members stay unchanged | Required | Required for every index-addressed target | Schema, settings, dynamic lists, and form conditional appearance |
-| `update` | Modify an existing node only; never create | Required | Required for every index-addressed target | Schema, settings, dynamic lists, and form conditional appearance |
+| `upsert` | Create by natural key, append to an ordered collection, or partially update an exact target; omitted members stay unchanged | Required | Required whenever the root already holds a schema, and for every index-addressed target | Schema, settings, dynamic lists, and form conditional appearance |
+| `update` | Modify an existing node only; never create | Required | Required whenever the root already holds a schema | Schema, settings, dynamic lists, and form conditional appearance |
 | `replace` | Authoritative replacement; omitted values reset and omitted collections clear | Required structured body, or `{xml:"..."}` for a bare schema root | Always required | Schema/settings, form conditional appearance, and a dynamic list below `#/listSettings` |
 | `remove` | Remove exactly one addressed node | Must be absent | Always required | Schema/settings, form conditional appearance, and a dynamic list below `#/listSettings` |
 
@@ -382,7 +382,7 @@ LocalString output values accept a bare string, a string ValueSpec, or the same
 language map as `title` (codes must be declared); `{}` clears localized text:
 
 ```json
-{"projectName":"MyProject","fqn":"Report.Sales#/defaultSettings/outputParameters","action":"upsert","type":"outputParameter","body":{"items":[{"parameter":{"kind":"parameter","value":"Title"},"value":{"kind":"string","value":"Sales"}}]}}
+{"projectName":"MyProject","fqn":"Report.Sales#/defaultSettings/outputParameters","action":"upsert","type":"outputParameter","expectedHash":"<hash from get>","body":{"items":[{"parameter":{"kind":"parameter","value":"Title"},"value":{"kind":"string","value":"Sales"}}]}}
 ```
 
 The same `value` may be `"Sales"` or `{"en":"Sales","ru":"Продажи"}`.
@@ -392,7 +392,7 @@ Both field and conditional `appearance` use one parser: bare values and `{kind,v
 are accepted, including Boolean, Number, string/LocalString, enum, color and font:
 
 ```json
-{"projectName":"MyProject","fqn":"Report.Sales#/defaultSettings/conditionalAppearance","action":"upsert","type":"conditionalAppearance","body":{"items":[{"appearance":{"Text":"Highlighted","MarkNegatives":{"kind":"boolean","value":true},"TextColor":{"kind":"color","value":{"red":255,"green":0,"blue":0}}}}]}}
+{"projectName":"MyProject","fqn":"Report.Sales#/defaultSettings/conditionalAppearance","action":"upsert","type":"conditionalAppearance","expectedHash":"<hash from get>","body":{"items":[{"appearance":{"Text":"Highlighted","MarkNegatives":{"kind":"boolean","value":true},"TextColor":{"kind":"color","value":{"red":255,"green":0,"blue":0}}}}]}}
 ```
 
 `options type=field` derives dictionaries from the EDT model. Restriction keys are
@@ -400,13 +400,13 @@ Boolean flags, not enums; enum dictionaries include `role.periodType`:
 Other role enums that require the XML channel are marked `XML only`.
 
 ```json
-{"projectName":"MyProject","fqn":"Report.Sales#/dataSets/Sales/fields","action":"upsert","type":"field","body":{"dataPath":"Period","role":{"periodType":"Main","periodNumber":1,"dimension":true},"useRestriction":{"field":false,"condition":false,"group":false,"order":true}}}
+{"projectName":"MyProject","fqn":"Report.Sales#/dataSets/Sales/fields","action":"upsert","type":"field","expectedHash":"<hash from get>","body":{"dataPath":"Period","role":{"periodType":"Main","periodNumber":1,"dimension":true},"useRestriction":{"field":false,"condition":false,"group":false,"order":true}}}
 ```
 
 Create a variant with nested structure, selection, an AND/OR filter, and order:
 
 ```json
-{"projectName":"MyProject","fqn":"Report.Sales","action":"upsert","type":"variant","body":{"name":"ManagerView","presentation":{"en":"Manager view"},"settings":{"items":[{"name":"CustomerGroup","groupFields":{"items":[{"field":{"kind":"field","value":"Customer"},"groupType":"Items","use":true}]},"items":[{"name":"PeriodGroup","groupFields":{"items":[{"field":{"kind":"field","value":"Period"},"groupType":"Items"}]}}]}],"selection":{"viewMode":"Normal","userSettingID":"selection","items":[{"field":{"kind":"field","value":"Customer"},"use":true}]},"filter":{"viewMode":"Normal","userSettingID":"filter","items":[{"kind":"group","groupType":"AndGroup","items":[{"left":{"kind":"field","value":"Quantity"},"comparisonType":"Greater","right":[{"kind":"number","value":0}]},{"kind":"group","groupType":"OrGroup","items":[{"left":{"kind":"field","value":"Status"},"comparisonType":"Equal","right":[{"kind":"string","value":"Open"}]}]}]}]},"order":{"viewMode":"Normal","userSettingID":"order","items":[{"field":{"kind":"field","value":"Customer"},"orderType":"Asc"}]}}}}
+{"projectName":"MyProject","fqn":"Report.Sales","action":"upsert","type":"variant","expectedHash":"<hash from get>","body":{"name":"ManagerView","presentation":{"en":"Manager view"},"settings":{"items":[{"name":"CustomerGroup","groupFields":{"items":[{"field":{"kind":"field","value":"Customer"},"groupType":"Items","use":true}]},"items":[{"name":"PeriodGroup","groupFields":{"items":[{"field":{"kind":"field","value":"Period"},"groupType":"Items"}]}}]}],"selection":{"viewMode":"Normal","userSettingID":"selection","items":[{"field":{"kind":"field","value":"Customer"},"use":true}]},"filter":{"viewMode":"Normal","userSettingID":"filter","items":[{"kind":"group","groupType":"AndGroup","items":[{"left":{"kind":"field","value":"Quantity"},"comparisonType":"Greater","right":[{"kind":"number","value":0}]},{"kind":"group","groupType":"OrGroup","items":[{"left":{"kind":"field","value":"Status"},"comparisonType":"Equal","right":[{"kind":"string","value":"Open"}]}]}]}]},"order":{"viewMode":"Normal","userSettingID":"order","items":[{"field":{"kind":"field","value":"Customer"},"orderType":"Asc"}]}}}}
 ```
 
 To change the nested OR condition, first run `get`, then use its root hash and exact
@@ -436,9 +436,25 @@ tool separately force-exports it as
 ### Hash and the get-edit-verify loop
 
 `get` returns a structural `hash`, valid within this session, not across EDT versions.
-Copy its canonical address and root hash; pass `expectedHash` for indexed edits and
-always for `replace`/`remove`. The write transaction rechecks it. On mismatch, get fresh
-addresses and rebuild the edit; never guess an index. Read back the result and new hash.
+Read before every write: a write into a root that already holds a schema (a DCS template
+with content, a dynamic list, a form's conditional appearance) is refused without
+`expectedHash`, with "Read the schema first", the current hash and the `get` call to run.
+Only a write that creates the schema (a report without its main DCS yet, a DCS template
+without content, a plain attribute converted to a dynamic list, a form without
+conditional appearance) needs no hash; `replace`/`remove`, indexed edits and
+`insertPosition` always need one. The hash covers the whole root, whatever `#/...` you
+address. The write transaction rechecks it. On mismatch, get fresh addresses and rebuild
+the edit; never guess an index. Read back the result and new hash.
+
+### Validation after the write
+
+After the commit and the disk export, the call waits for EDT to validate what it wrote and
+returns `**Validation:**` (`complete`, or `incomplete` with the reason), `**Markers:**`, one
+sentence, and a `Severity | Check | Message | Location` table of every marker (at most 20,
+most severe first). The whole call is held about 45 s at most, export included. `incomplete`
+is never "no problems": re-read them with the `get_project_errors objectFqns` call it names.
+A schema reports its DCS content; a form's conditional appearance reports that appearance; a
+dynamic list reports its form and list settings, because EDT validates the list with its form.
 
 ### Bilingual rules
 

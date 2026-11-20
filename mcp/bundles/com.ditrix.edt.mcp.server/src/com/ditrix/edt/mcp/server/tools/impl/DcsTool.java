@@ -74,6 +74,8 @@ import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.ditrix.edt.mcp.server.utils.VendorSupportGuard;
+import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
+import com.ditrix.edt.mcp.server.utils.WrittenObjectMarkers;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -128,9 +130,10 @@ public class DcsTool implements IMcpTool
     {
         return "Read, author, and losslessly XML-round-trip 1C DCS schemas, settings variants, " //$NON-NLS-1$
             + "form conditional appearance, and form dynamic lists. " //$NON-NLS-1$
-            + "Call action='get' first; replace, remove and any index-addressed edit require its " //$NON-NLS-1$
+            + "Call action='get' first; every write into an existing schema requires its " //$NON-NLS-1$
             + "hash as expectedHash. Query autoFillFields=true fills and exports fields and parameters " //$NON-NLS-1$
-            + "in this call. Writes wait for disk export. Call get_tool_guide('dcs') for body shapes."; //$NON-NLS-1$
+            + "in this call. Writes wait for disk export and return EDT's validation problems of the " //$NON-NLS-1$
+            + "schema. Call get_tool_guide('dcs') for body shapes."; //$NON-NLS-1$
     }
 
     @Override
@@ -147,7 +150,7 @@ public class DcsTool implements IMcpTool
                 + "required by the other mutations. insertPosition: 1-based new-item position for upsert "
                 + "into an ordered settings collection.", Map.of("type", "object", "properties",
                     Map.of("insertPosition", Map.of("type", "integer", "minimum", 1))))
-            .stringProperty(KEY_EXPECTED_HASH, "Hash from get; conditionally required for mutation actions.") //$NON-NLS-1$
+            .stringProperty(KEY_EXPECTED_HASH, "Hash from get; required by every write into an existing schema.") //$NON-NLS-1$
             .stringProperty(KEY_LANGUAGE, "Optional declared configuration language code for localized " //$NON-NLS-1$
                 + "values and presentations; parameter names always use the configuration's default " //$NON-NLS-1$
                 + "language code.") //$NON-NLS-1$
@@ -183,6 +186,7 @@ public class DcsTool implements IMcpTool
     @Override
     public String execute(Map<String, String> params)
     {
+        long startedAtMs = System.currentTimeMillis();
         // Keep all ten reads explicit: SchemaExecuteParamParityTest checks both directions.
         String projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
         String rawFqn = JsonUtils.extractStringArgument(params, KEY_FQN);
@@ -270,6 +274,7 @@ public class DcsTool implements IMcpTool
                 + "'. Open the project in EDT and retry action='" + action + "'.").toJson();
         }
         AtomicReference<String> result = new AtomicReference<>();
+        AtomicReference<ValidationScope> validation = new AtomicReference<>();
         WriteScope scope = null;
         Runnable handoff;
         if (ACTION_GET.equals(action))
@@ -298,7 +303,7 @@ public class DcsTool implements IMcpTool
             scope = writeScope;
             handoff = () -> display.accept(() -> WriteScope.runWithScope(writeScope,
                 () -> result.set(executeWrite(projectName, parsed.address(), action, type,
-                    parsedBody, expectedHash, language))));
+                    parsedBody, expectedHash, language, validation))));
         }
         else
         {
@@ -309,7 +314,103 @@ public class DcsTool implements IMcpTool
                 + "' has no handler. Use one of: " + String.join(", ", ACTION_SET) //$NON-NLS-1$ //$NON-NLS-2$
                 + "; no model changes were made.").toJson(); //$NON-NLS-1$
         }
-        return dispatchResult(action, parsed.address(), scope, result, handoff);
+        String dispatched = dispatchResult(action, parsed.address(), scope, result, handoff);
+        // After the export barrier, on the calling thread: outside SWT and every BM transaction.
+        return appendValidation(dispatched, validation.get(), WrittenObjectMarkers.PLATFORM,
+            validationBudgetMs(startedAtMs, System.currentTimeMillis()));
+    }
+
+    /**
+     * Adds the validation section to a write that succeeded through its export barrier. A failed or
+     * not-confirmed write, and a read, are returned untouched and never wait for validation.
+     *
+     * @param dispatched the finalized result
+     * @param validation what the write committed, or {@code null} when it committed nothing to report
+     * @param environment the marker platform seam
+     * @param budgetMs the validation budget
+     * @return the result, with the section appended when it applies
+     */
+    static String appendValidation(String dispatched, ValidationScope validation,
+        WrittenObjectMarkers.Environment environment, long budgetMs)
+    {
+        if (validation == null || dispatched == null || ToolResult.isErrorPayload(dispatched))
+        {
+            return dispatched;
+        }
+        return dispatched + "\n\n" + validationSection(validation, environment, budgetMs); //$NON-NLS-1$
+    }
+
+    /**
+     * What one successful write asks EDT to have validated before it answers: the BM top objects its
+     * markers are indexed under, and the metadata addresses {@code get_project_errors objectFqns}
+     * reads the same markers by later.
+     *
+     * @param projectName the project the write committed in
+     * @param topObjects the top-object FQNs whose markers are this write's schema problems
+     * @param recheckObjects the addresses a later {@code get_project_errors objectFqns} call takes
+     * @param note an optional sentence on what the slice covers, or {@code null}
+     */
+    record ValidationScope(String projectName, List<String> topObjects, List<String> recheckObjects, String note)
+    {
+    }
+
+    /** The whole dcs write call is held at most this long, export included (the #803 transport budget). */
+    static final long CALL_BUDGET_MS = 45_000L;
+
+    /** The least the validation wait gets after a slow export, so it is still asked once. */
+    static final long MIN_VALIDATION_BUDGET_MS = 5_000L;
+
+    /**
+     * The validation budget left of {@link #CALL_BUDGET_MS} once the write and its export are done,
+     * never below {@link #MIN_VALIDATION_BUDGET_MS}.
+     *
+     * @param startedAtMs when the call started
+     * @param nowMs the current time
+     * @return the budget in milliseconds
+     */
+    static long validationBudgetMs(long startedAtMs, long nowMs)
+    {
+        long elapsed = Math.max(0L, nowMs - startedAtMs);
+        return Math.max(MIN_VALIDATION_BUDGET_MS, CALL_BUDGET_MS - elapsed);
+    }
+
+    /**
+     * Waits, within {@code budgetMs}, for EDT to validate the written schema and renders every marker of
+     * it through the shared post-write marker report. Never claims "no problems" for a validation that
+     * did not finish: an incomplete report says why and names the {@code get_project_errors} re-check.
+     *
+     * @param validation what the write committed
+     * @param environment the marker platform seam
+     * @param budgetMs the validation budget
+     * @return the Markdown section, starting with {@code **Validation:**}
+     */
+    static String validationSection(ValidationScope validation, WrittenObjectMarkers.Environment environment,
+        long budgetMs)
+    {
+        if (validation.topObjects().isEmpty())
+        {
+            return "**Validation:** `none` - this write left no DCS object in the model to validate."; //$NON-NLS-1$
+        }
+        WrittenObjectMarkers.Report report;
+        try
+        {
+            report = WrittenObjectMarkers.collect(environment,
+                Map.of(validation.projectName(), validation.topObjects()), budgetMs);
+        }
+        catch (RuntimeException e)
+        {
+            Activator.logWarning("Could not collect the markers of the written DCS schema: " + e); //$NON-NLS-1$
+            report = WrittenObjectMarkers.readFailed(validation.topObjects(), budgetMs);
+        }
+        StringBuilder section = new StringBuilder(
+            WrittenObjectMarkers.markdown(report.withRecheckObjects(validation.recheckObjects())));
+        section.append("\n\n**Validated objects:** ") //$NON-NLS-1$
+            .append(MarkdownUtils.inlineCode(String.join(", ", validation.topObjects()))); //$NON-NLS-1$
+        if (validation.note() != null)
+        {
+            section.append(' ').append(validation.note());
+        }
+        return section.toString();
     }
 
     /** Converts a failed SWT handoff into the tool's structured error contract for every action. */
@@ -616,7 +717,7 @@ public class DcsTool implements IMcpTool
     }
 
     private static String executeWrite(String projectName, DcsAddress address, String action, String type,
-        JsonObject body, String expectedHash, String language)
+        JsonObject body, String expectedHash, String language, AtomicReference<ValidationScope> validation)
     {
         try
         {
@@ -644,6 +745,27 @@ public class DcsTool implements IMcpTool
                 return ToolResult.error(resolution.failure().message()).toJson();
             }
             DcsTargetResolver.Target target = resolution.target();
+            if (expectedHash == null && target.kind() != TargetKind.DYNAMIC_LIST
+                && target.kind() != TargetKind.FORM)
+            {
+                // Refuse an unread write into an existing schema before any query check or planning;
+                // the write transaction repeats the rule against the state it commits on.
+                String readFirst = BmTransactions.executeAndRollback(model, "DcsReadFirst", (tx, monitor) -> //$NON-NLS-1$
+                {
+                    // A vendor-locked owner refuses every write, read or not, so that refusal wins.
+                    String locked = vendorSupportRefusal(tx, context, target, address);
+                    if (locked != null) return locked;
+                    DcsRootReader.Result current = DcsRootReader.read(tx, target);
+                    return current.isSuccess() && current.root() != null
+                        ? readFirstError(DcsHash.compute(current.root()), action, address,
+                            target.normalizedRootFqn(), target.kind())
+                        : null;
+                });
+                if (readFirst != null)
+                {
+                    return ToolResult.error(readFirst).toJson();
+                }
+            }
             DcsPresentationParser.LanguageContext languages =
                 ReadToolExecution.readOnHost(context.project(), "Read DCS languages", () ->
                     new DcsPresentationParser.LanguageContext(currentRoot(context).scope().declaredLanguageCodes(),
@@ -672,7 +794,7 @@ public class DcsTool implements IMcpTool
                         + "author this dynamic list with its structured body and type='dynamicList'.").toJson(); //$NON-NLS-1$
                 }
                 return executeDynamicListWrite(context, target, address, action, type, body,
-                    expectedHash, languages, typeResolver, version, namedColors);
+                    expectedHash, languages, typeResolver, version, namedColors, validation);
             }
             if (target.kind() == DcsTargetResolver.TargetKind.FORM)
             {
@@ -683,7 +805,7 @@ public class DcsTool implements IMcpTool
                         + "type='conditionalAppearance' body.").toJson(); //$NON-NLS-1$
                 }
                 return executeFormConditionalAppearanceWrite(context, target, address, action,
-                    type, body, expectedHash, languages, version, namedColors);
+                    type, body, expectedHash, languages, version, namedColors, validation);
             }
 
             DcsSchemaContent.Services services = DcsSchemaContent.resolveServices(context, model);
@@ -768,7 +890,8 @@ public class DcsTool implements IMcpTool
                             + "' is no longer a DataCompositionSchema. Re-run dcs action='get'."); //$NON-NLS-1$
                     }
                     String currentHash = DcsHash.compute(current.root());
-                    String hashError = validateExpectedHash(expectedHash, currentHash, address);
+                    String hashError = hashRefusal(expectedHash, current.root() != null, currentHash,
+                        action, address, target.normalizedRootFqn(), target.kind());
                     if (hashError != null)
                     {
                         throw DcsWriteFailure.message(hashError);
@@ -906,6 +1029,8 @@ public class DcsTool implements IMcpTool
                     + ". Save or resync the project before refreshing it, then verify with dcs " //$NON-NLS-1$
                     + "action='get'.").toJson(); //$NON-NLS-1$
             }
+            validation.set(new ValidationScope(context.project().getName(), List.of(outcome.contentFqn),
+                List.of(target.normalizedRootFqn()), null));
             DcsWriter.Result counts = outcome.applied;
             String countsText = outcome.storedCounts != null
                 ? (counts == null ? "xml=wholesale, " : "autoFill=completed, ") + outcome.storedCounts //$NON-NLS-1$ //$NON-NLS-2$
@@ -939,7 +1064,7 @@ public class DcsTool implements IMcpTool
         DcsTargetResolver.Target target, DcsAddress address, String action, String type, JsonObject body,
         String expectedHash, DcsPresentationParser.LanguageContext languages,
         DcsWriter.TypeResolver typeResolver, com._1c.g5.v8.dt.platform.version.Version version,
-        StyleValueBuilder.NamedColorResolver namedColors)
+        StyleValueBuilder.NamedColorResolver namedColors, AtomicReference<ValidationScope> validation)
     {
         FormElementWriter.FormMemberRef ref = target.formMemberRef();
         FormElementWriter.FormEditContext fctx = FormElementWriter.resolveForEdit(context.project(),
@@ -956,6 +1081,16 @@ public class DcsTool implements IMcpTool
                         + "' was not found. Re-run dcs action='get' and copy the current FQN.").toJson(); //$NON-NLS-1$
                 }
                 DynamicListExtInfo extInfo = dynamicListExtInfo(member);
+                // Read-before-write is refused here too, ahead of the query check and the consent
+                // window; the write transaction below repeats it against the state it commits on.
+                String readFirst = extInfo == null ? null : hashRefusal(expectedHash, true,
+                    DcsHash.compute(extInfo), action, address, target.normalizedRootFqn(), target.kind());
+                if (readFirst != null)
+                {
+                    // A vendor-locked owner refuses every write, read or not, so that refusal wins.
+                    String locked = vendorSupportRefusal(tx, context, target, address);
+                    return ToolResult.error(locked != null ? locked : readFirst).toJson();
+                }
                 DcsDynamicListWriter.Result planned = DcsDynamicListWriter.plan(extInfo, action,
                     type, address, body, typesForTransaction(context, version, tx, typeResolver), languages, version, colorsForTransaction(context, version, tx, namedColors));
                 if (!planned.isSuccess())
@@ -1016,7 +1151,8 @@ public class DcsTool implements IMcpTool
                 }
                 DynamicListExtInfo extInfo = dynamicListExtInfo(member);
                 String currentHash = DcsHash.compute(extInfo);
-                String hashError = validateExpectedHash(expectedHash, currentHash, address);
+                String hashError = hashRefusal(expectedHash, extInfo != null, currentHash, action,
+                    address, target.normalizedRootFqn(), target.kind());
                 if (hashError != null)
                 {
                     throw new FormValidationException(ToolResult.error(hashError).toJson());
@@ -1094,6 +1230,15 @@ public class DcsTool implements IMcpTool
                 + (!formPersisted ? "Form.form" : written.settingsFqn) //$NON-NLS-1$
                 + ". Save or resync the project, then verify with dcs action='get'.").toJson(); //$NON-NLS-1$
         }
+        // A dynamic list's query, fields and main table live in the content form's top object, and EDT
+        // indexes markers per top object only, so the form's markers are the finest slice that holds
+        // the list's problems; its settings are a top object of their own.
+        Set<String> validated = new LinkedHashSet<>(target.forceExportFqns());
+        if (written.settingsFqn != null) validated.add(written.settingsFqn);
+        validated.remove(null);
+        validation.set(new ValidationScope(context.project().getName(), new ArrayList<>(validated),
+            List.of(ref.formPath), "A dynamic list is validated with the form that holds it, so these " //$NON-NLS-1$
+                + "are the markers of that form and of the list settings.")); //$NON-NLS-1$
         return "**Action:** `" + action + "`\n\n**Target:** `" + address //$NON-NLS-1$ //$NON-NLS-2$
             + "`\n\n**Hash:** `" + verified.modelHash //$NON-NLS-1$
             + "`\n\n**Form.form export scheduled:** `true`" //$NON-NLS-1$
@@ -1161,7 +1306,7 @@ public class DcsTool implements IMcpTool
         DcsAddress address, String action, String type, JsonObject body, String expectedHash,
         DcsPresentationParser.LanguageContext languages,
         com._1c.g5.v8.dt.platform.version.Version version,
-        StyleValueBuilder.NamedColorResolver namedColors)
+        StyleValueBuilder.NamedColorResolver namedColors, AtomicReference<ValidationScope> validation)
     {
         FormElementWriter.FormEditContext fctx = FormElementWriter.resolveForEdit(context.project(),
             context.scope(), target.formPath(), "Form target '" + target.normalizedRootFqn() //$NON-NLS-1$
@@ -1192,7 +1337,8 @@ public class DcsTool implements IMcpTool
                 com._1c.g5.v8.dt.dcs.model.settings.DataCompositionConditionalAppearance current =
                     resolved.appearance();
                 String currentHash = DcsHash.compute(current);
-                String hashError = validateExpectedHash(expectedHash, currentHash, address);
+                String hashError = hashRefusal(expectedHash, current != null, currentHash, action,
+                    address, target.normalizedRootFqn(), target.kind());
                 if (hashError != null)
                 {
                     throw new FormValidationException(ToolResult.error(hashError).toJson());
@@ -1266,6 +1412,11 @@ public class DcsTool implements IMcpTool
                 + ". Save or resync the " //$NON-NLS-1$
                 + "project, then verify with dcs action='get'.").toJson(); //$NON-NLS-1$
         }
+        // The appearance is an external top object of its own, and EDT's conditional-appearance checks
+        // index their markers under it; removing the last rule leaves none to validate.
+        validation.set(new ValidationScope(context.project().getName(),
+            written.appearanceFqn == null ? List.of() : List.of(written.appearanceFqn),
+            List.of(target.formPath()), null));
         return "**Action:** `" + action + "`\n\n**Target:** `" + address //$NON-NLS-1$ //$NON-NLS-2$
             + "`\n\n**Hash:** `" + verified.hash //$NON-NLS-1$
             + "`\n\n**Form.form export scheduled:** `true`\n\n**Applied:** " //$NON-NLS-1$
@@ -1372,6 +1523,45 @@ public class DcsTool implements IMcpTool
     {
         return expected == null || expected.equals(current) ? null
             : expectedHashError(expected, current, address);
+    }
+
+    /**
+     * The hash rule of every write: a schema that already exists is changed only by a caller that read
+     * it, so its hash is required and must still match; a write that creates the schema (the root is
+     * absent) needs none, and a hash given for it must match the absent-root hash {@code get} prints.
+     *
+     * @param expected the caller's {@code expectedHash}, may be {@code null}
+     * @param rootExists whether the write's root already holds a schema in the transaction
+     * @param current the root's current hash
+     * @param action the write action
+     * @param address the addressed target
+     * @param rootFqn the resolved root FQN
+     * @param kind the resolved root kind
+     * @return the refusal, or {@code null} when the write may proceed
+     */
+    static String hashRefusal(String expected, boolean rootExists, String current, String action,
+        DcsAddress address, String rootFqn, TargetKind kind)
+    {
+        if (expected == null && rootExists)
+        {
+            return readFirstError(current, action, address, rootFqn, kind);
+        }
+        return validateExpectedHash(expected, current, address);
+    }
+
+    /**
+     * Refuses a write into an existing schema that carries no {@code expectedHash}: the caller must
+     * read what it changes. Names the read call and the current hash.
+     */
+    static String readFirstError(String current, String action, DcsAddress address, String rootFqn,
+        TargetKind kind)
+    {
+        String readType = kind == TargetKind.DYNAMIC_LIST ? "dynamicList" //$NON-NLS-1$
+            : kind == TargetKind.FORM ? "conditionalAppearance" : "schema"; //$NON-NLS-1$ //$NON-NLS-2$
+        return "Read the schema first: '" + rootFqn + "' already holds a DCS schema, so action='" //$NON-NLS-1$ //$NON-NLS-2$
+            + action + "' at '" + address + "' requires expectedHash. Run dcs action='get' fqn='" //$NON-NLS-1$ //$NON-NLS-2$
+            + rootFqn + "' type='" + readType + "' (current hash '" + current //$NON-NLS-1$ //$NON-NLS-2$
+            + "'), check the part you change, and pass its hash as expectedHash; nothing was written."; //$NON-NLS-1$
     }
 
     /** Uses the root's writer catalogue; the source seam also exercises tool routing headlessly. */

@@ -27,6 +27,7 @@ from harness import (
     restore_extension_fixture,
     wait_for_project_ready,
 )
+from tools.test_dcs import _with_read_hash
 
 MAIN_DCS_TEMPLATE = (
     "Основная"
@@ -89,8 +90,9 @@ def _seed_report(project, name):
 
 
 def _dcs(project, fqn, action, target_type, body):
-    return call("dcs", {"projectName": project, "fqn": fqn, "action": action, "type": target_type,
-                        "body": body})
+    # Read the root first: every write into an existing schema carries its hash (#662).
+    return call("dcs", _with_read_hash({"projectName": project, "fqn": fqn, "action": action,
+                                         "type": target_type, "body": body}))
 
 
 def _parameter(project, report, name, item):
