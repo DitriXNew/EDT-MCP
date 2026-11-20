@@ -449,7 +449,9 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
             + " s: nobody answered the confirmation dialog in EDT, so the call was refused, the dialog " //$NON-NLS-1$
             + "does not stay open, and nothing was changed. " //$NON-NLS-1$
             + "Ask the user to watch the EDT window, then repeat the same call - the dialog opens " //$NON-NLS-1$
-            + "again. To proceed without the dialog: Preferences -> MCP Server -> Destructive " //$NON-NLS-1$
+            + "again (unless the user pressed 'Allow for session' just after the wait ended: then the " //$NON-NLS-1$
+            + "repeat runs without one, so repeat only if the operation is still wanted). " //$NON-NLS-1$
+            + "To proceed without the dialog: Preferences -> MCP Server -> Destructive " //$NON-NLS-1$
             + "operations ('Allow all', or allow '" + toolName + "' per tool), or " //$NON-NLS-1$ //$NON-NLS-2$
             + ENV_DESTRUCTIVE_CONSENT + "=allow on the EDT process at launch. The wait itself is " //$NON-NLS-1$
             + "'Confirmation wait' on the same page; keep it below your MCP client's request timeout."; //$NON-NLS-1$
