@@ -7,6 +7,7 @@
 package com.ditrix.edt.mcp.server.ui;
 
 import java.util.List;
+import java.util.OptionalLong;
 
 import org.eclipse.jface.dialogs.Dialog;
 import org.eclipse.jface.dialogs.IDialogConstants;
@@ -47,6 +48,20 @@ public class DestructiveConsentDialog extends Dialog
     private final String toolName;
     private final ConsentPreview preview;
     private final int waitSeconds;
+    /** When a button was pressed ({@link System#nanoTime()}); empty until then. UI thread only. */
+    private OptionalLong answeredAtNanos = OptionalLong.empty();
+    private AnswerListener answerListener;
+
+    /** Told of a button press at the press, before the dialog closes. */
+    @FunctionalInterface
+    public interface AnswerListener
+    {
+        /**
+         * @param buttonId the pressed button's id
+         * @param atNanos when it was pressed ({@link System#nanoTime()})
+         */
+        void answered(int buttonId, long atNanos);
+    }
 
     /**
      * Creates the dialog.
@@ -188,9 +203,54 @@ public class DestructiveConsentDialog extends Dialog
         createButton(parent, IDialogConstants.CANCEL_ID, "Reject", false); //$NON-NLS-1$
     }
 
+    /**
+     * @return when a button of this dialog was pressed ({@link System#nanoTime()}), or empty when it
+     *         closed without a press (closed by the gate's timer, or by the window's close box)
+     */
+    public OptionalLong answeredAtNanos()
+    {
+        return answeredAtNanos;
+    }
+
+    /**
+     * @param listener told of a press before the dialog closes (may be {@code null})
+     */
+    public void setAnswerListener(AnswerListener listener)
+    {
+        answerListener = listener;
+    }
+
+    @Override
+    protected void handleShellCloseEvent()
+    {
+        // The close box and Esc reject the operation: reported at the event, like the Reject button.
+        answered(IDialogConstants.CANCEL_ID);
+        super.handleShellCloseEvent();
+    }
+
+    private void answered(int buttonId)
+    {
+        // The press time is what the gate judges against its cutoff, not when closing finished, and the
+        // gate hears of it now: the dialog's teardown must not let a waiting timeout overtake the press.
+        long at = System.nanoTime();
+        answeredAtNanos = OptionalLong.of(at);
+        // Hidden before the gate is told: hiding drops it from the open-dialog list at once (EdtDialogs
+        // watches SWT.Hide), so a caller released by this answer is not told the prompt still waits.
+        Shell shell = getShell();
+        if (shell != null && !shell.isDisposed())
+        {
+            shell.setVisible(false);
+        }
+        if (answerListener != null)
+        {
+            answerListener.answered(buttonId, at);
+        }
+    }
+
     @Override
     protected void buttonPressed(int buttonId)
     {
+        answered(buttonId);
         // Close the dialog with the pressed id as the return code so the gate can map
         // it: OK -> Allow, ALLOW_FOR_SESSION_ID -> Allow-for-session, CANCEL -> Reject.
         if (buttonId == DestructiveConsentGate.ALLOW_FOR_SESSION_ID)

@@ -61,7 +61,7 @@ wait** (General tab, next to the consent level): **45 seconds** by default, 15�
 below the request timeout of common MCP clients (Claude Code gives an HTTP server about 60 s), so the
 caller receives the gate's own error instead of a bare client timeout; keep the setting below your
 client's timeout. The dialog says when it closes by itself. If nobody answers in time, the call is
-refused and the dialog does not stay open — nothing is changed, and a later click cannot apply it — with an error
+refused and the dialog does not stay open — nothing is changed, and a later click cannot apply it (a late *Allow for this session* is still remembered, so the next call runs without a dialog, and the refusal says so) — with an error
 naming the tool, the wait, and the ways on: ask the user to watch the EDT window and repeat the same
 call (the dialog opens again), allow the tool via Preferences (*Allow all* or per-tool), or set
 `EDT_MCP_DESTRUCTIVE_CONSENT=allow` for unattended runs. The wait is the gate's alone: work a tool does

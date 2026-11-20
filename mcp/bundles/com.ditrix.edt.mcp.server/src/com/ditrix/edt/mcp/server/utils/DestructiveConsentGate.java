@@ -7,11 +7,13 @@
 package com.ditrix.edt.mcp.server.utils;
 
 import java.util.List;
+import java.util.OptionalLong;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.LongSupplier;
 
 import org.eclipse.jface.dialogs.IDialogConstants;
 import org.eclipse.swt.SWTException;
@@ -206,6 +208,15 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
     private static final DestructiveConsentGate INSTANCE = new DestructiveConsentGate();
 
     /**
+     * The wait of a prompt that ended in {@link ConsentDecision#TIMEOUT}, handed from the gate to the
+     * {@link #consentDeniedMessage} call that the same tool makes on the same thread right after, so
+     * the refusal names the wait that prompt actually used even when the preference changed while it
+     * was open. Cleared when a new consent request starts and consumed by the message, so a pooled
+     * thread keeps at most one boxed number between the two calls.
+     */
+    private static final ThreadLocal<Integer> TIMED_OUT_WAIT = new ThreadLocal<>();
+
+    /**
      * Tool names the user chose "Allow for session" for. In-memory only — cleared on
      * EDT restart. A concurrent set: the gate is called from MCP worker threads.
      */
@@ -290,6 +301,8 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
 
     ConsentDecision requireConsent(String toolName, ConsentPreview preview, HostKind host, boolean envAllow)
     {
+        // A timeout this thread never reported belongs to an earlier request, not to this one.
+        TIMED_OUT_WAIT.remove();
         // The explicit headless host has no interaction and always allows, regardless of consent settings.
         if (host == HostKind.HEADLESS)
         {
@@ -390,9 +403,33 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
         }
         if (decision == ConsentDecision.TIMEOUT)
         {
-            return timeoutMessage(toolName, promptWaitSeconds());
+            Integer used = TIMED_OUT_WAIT.get();
+            TIMED_OUT_WAIT.remove();
+            int waitSeconds = used != null ? used.intValue() : promptWaitSeconds();
+            // "Allow for session" pressed after the cutoff is still remembered (#277), so a repeat of
+            // the same call runs WITHOUT a dialog - the usual "the dialog opens again" would be false.
+            return INSTANCE.isSessionAllowed(toolName)
+                ? lateSessionAllowMessage(toolName, waitSeconds)
+                : timeoutMessage(toolName, waitSeconds);
         }
         return "Operation declined by user"; //$NON-NLS-1$
+    }
+
+    /**
+     * The {@link ConsentDecision#TIMEOUT} text when the user pressed "Allow for session" after the
+     * cutoff: this call stays refused, but the tool is now allowed for the session, so a repeat runs
+     * without a dialog and the caller must hear that instead of "the dialog opens again".
+     *
+     * @param toolName the gated tool's name
+     * @param waitSeconds the wait that elapsed, in seconds
+     * @return the message text
+     */
+    static String lateSessionAllowMessage(String toolName, int waitSeconds)
+    {
+        return "Destructive operation '" + toolName + "' was not confirmed within " + waitSeconds //$NON-NLS-1$ //$NON-NLS-2$
+            + " s, so this call was refused and nothing was changed. The user then chose 'Allow for " //$NON-NLS-1$
+            + "session' after the wait had ended, so repeating the same call now runs it WITHOUT a " //$NON-NLS-1$
+            + "dialog: repeat it only if the operation is still wanted."; //$NON-NLS-1$
     }
 
     /**
@@ -498,7 +535,7 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
         int waitSeconds = promptWaitSeconds();
         if (Display.getCurrent() != null)
         {
-            return promptOnUiThread(toolName, preview, display, shell, waitSeconds);
+            return finishPrompt(promptOnUiThread(toolName, preview, display, shell, waitSeconds), waitSeconds);
         }
 
         // Windowed shutdown can dispose the display after admission; it still refuses.
@@ -507,7 +544,24 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
         {
             return refuseOnDisposedDisplay(toolName);
         }
-        return promptWithTimeout(toolName, preview, display, shell, waitSeconds);
+        return finishPrompt(promptWithTimeout(toolName, preview, display, shell, waitSeconds), waitSeconds);
+    }
+
+    /**
+     * Leaves the wait of a timed-out prompt for the refusal text (see {@link #TIMED_OUT_WAIT}). Runs on
+     * the thread that asked for consent - both prompt paths return their verdict there.
+     *
+     * @param decision the prompt's verdict
+     * @param waitSeconds the wait the prompt used
+     * @return {@code decision}
+     */
+    static ConsentDecision finishPrompt(ConsentDecision decision, int waitSeconds)
+    {
+        if (decision == ConsentDecision.TIMEOUT)
+        {
+            TIMED_OUT_WAIT.set(waitSeconds);
+        }
+        return decision;
     }
 
     /**
@@ -535,28 +589,53 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
     private ConsentDecision promptOnUiThread(String toolName, ConsentPreview preview, Display display,
         Shell shell, int waitSeconds)
     {
-        ConsentArbiter arbiter = new ConsentArbiter();
-        DestructiveConsentDialog dialog = new DestructiveConsentDialog(shell, toolName, preview, waitSeconds);
-        Runnable closer = () -> {
+        long deadlineNanos = System.nanoTime() + TimeUnit.SECONDS.toNanos(waitSeconds);
+        ConsentArbiter arbiter = ConsentArbiter.until(deadlineNanos);
+        DestructiveConsentDialog dialog = new DestructiveConsentDialog(shell, toolName, preview,
+            remainingSeconds(deadlineNanos, System.nanoTime()));
+        // The closer is tied to the arbiter's absolute cutoff, not to a delay counted from when it was
+        // scheduled: it re-reads the time left and re-arms itself in short slices until the cutoff, so a
+        // UI thread that stalled after scheduling does not keep the dialog open past it.
+        Runnable[] closer = new Runnable[1];
+        closer[0] = () -> {
+            long left = arbiter.remainingMillis();
+            if (left > 0 && arbiter.peek() == null)
+            {
+                display.timerExec((int)Math.min(left, ConsentArbiter.AWAIT_SLICE_MILLIS), closer[0]);
+                return;
+            }
             if (arbiter.tryDecide(ConsentDecision.TIMEOUT))
             {
                 logTimeoutWin(toolName, waitSeconds);
                 closeOnUiThread(dialog);
             }
         };
-        display.timerExec((int)TimeUnit.SECONDS.toMillis(waitSeconds), closer);
+        // The answer is judged at the press, before the dialog tears down (see recordDialogAnswer).
+        dialog.setAnswerListener((buttonId, atNanos) ->
+            recordDialogAnswer(arbiter, toolName, buttonId, OptionalLong.of(atNanos)));
+        // Checked last, right before the dialog would show: an expired prompt is never opened.
+        if (arbiter.remainingMillis() <= 0)
+        {
+            closer[0].run();
+            return arbiter.peek();
+        }
+        display.timerExec((int)Math.min(arbiter.remainingMillis(), ConsentArbiter.AWAIT_SLICE_MILLIS), closer[0]);
         int code = dialog.open();
         // Cancel the closer if it is still pending (negative delay = SWT's cancel idiom);
         // harmless when it already fired or the display is shutting down.
         try
         {
-            display.timerExec(-1, closer);
+            display.timerExec(-1, closer[0]);
         }
         catch (SWTException e) // NOSONAR display disposed while the dialog was up -> nothing left to cancel
         {
             // No-op: the workbench is shutting down; the arbiter guard already covers the late closer.
         }
-        recordDialogAnswer(arbiter, toolName, code);
+        if (dialog.answeredAtNanos().isEmpty())
+        {
+            // Closed without a press or a close-box event: by the closer.
+            recordDialogAnswer(arbiter, toolName, code, OptionalLong.empty());
+        }
         return arbiter.peek();
     }
 
@@ -585,10 +664,12 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
     private ConsentDecision promptWithTimeout(String toolName, ConsentPreview preview, Display display,
         Shell shell, int waitSeconds)
     {
-        ConsentArbiter arbiter = new ConsentArbiter();
-        AtomicReference<DestructiveConsentDialog> dialogRef = new AtomicReference<>();
-        // The wait starts now; a dialog that opens late (a busy UI queue) shows only what is left.
+        // ONE cutoff for the prompt: the dialog's advertised expiry, this thread's wait and the verdict all
+        // use it, so neither a late UI queue nor a descheduled worker can stretch it.
         long deadlineNanos = System.nanoTime() + TimeUnit.SECONDS.toNanos(waitSeconds);
+        ConsentArbiter arbiter = ConsentArbiter.until(deadlineNanos);
+        AtomicReference<DestructiveConsentDialog> dialogRef = new AtomicReference<>();
+        // A dialog that opens late (a busy UI queue) shows only what is left.
         Runnable openDialog = () -> {
             int secondsLeft = remainingSeconds(deadlineNanos, System.nanoTime());
             if (secondsLeft <= 0 || !mayOpenDialog(shell.isDisposed(), arbiter))
@@ -606,8 +687,14 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
                 closeOnUiThread(dialog);
                 return;
             }
+            // Published at the press, before teardown: a waking worker then finds the answer decided.
+            dialog.setAnswerListener((buttonId, atNanos) ->
+                recordDialogAnswer(arbiter, toolName, buttonId, OptionalLong.of(atNanos)));
             int code = dialog.open();
-            recordDialogAnswer(arbiter, toolName, code);
+            if (dialog.answeredAtNanos().isEmpty())
+            {
+                recordDialogAnswer(arbiter, toolName, code, OptionalLong.empty());
+            }
         };
         try
         {
@@ -621,7 +708,7 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
         boolean decidedInTime;
         try
         {
-            decidedInTime = arbiter.await(waitSeconds);
+            decidedInTime = arbiter.awaitUntilDeadline();
         }
         catch (InterruptedException e)
         {
@@ -665,6 +752,22 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
      */
     void recordDialogAnswer(ConsentArbiter arbiter, String toolName, int code)
     {
+        recordDialogAnswer(arbiter, toolName, code, OptionalLong.empty());
+    }
+
+    /**
+     * {@link #recordDialogAnswer(ConsentArbiter, String, int)} judged at the moment the button was
+     * PRESSED, not when the dialog finished closing: disposing the shell and cancelling the closer
+     * can cross the cutoff, and a timely press must not turn into a timeout on the way out.
+     *
+     * @param arbiter the race arbiter for this dialog invocation
+     * @param toolName the gated tool's name
+     * @param code the JFace button id the dialog closed with
+     * @param answeredAtNanos when the button was pressed ({@link System#nanoTime()}); empty when the
+     *            dialog closed without a press, which is then judged now
+     */
+    void recordDialogAnswer(ConsentArbiter arbiter, String toolName, int code, OptionalLong answeredAtNanos)
+    {
         boolean sessionButton = code == ALLOW_FOR_SESSION_ID;
         ConsentDecision candidate =
             sessionButton || code == IDialogConstants.OK_ID ? ConsentDecision.ALLOW : ConsentDecision.REJECT;
@@ -673,6 +776,16 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
             sessionAllow.add(toolName);
             Activator.logInfo("Destructive-consent gate: user allowed '" + toolName //$NON-NLS-1$
                 + "' for the rest of this EDT session."); //$NON-NLS-1$
+        }
+        if (arbiter.isPast(answeredAtNanos))
+        {
+            // Answered after the cutoff: the timeout decides, and is logged like the other timeout wins.
+            if (arbiter.tryDecide(ConsentDecision.TIMEOUT))
+            {
+                Activator.logInfo("Destructive-consent gate: '" + toolName //$NON-NLS-1$
+                    + "' was answered after its confirmation wait ended; auto-rejecting."); //$NON-NLS-1$
+            }
+            return;
         }
         if (arbiter.tryDecide(candidate) && candidate == ConsentDecision.REJECT)
         {
@@ -744,7 +857,7 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
      */
     static boolean mayOpenDialog(boolean parentDisposed, ConsentArbiter arbiter)
     {
-        return !parentDisposed && arbiter.peek() == null;
+        return !parentDisposed && arbiter.peek() == null && arbiter.remainingMillis() != 0;
     }
 
     /**
@@ -944,6 +1057,59 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
 
         private final CountDownLatch latch = new CountDownLatch(1);
 
+        /** {@link #remainingMillis()} of an arbiter without a cutoff. */
+        static final long NO_DEADLINE = -1L;
+
+        /** The longest single wait inside {@link #awaitUntilDeadline()} before the clock is read again. */
+        static final long AWAIT_SLICE_MILLIS = 250L;
+
+        /** The {@link System#nanoTime()} cutoff of the prompt, or {@code null} for none. */
+        private final Long deadlineNanos;
+
+        private final LongSupplier clock;
+
+        /** An arbiter without a cutoff: an answer can decide whenever it comes. */
+        ConsentArbiter()
+        {
+            this(null, System::nanoTime);
+        }
+
+        /**
+         * An arbiter whose answers count only before {@code deadlineNanos}.
+         *
+         * @param deadlineNanos the cutoff on {@code clock}'s scale, or {@code null} for none
+         * @param clock the time source (the gate passes {@link System#nanoTime()})
+         */
+        ConsentArbiter(Long deadlineNanos, LongSupplier clock)
+        {
+            this.deadlineNanos = deadlineNanos;
+            this.clock = clock;
+        }
+
+        /**
+         * @param deadlineNanos the prompt's {@link System#nanoTime()} cutoff
+         * @return an arbiter for that cutoff on the real clock
+         */
+        static ConsentArbiter until(long deadlineNanos)
+        {
+            return new ConsentArbiter(deadlineNanos, System::nanoTime);
+        }
+
+        /**
+         * @param answeredAtNanos when an answer was given on this arbiter's clock; empty means now
+         * @return {@code true} when that is at or after the cutoff
+         */
+        boolean isPast(OptionalLong answeredAtNanos)
+        {
+            return pastDeadline(answeredAtNanos.orElse(clock.getAsLong()));
+        }
+
+        private boolean pastDeadline(long atNanos)
+        {
+            return deadlineNanos != null && atNanos - deadlineNanos.longValue() >= 0;
+        }
+
+
         /**
          * Attempts to record the final decision. The first call across both threads
          * wins and releases {@link #await(long)}; every subsequent call is a no-op.
@@ -984,6 +1150,43 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
         boolean await(long timeoutSeconds) throws InterruptedException
         {
             return BoundedUiCall.awaitInterruptibly(latch, TimeUnit.SECONDS.toMillis(timeoutSeconds));
+        }
+
+        /**
+         * Blocks until a decision is recorded or the cutoff passes - only for the time LEFT, so a
+         * thread that arrives late does not get a fresh full wait.
+         *
+         * @return {@code true} if a decision was recorded before the cutoff
+         * @throws InterruptedException if the calling thread is interrupted while waiting
+         */
+        boolean awaitUntilDeadline() throws InterruptedException
+        {
+            // In slices, re-reading the clock each time: a thread paused between reading the time left
+            // and starting to wait must not then wait that whole span past the cutoff.
+            long millis = remainingMillis();
+            while (millis > 0)
+            {
+                if (BoundedUiCall.awaitInterruptibly(latch, Math.min(millis, AWAIT_SLICE_MILLIS)))
+                {
+                    return true;
+                }
+                millis = remainingMillis();
+            }
+            return latch.getCount() == 0;
+        }
+
+        /**
+         * @return the whole milliseconds left until the cutoff, rounded up; {@code 0} once it has passed;
+         *         {@link #NO_DEADLINE} when there is no cutoff
+         */
+        long remainingMillis()
+        {
+            if (deadlineNanos == null)
+            {
+                return NO_DEADLINE;
+            }
+            long left = deadlineNanos.longValue() - clock.getAsLong();
+            return left <= 0 ? 0L : TimeUnit.NANOSECONDS.toMillis(left + 999_999L);
         }
     }
 }
