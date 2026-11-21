@@ -249,7 +249,7 @@ public final class DcsTargetResolver
     {
         return "Template '" + fqn + "' contains '" + actualType //$NON-NLS-1$ //$NON-NLS-2$
             + "', not a DataCompositionSchema. Address a DATA_COMPOSITION_SCHEMA template; " //$NON-NLS-1$
-            + "for SpreadsheetDocument content use modify_metadata's template payload instead."; //$NON-NLS-1$
+            + "for SpreadsheetDocument content use template_content(method='modify') instead."; //$NON-NLS-1$
     }
 
     /** Pure actionable error for an attribute whose ext-info is not a dynamic list. */

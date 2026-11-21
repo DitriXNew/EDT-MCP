@@ -299,15 +299,22 @@ public class SpreadsheetTemplateBordersAndRemovalTest
         assertEquals("Title", cellAt(doc, 0, 0).getText().getContent().get("#"));
         Format topLeft = formatAt(doc, 0, 0);
         assertTrue(topLeft.isSetLeftBorder() && topLeft.isSetTopBorder());
-        assertFalse("an inner side loses its line", topLeft.isSetRightBorder());
-        assertFalse("an inner side loses its line", topLeft.isSetBottomBorder());
+        assertTrue(topLeft.isSetRightBorder());
+        assertEmptyLine(doc, topLeft.getRightBorder());
+        assertTrue(topLeft.isSetBottomBorder());
+        assertEmptyLine(doc, topLeft.getBottomBorder());
         Format bottomRight = formatAt(doc, 1, 2);
         assertTrue(bottomRight.isSetRightBorder() && bottomRight.isSetBottomBorder());
-        assertFalse(bottomRight.isSetLeftBorder());
-        assertFalse(bottomRight.isSetTopBorder());
+        assertTrue(bottomRight.isSetLeftBorder());
+        assertEmptyLine(doc, bottomRight.getLeftBorder());
+        assertTrue(bottomRight.isSetTopBorder());
+        assertEmptyLine(doc, bottomRight.getTopBorder());
         Format topMiddle = formatAt(doc, 0, 1);
         assertTrue(topMiddle.isSetTopBorder());
-        assertFalse(topMiddle.isSetLeftBorder() || topMiddle.isSetRightBorder() || topMiddle.isSetBottomBorder());
+        assertTrue(topMiddle.isSetLeftBorder() && topMiddle.isSetRightBorder() && topMiddle.isSetBottomBorder());
+        assertEmptyLine(doc, topMiddle.getLeftBorder());
+        assertEmptyLine(doc, topMiddle.getRightBorder());
+        assertEmptyLine(doc, topMiddle.getBottomBorder());
         for (int row = 0; row <= 1; row++)
         {
             for (int col = 0; col <= 2; col++)
@@ -582,5 +589,37 @@ public class SpreadsheetTemplateBordersAndRemovalTest
         assertTrue(result.hasError());
         assertTrue(result.error, result.error.contains("not a cell area"));
         assertSame(drawing, doc.getNamedItems().get("D1"));
+    }
+
+    private static void assertEmptyLine(SpreadsheetDocument doc, int index)
+    {
+        assertEquals(CellLineStyle.NONE, line(doc, index).getStyle());
+        assertEquals(0, line(doc, index).getWidth());
+    }
+
+    @Test
+    public void unmergeExplicitlyBlocksInheritedInteriorBorders()
+    {
+        SpreadsheetDocument doc = MoxelFactory.eINSTANCE.createSpreadsheetDocument();
+        applyOk(doc, "{\"cells\":[{\"row\":0,\"col\":0,\"borders\":\"Solid\"}],"
+            + "\"merges\":[{\"fromRow\":0,\"fromCol\":0,\"toRow\":1,\"toCol\":1}]}");
+        doc.setDefaultFormatIndex(cellAt(doc, 0, 0).getFormatIndex());
+        applyOk(doc, "{\"unmerges\":[{\"fromRow\":0,\"fromCol\":0,\"toRow\":1,\"toCol\":1}]}");
+        Format corner = formatAt(doc, 0, 0);
+        assertTrue(corner.isSetRightBorder() && corner.isSetBottomBorder());
+        assertEmptyLine(doc, corner.getRightBorder());
+        assertEmptyLine(doc, corner.getBottomBorder());
+        assertEquals(CellLineStyle.SOLID, line(doc, corner.getTopBorder()).getStyle());
+        assertEquals("one pooled empty line shared by every interior edge", 2, doc.getLines().size());
+    }
+
+    @Test
+    public void digitLeadingAreaRenameFollowsEdtsTemplateNameRule()
+    {
+        SpreadsheetDocument doc = MoxelFactory.eINSTANCE.createSpreadsheetDocument();
+        addArea(doc, "Header", 0, 0, 1, 3);
+        applyOk(doc, "{\"renameAreas\":[{\"name\":\"Header\",\"newName\":\"1Header\"}]}");
+        assertFalse(doc.getNamedItems().containsKey("Header"));
+        assertTrue(doc.getNamedItems().containsKey("1Header"));
     }
 }

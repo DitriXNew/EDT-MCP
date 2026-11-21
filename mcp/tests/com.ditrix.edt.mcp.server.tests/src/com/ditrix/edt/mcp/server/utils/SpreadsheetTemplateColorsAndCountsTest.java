@@ -225,4 +225,57 @@ public class SpreadsheetTemplateColorsAndCountsTest
             assertTrue(doc.getRows().isEmpty());
         }
     }
+
+    @Test
+    public void missingCatalogueDoesNotAcceptAnAmbiguousConfigurationColour()
+    {
+        SpreadsheetDocument doc = MoxelFactory.eINSTANCE.createSpreadsheetDocument();
+        Result result = SpreadsheetTemplateWriter.apply(doc, JsonParser.parseString(
+            "{\"cells\":[{\"row\":0,\"col\":0,\"backColor\":\"Style.FormBackColor\"}]}").getAsJsonObject(), null,
+            SpreadsheetTemplateWriter.projectColors(() -> {
+                throw new AssertionError("An unavailable catalogue must not consult configuration");
+            }, null));
+        assertTrue(result.hasError());
+        assertTrue(result.error, result.error.contains("unavailable"));
+        assertTrue(doc.getRows().isEmpty());
+        assertTrue(doc.getColors().isEmpty());
+    }
+
+    @Test
+    public void mixedResolvedAndProxyReferencesReuseTheSamePoolEntryInEitherOrder()
+    {
+        for (boolean existingProxy : new boolean[] { false, true })
+        {
+            var resolved = McoreFactory.eINSTANCE.createColorDef();
+            var resource = new org.eclipse.emf.ecore.resource.impl.ResourceImpl(
+                org.eclipse.emf.common.util.URI.createURI("test:/colors"));
+            resource.getContents().add(resolved);
+            var proxy = McoreFactory.eINSTANCE.createColorDef();
+            ((InternalEObject)proxy).eSetProxyURI(org.eclipse.emf.ecore.util.EcoreUtil.getURI(resolved));
+            ColorRef existing = McoreFactory.eINSTANCE.createColorRef();
+            existing.setColor(existingProxy ? proxy : resolved);
+            ColorRef incoming = McoreFactory.eINSTANCE.createColorRef();
+            incoming.setColor(existingProxy ? resolved : proxy);
+            SpreadsheetDocument doc = MoxelFactory.eINSTANCE.createSpreadsheetDocument();
+            doc.getColors().add(existing);
+            Result result = SpreadsheetTemplateWriter.apply(doc, JsonParser.parseString(
+                "{\"cells\":[{\"row\":0,\"col\":0,\"backColor\":\"Web.Red\"}]}").getAsJsonObject(), null,
+                raw -> AppearanceValueBuilder.Result.ok(incoming, null));
+            assertFalse(result.error, result.hasError());
+            assertEquals(1, doc.getColors().size());
+            assertSame(existing, doc.getColors().get(0));
+        }
+    }
+
+    @Test
+    public void aThrowingCatalogueReportsUnavailableRatherThanNotFound()
+    {
+        var catalogue = org.mockito.Mockito.mock(com._1c.g5.v8.dt.platform.IEObjectProvider.class);
+        org.mockito.Mockito.when(catalogue.getProxy("Style.Accent"))
+            .thenThrow(new IllegalStateException("catalogue unavailable"));
+        AppearanceValueBuilder.Result result = AppearanceValueBuilder.buildColor(
+            JsonParser.parseString("{\"color\":\"Style.Accent\"}"), null, catalogue);
+        assertEquals(PlatformCatalogue.Status.UNAVAILABLE, result.lookupStatus);
+        assertTrue(result.error, result.error.contains("unavailable"));
+    }
 }

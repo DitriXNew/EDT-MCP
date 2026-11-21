@@ -109,7 +109,8 @@ def test_text_template_roundtrip_utf8_hash_and_stale_guard():
         assert path.read_bytes() == b"", "creation must create an empty Template.txt"
         assert _text_and_hash(_details(fqn)) == ("", _hash(""))
         text = '{\n  "message": "Привет, мир",\n  "version": 730\n}\n'
-        written = call("modify_metadata", {
+        written = call("template_content", {
+            "method": "modify",
             "projectName": PROJECT, "fqn": fqn,
             "template": {"mode": "replace", "text": text, "expectedHash": _hash("")},
         })
@@ -119,7 +120,8 @@ def test_text_template_roundtrip_utf8_hash_and_stale_guard():
         assert written.structured["template"]["contentHash"] == _hash(text)
 
         before_tree = tree_snapshot()
-        stale = call("modify_metadata", {
+        stale = call("template_content", {
+            "method": "modify",
             "projectName": PROJECT, "fqn": fqn,
             "template": {"mode": "replace", "text": "must not replace", "expectedHash": _hash("")},
         })
@@ -150,7 +152,8 @@ def test_text_template_retype_nonempty_refused_empty_allowed():
         fqn, path = _create(owner, root, "Retype", "TextDocument")
         assert path.read_bytes() == b""
         assert _text_and_hash(_details(fqn))[0] == ""
-        assert_ok(call("modify_metadata", {
+        assert_ok(call("template_content", {
+            "method": "modify",
             "projectName": PROJECT, "fqn": fqn, "template": {"mode": "replace", "text": "keep\n", "expectedSource": ""},
         }), "populate before retype")
         before = path.read_bytes()
@@ -165,7 +168,8 @@ def test_text_template_retype_nonempty_refused_empty_allowed():
         assert _text_and_hash(_details(fqn))[0] == "keep\n"
         assert_error_quality(assert_error(refused, "non-empty retype"),
                              names=["content"], suggests=["create_metadata"])
-        assert_ok(call("modify_metadata", {
+        assert_ok(call("template_content", {
+            "method": "modify",
             "projectName": PROJECT, "fqn": fqn, "template": {"mode": "replace", "text": "", "expectedSource": "keep\n"},
         }), "clear text explicitly")
         retyped = call("modify_metadata", {
@@ -178,7 +182,8 @@ def test_text_template_retype_nonempty_refused_empty_allowed():
         _descriptor(root, "Retype", "SpreadsheetDocument")
         assert_ok(retyped, "retype empty text template")
         # A spreadsheet payload accepted on the same FQN proves the model type changed too.
-        authored = call("modify_metadata", {
+        authored = call("template_content", {
+            "method": "modify",
             "projectName": PROJECT, "fqn": fqn,
             "template": {"cells": [{"row": 0, "col": 0, "text": "Retyped730"}]},
         })
@@ -208,7 +213,8 @@ def test_spreadsheet_template_empty_retype_to_text_then_cell_retype_refused():
         assert_ok(retyped, "empty spreadsheet retyped to text")
 
         sheet_fqn, sheet_path = _create(owner, root, "Populated", "SpreadsheetDocument")
-        assert_ok(call("modify_metadata", {
+        assert_ok(call("template_content", {
+            "method": "modify",
             "projectName": PROJECT, "fqn": sheet_fqn,
             "template": {"cells": [{"row": 0, "col": 0, "text": "KeepCell730"}]},
         }), "populate spreadsheet before refused retype")
@@ -264,7 +270,8 @@ def test_text_template_payload_kind_mismatches_leave_content_unchanged():
         assert path.read_bytes() == b""
         before = path.read_bytes()
         before_tree = tree_snapshot()
-        refused = call("modify_metadata", {
+        refused = call("template_content", {
+            "method": "modify",
             "projectName": PROJECT, "fqn": fqn, "template": {"cells": []},
         })
         assert_tree_unchanged(before_tree, "cells on text must change nothing")
@@ -276,7 +283,8 @@ def test_text_template_payload_kind_mismatches_leave_content_unchanged():
         sheet_file = sheet_path.with_name("Template.mxlx")
         before_sheet = sheet_file.read_bytes()
         before_tree = tree_snapshot()
-        refused = call("modify_metadata", {
+        refused = call("template_content", {
+            "method": "modify",
             "projectName": PROJECT, "fqn": sheet_fqn, "template": {"text": "wrong"},
         })
         assert_tree_unchanged(before_tree, "text on spreadsheet must change nothing")

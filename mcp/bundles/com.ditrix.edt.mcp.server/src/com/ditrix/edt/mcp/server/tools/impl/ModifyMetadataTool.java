@@ -20,7 +20,6 @@ import java.util.Set;
 import java.util.function.Function;
 import java.util.function.Predicate;
 
-import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.emf.common.util.EList;
 import org.eclipse.emf.common.util.EMap;
@@ -37,8 +36,6 @@ import com._1c.g5.v8.bm.core.IBmTransaction;
 import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.core.naming.ITopObjectFqnGenerator;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
-import com._1c.g5.v8.dt.core.platform.IDtProject;
-import com._1c.g5.v8.dt.core.platform.IDtProjectManager;
 import com._1c.g5.v8.dt.core.platform.IV8Project;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
 import com._1c.g5.v8.dt.form.model.Form;
@@ -69,13 +66,11 @@ import com._1c.g5.v8.dt.metadata.mdclass.StyleElementType;
 import com._1c.g5.v8.dt.metadata.mdclass.Subsystem;
 import com._1c.g5.v8.dt.metadata.mdclass.TemplateType;
 import com._1c.g5.v8.dt.metadata.mdclass.XDTOPackage;
-import com._1c.g5.v8.dt.moxel.SpreadsheetDocument;
 import com._1c.g5.v8.dt.xdto.model.ObjectType;
 import com._1c.g5.v8.dt.xdto.model.Package;
 import com._1c.g5.v8.dt.xdto.model.Property;
 import com._1c.g5.v8.dt.platform.IEObjectProvider;
 import com._1c.g5.v8.dt.platform.version.Version;
-import com._1c.g5.v8.dt.textdocument.model.FileAwareTextDocument;
 import com.ditrix.edt.mcp.server.utils.BmModelResolver;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.HostKind;
@@ -127,7 +122,6 @@ import com.ditrix.edt.mcp.server.utils.PictureValueBuilder;
 import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
 import com.ditrix.edt.mcp.server.utils.ReferenceMembershipWriter;
 import com.ditrix.edt.mcp.server.utils.RoleRightsWriter;
-import com.ditrix.edt.mcp.server.utils.SpreadsheetTemplateWriter;
 import com.ditrix.edt.mcp.server.utils.StyleValueBuilder;
 import com.ditrix.edt.mcp.server.utils.SubsystemUtils;
 import com.ditrix.edt.mcp.server.utils.TemplateContentSupport;
@@ -289,9 +283,6 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     /** Payload / output key: the membership content array / counts object. */
     private static final String KEY_CONTENT = "content"; //$NON-NLS-1$
 
-    /** Payload / output key: the SpreadsheetDocument template content spec / applied-counts object. */
-    private static final String KEY_TEMPLATE = "template"; //$NON-NLS-1$
-
     /** Payload / output key: the command-interface changes array / applied-counts object. */
     static final String KEY_COMMANDS = "commands"; //$NON-NLS-1$
 
@@ -329,54 +320,6 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         + "\"group\":{\"type\":\"string\"},\"after\":{\"type\":\"string\"},\"before\":{\"type\":\"string\"}}," //$NON-NLS-1$
         + "\"required\":[\"command\"],\"additionalProperties\":false}}"; //$NON-NLS-1$
 
-    /** A spreadsheet row / column index: a non-negative integer. */
-    private static final String INDEX_SCHEMA = "{\"type\":\"integer\",\"minimum\":0}"; //$NON-NLS-1$
-
-    /**
-     * Input schema of {@link #KEY_TEMPLATE}: the TextDocument and SpreadsheetDocument members. Cell, column
-     * and row items stay open so {@code SpreadsheetTemplateWriter} names a misplaced key itself; bold,
-     * autoMarkIncomplete and autoWidthCalculation are untyped because the writer also reads "yes" / "1";
-     * borders and the colours are untyped because each takes a string OR an object.
-     */
-    private static final String TEMPLATE_SCHEMA = "{\"type\":\"object\",\"properties\":{" //$NON-NLS-1$
-        + "\"text\":{\"type\":\"string\"},\"mode\":{\"type\":\"string\"},\"oldText\":{\"type\":\"string\"}," //$NON-NLS-1$
-        + "\"expectedHash\":{\"type\":\"string\"},\"expectedSource\":{\"type\":\"string\"}," //$NON-NLS-1$
-        + "\"overwrite\":{\"type\":\"boolean\"}," //$NON-NLS-1$
-        + "\"cells\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{" //$NON-NLS-1$
-        + "\"row\":" + INDEX_SCHEMA + ",\"col\":" + INDEX_SCHEMA + ",\"replace\":{\"type\":\"boolean\"}," //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-        + "\"text\":{\"type\":\"string\"},\"parameter\":{\"type\":\"string\"},\"bold\":{}," //$NON-NLS-1$
-        + "\"fontSize\":{\"type\":\"integer\",\"minimum\":1}," //$NON-NLS-1$
-        + "\"hAlign\":{\"type\":\"string\",\"enum\":[\"Auto\",\"Left\",\"Right\",\"Center\",\"Width\"]}," //$NON-NLS-1$
-        + "\"vAlign\":{\"type\":\"string\",\"enum\":[\"Center\",\"Top\",\"Bottom\"]}," //$NON-NLS-1$
-        + "\"wrap\":{\"type\":[\"boolean\",\"string\"],\"enum\":[true,false,\"Auto\",\"Cut\",\"Block\",\"Wrap\"]}," //$NON-NLS-1$
-        + "\"textOrientation\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":3600}," //$NON-NLS-1$
-        + "\"autoIndent\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":100},\"autoMarkIncomplete\":{}," //$NON-NLS-1$
-        + "\"borders\":{},\"borderColor\":{},\"backColor\":{},\"textColor\":{}}," //$NON-NLS-1$
-        + "\"required\":[\"row\",\"col\"]}}," //$NON-NLS-1$
-        + "\"merges\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{" //$NON-NLS-1$
-        + "\"fromRow\":" + INDEX_SCHEMA + ",\"fromCol\":" + INDEX_SCHEMA //$NON-NLS-1$ //$NON-NLS-2$
-        + ",\"toRow\":" + INDEX_SCHEMA + ",\"toCol\":" + INDEX_SCHEMA //$NON-NLS-1$ //$NON-NLS-2$
-        + "},\"required\":[\"fromRow\",\"fromCol\",\"toRow\",\"toCol\"],\"additionalProperties\":false}}," //$NON-NLS-1$
-        + "\"areas\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{" //$NON-NLS-1$
-        + "\"name\":{\"type\":\"string\"},\"fromRow\":" + INDEX_SCHEMA + ",\"fromCol\":" + INDEX_SCHEMA //$NON-NLS-1$ //$NON-NLS-2$
-        + ",\"toRow\":" + INDEX_SCHEMA + ",\"toCol\":" + INDEX_SCHEMA //$NON-NLS-1$ //$NON-NLS-2$
-        + "},\"required\":[\"name\",\"fromRow\",\"fromCol\",\"toRow\",\"toCol\"],\"additionalProperties\":false}}," //$NON-NLS-1$
-        + "\"columnWidths\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{" //$NON-NLS-1$
-        + "\"col\":" + INDEX_SCHEMA + ",\"width\":{\"type\":\"integer\",\"minimum\":1},\"autoWidthCalculation\":{}," //$NON-NLS-1$ //$NON-NLS-2$
-        + "\"widthWeightFactor\":" + INDEX_SCHEMA + "},\"required\":[\"col\"]}}," //$NON-NLS-1$ //$NON-NLS-2$
-        + "\"rowHeights\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{" //$NON-NLS-1$
-        + "\"row\":" + INDEX_SCHEMA + ",\"height\":{\"type\":\"integer\",\"minimum\":1}}," //$NON-NLS-1$ //$NON-NLS-2$
-        + "\"required\":[\"row\",\"height\"]}}," //$NON-NLS-1$
-        + "\"unmerges\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{" //$NON-NLS-1$
-        + "\"fromRow\":" + INDEX_SCHEMA + ",\"fromCol\":" + INDEX_SCHEMA //$NON-NLS-1$ //$NON-NLS-2$
-        + ",\"toRow\":" + INDEX_SCHEMA + ",\"toCol\":" + INDEX_SCHEMA //$NON-NLS-1$ //$NON-NLS-2$
-        + "},\"required\":[\"fromRow\",\"fromCol\",\"toRow\",\"toCol\"],\"additionalProperties\":false}}," //$NON-NLS-1$
-        + "\"removeAreas\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}," //$NON-NLS-1$
-        + "\"renameAreas\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{" //$NON-NLS-1$
-        + "\"name\":{\"type\":\"string\"},\"newName\":{\"type\":\"string\"}}," //$NON-NLS-1$
-        + "\"required\":[\"name\",\"newName\"],\"additionalProperties\":false}}}," //$NON-NLS-1$
-        + "\"additionalProperties\":false}"; //$NON-NLS-1$
-
     /** Output key: what a command interface stores after a {@link #KEY_COMMANDS} change. */
     private static final String KEY_STORED = "stored"; //$NON-NLS-1$
 
@@ -385,9 +328,6 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
 
     /** How long a command-interface edit waits for EDT to finish recomputing the section. */
     private static final long COMMAND_INTERFACE_WAIT_MS = 15_000L;
-
-    /** Actual-kind stem in the "payload only for X FQN" refusals (java:S1192). */
-    private static final String ERR_IS_A = "is a "; //$NON-NLS-1$
 
     /** Shared BM bootstrap failure messages (java:S1192). */
     private static final String ERR_NO_BM_MANAGER = "IBmModelManager not available"; //$NON-NLS-1$
@@ -482,27 +422,6 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 + "'default'}]; group = panel group, e.g. 'NavigationPanelImportant' or " //$NON-NLS-1$
                 + "'CommandGroup.<Name>'; after / before = a command of that group. get_metadata_details on " //$NON-NLS-1$
                 + "the same FQN lists them. Not with other payloads.", COMMANDS_SCHEMA) //$NON-NLS-1$
-            .property(KEY_TEMPLATE,
-                "TEMPLATE FQN only, instead of 'properties'. TextDocument: {text, mode?, oldText?, " //$NON-NLS-1$
-                + "expectedHash?, expectedSource?, overwrite?}; mode = 'searchReplace' (default, needs " //$NON-NLS-1$
-                + "exactly one literal oldText match) / 'append' / 'replace' (the only mode that creates a " //$NON-NLS-1$
-                + "missing file); replacing an existing file needs expectedHash or expectedSource from " //$NON-NLS-1$
-                + "get_metadata_details, or overwrite=true. SpreadsheetDocument: {cells?, merges?, areas?, " //$NON-NLS-1$
-                + "columnWidths?, rowHeights?, unmerges?, removeAreas?, renameAreas?}. cells [{row, col (both " //$NON-NLS-1$
-                + "0-based, required), replace?, text? | parameter?, bold?, fontSize?, hAlign? " //$NON-NLS-1$
-                + "(Left/Center/Right/Auto/Width), vAlign? (Top/Center/Bottom), wrap?, textOrientation? " //$NON-NLS-1$
-                + "(TENTHS of a degree: 90 degrees = 900), autoIndent? (0..100), autoMarkIncomplete?, " //$NON-NLS-1$
-                + "borders? ('Solid' or {style, width? 1..3}, or {left?, top?, right?, bottom?} of those), " //$NON-NLS-1$
-                + "borderColor? / backColor? / textColor? ({red, green, blue}, 'Web.Red', 'Style.<Name>', " //$NON-NLS-1$
-                + "'auto')}]; merges [{fromRow, " //$NON-NLS-1$
-                + "fromCol, toRow, toCol}]; areas [{name, fromRow, fromCol, toRow, toCol}]; columnWidths " //$NON-NLS-1$
-                + "[{col, width?, autoWidthCalculation?, widthWeightFactor? (only with " //$NON-NLS-1$
-                + "autoWidthCalculation:true)}]; rowHeights [{row, height}]; unmerges [{fromRow, fromCol, " //$NON-NLS-1$
-                + "toRow, toCol}] drops every merge touching the range; removeAreas [name]; renameAreas " //$NON-NLS-1$
-                + "[{name, newName}]; these three run first. Omitted or null cell keys keep their values; replace:true " //$NON-NLS-1$
-                + "resets them. Non-empty text clears parameter and vice versa; '' clears the named one. " //$NON-NLS-1$
-                + "false / 0 on a format key overrides inheritance, but wrap:false restores inherited " //$NON-NLS-1$
-                + "placement. Other cells, merges and areas are kept.", TEMPLATE_SCHEMA) //$NON-NLS-1$
             .booleanProperty("normalizeYo", //$NON-NLS-1$
                 "Default true: stores 'ё' / 'Ё' as 'е' / 'Е' in synonyms, titles and 'comment' (other " //$NON-NLS-1$
                 + "strings stay as supplied); false keeps 'ё'.") //$NON-NLS-1$
@@ -557,9 +476,6 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 + "attached / had their per-entry flag - 'use' / 'autoRecord' - updated / detached); a " //$NON-NLS-1$
                 + "Catalog owners / Document register records / Subsystem content change (a plain " //$NON-NLS-1$
                 + "reference list, no per-entry flag) reports {added, removed}") //$NON-NLS-1$
-            .objectProperty(KEY_TEMPLATE, "For a template content change: the applied counts object " //$NON-NLS-1$
-                + "{cells, merges, areas, columnWidths, rowHeights, unmerges, removedAreas, renamedAreas}, or " //$NON-NLS-1$
-                + "{contentHash} for text") //$NON-NLS-1$
             .objectProperty(KEY_COMMANDS, "For a command-interface change: how many commands changed " //$NON-NLS-1$
                 + "visibility / group, and how many groups got an explicit order {visibility, placement, " //$NON-NLS-1$
                 + "order}") //$NON-NLS-1$
@@ -597,6 +513,18 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     protected boolean reportsWrittenObjectMarkers()
     {
         return true;
+    }
+
+    @Override
+    protected String validateRequest(Map<String, String> params)
+    {
+        if (params.get("template") == null) //$NON-NLS-1$
+        {
+            return null;
+        }
+        return ToolResult.error("The 'template' content payload moved to template_content. " //$NON-NLS-1$
+            + "Call template_content(method='modify', projectName, fqn, template), " //$NON-NLS-1$
+            + "or method='help' for its options. No metadata was changed.").toJson(); //$NON-NLS-1$
     }
 
     @Override
@@ -670,7 +598,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             String formPath = formRootPath;
             FormRoute route = readPreparation(ctx.project, () -> routeOwnedForm(preparationScope(ctx),
                 formPath, formFqn, args.properties,
-                args.hasRolePayload || args.hasContentPayload || args.hasTemplatePayload));
+                args.hasRolePayload || args.hasContentPayload));
             if (route.node == null)
             {
                 return formRootNotFoundError(formRootPath);
@@ -741,7 +669,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             return dispatchFormRootFqn(ctx, normFqn, formRootPath, args, COMMON_FORM_MDCLASS_DISCOVERY_HINT);
         }
 
-        // The payload surfaces (template / role / membership content) are dispatched by the
+        // The payload surfaces (role / membership content) are dispatched by the
         // resolved target's kind; null means none applies and the generic path runs.
         String payloadResult = dispatchPayloads(ctx, normFqn, target, args);
         if (payloadResult != null)
@@ -773,17 +701,6 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         String formPath = FormElementWriter.parseFormPath(fqn);
         if (shouldDispatchFormRoot(formPath, target, args.properties))
             return () -> dispatchFormRootFqn(handle, fqn, formPath, args, COMMON_FORM_MDCLASS_DISCOVERY_HINT);
-        if (args.hasTemplatePayload)
-        {
-            if (!(target instanceof BasicTemplate))
-            {
-                String refusal = dispatchTemplatePayload(ctx, fqn, target, args.properties,
-                    args.content, args.hasRolePayload, args.templateSpec);
-                return () -> refusal;
-            }
-            return () -> modifyTemplateContent(handle, fqn, null, args.properties,
-                args.content, args.hasRolePayload, args.templateSpec);
-        }
         if (args.hasRolePayload)
         {
             if (!(target instanceof Role))
@@ -820,7 +737,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     /**
      * The parsed + validated arguments of one modify_metadata call (built by
      * {@link #parseModifyArgs}): the addressed project / FQN, the generic 'properties' list, the
-     * payload surfaces (role / membership content / template) with their presence flags, and
+     * payload surfaces (role / membership content) with their presence flags, and
      * the yo-normalization report. When {@link #error} is non-null (a ready JSON error), the other
      * fields must not be used.
      */
@@ -837,8 +754,6 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         boolean hasRolePayload;
         List<JsonObject> content;
         boolean hasContentPayload;
-        JsonObject templateSpec;
-        boolean hasTemplatePayload;
         List<JsonObject> commands;
         boolean hasCommandsPayload;
         MdNameNormalizer.Report normReport;
@@ -847,8 +762,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     /**
      * Parses + validates the raw request arguments into a {@link ModifyArgs} bundle: the addressed
      * project / FQN, the generic 'properties' list, the Role payload ('rights' / 'templates' /
-     * 'roleProperties'), the membership 'content' payload, the parsed 'template' payload and its
-     * presence flag, and the yo-normalization report. {@link ModifyArgs#error} is
+     * 'roleProperties'), the membership 'content' payload and the yo-normalization report. {@link ModifyArgs#error} is
      * non-null (a ready JSON error) when a required argument is missing, a payload argument is
      * malformed, or no payload at all was supplied. Extracted verbatim from
      * {@link #executeOnUiThread}.
@@ -891,22 +805,6 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         args.content = JsonUtils.extractObjectArray(params, KEY_CONTENT);
         args.hasContentPayload = !args.content.isEmpty();
 
-        // Template spreadsheet-content payload (template={cells/merges/areas/columnWidths/rowHeights}):
-        // authored on a SpreadsheetDocument template FQN. When present, 'properties' is optional (the
-        // template content is authored through its own surface, not the generic property bag) - mirrors
-        // the Role rights[] / membership content[] precedents. A present-but-malformed 'template' (not a
-        // JSON object) is rejected here rather than silently dropped: 'template' is the SOLE surface for
-        // this feature, so dropping it would apply a stray 'properties' - or misreport 'properties is
-        // required' - while the intended template authoring vanished.
-        TemplateArg templateArg = parseTemplateArg(params);
-        if (templateArg.error != null)
-        {
-            args.error = templateArg.error;
-            return args;
-        }
-        args.templateSpec = templateArg.spec;
-        args.hasTemplatePayload = args.templateSpec != null;
-
         // Command-interface payload (commands[]): only for a section's command interface FQN.
         args.commands = new ArrayList<>();
         String commandsError = parseCommandsArg(params, args.commands);
@@ -918,13 +816,13 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         args.hasCommandsPayload = !args.commands.isEmpty();
 
         if (args.properties.isEmpty() && !args.hasRolePayload && !args.hasContentPayload
-            && !args.hasTemplatePayload && !args.hasCommandsPayload)
+            && !args.hasCommandsPayload)
         {
             args.error = ToolResult.error("properties is required: provide at least one {name, value} to " //$NON-NLS-1$
                 + "set, e.g. [{name: 'comment', value: 'Goods'}]. For a Role FQN, provide 'rights', " //$NON-NLS-1$
                 + "'templates' or 'roleProperties' instead; for a CommonAttribute / ExchangePlan / " //$NON-NLS-1$
-                + "Catalog / Document / Subsystem FQN, provide 'content' instead; for a template FQN, " //$NON-NLS-1$
-                + "provide 'template' instead; for a command interface FQN " //$NON-NLS-1$
+                + "Catalog / Document / Subsystem FQN, provide 'content' instead; " //$NON-NLS-1$
+                + "for a command interface FQN " //$NON-NLS-1$
                 + "('Subsystem.<Name>.CommandInterface'), provide 'commands' instead.").toJson(); //$NON-NLS-1$
             return args;
         }
@@ -937,23 +835,11 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
-     * Dispatches a FQN that addresses a FORM member: refuses a 'template' payload up front
-     * (a form member is not a spreadsheet template, so the sibling payload is never silently dropped
-     * while the form branch reports success), then hands over to
-     * {@link #dispatchFormMember} (which symmetrically refuses the Role / membership 'content'
-     * payloads). Extracted verbatim from {@link #executeOnUiThread}.
+     * Dispatches a FORM-member FQN through the form writer, which refuses Role and membership payloads.
      */
     private String dispatchFormMemberFqn(ProjectContext ctx, String normFqn,
         FormElementWriter.FormMemberRef formRef, ModifyArgs args)
     {
-        // A 'template' payload addressed to a FORM-member FQN is refused here (a form member is not a
-        // spreadsheet template), symmetric with the Role / content refusal dispatchFormMember already
-        // enforces, so the sibling payload is never silently dropped while the form branch reports
-        // success. The guard is at the call site to keep dispatchFormMember byte-unchanged.
-        if (args.hasTemplatePayload)
-        {
-            return templateOnlyForTemplateFqnError(normFqn, "addresses a FORM member"); //$NON-NLS-1$
-        }
         return dispatchFormMember(ctx, normFqn, formRef, args.properties, args.normReport,
             args.hasRolePayload, args.hasContentPayload);
     }
@@ -968,12 +854,12 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     private String dispatchFormRootFqn(ProjectContext ctx, String normFqn, String formRootPath,
         ModifyArgs args, String nonAssignableHint)
     {
-        if (args.hasRolePayload || args.hasContentPayload || args.hasTemplatePayload)
+        if (args.hasRolePayload || args.hasContentPayload)
         {
             return ToolResult.error("'" + normFqn //$NON-NLS-1$
                 + "' addresses a managed FORM root, which only " //$NON-NLS-1$
-                + "accepts the 'properties' payload. Role payloads, membership 'content', and " //$NON-NLS-1$
-                + "spreadsheet 'template' content apply to their respective metadata objects, not " //$NON-NLS-1$
+                + "accepts the 'properties' payload. Role payloads and membership 'content' " //$NON-NLS-1$
+                + "apply to their respective metadata objects, not " //$NON-NLS-1$
                 + "to the form model root.").toJson(); //$NON-NLS-1$
         }
         return modifyFormRoot(ctx, normFqn, formRootPath, args.properties, args.normReport,
@@ -1070,7 +956,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * @param formRootPath the parsed form path ({@code FormElementWriter.parseFormPath})
      * @param fqn the address as normalized, for the refusal text
      * @param properties the requested properties
-     * @param payload whether a role / content / template payload accompanies the call
+     * @param payload whether a role / content payload accompanies the call
      * @return the route, never {@code null}
      */
     static FormRoute routeOwnedForm(MetadataScope scope, String formRootPath, String fqn,
@@ -1171,7 +1057,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * Dispatches a FQN addressing a PREDEFINED item on a {@code Catalog},
      * {@code ChartOfCharacteristicTypes}, {@code ChartOfCalculationTypes} or {@code ChartOfAccounts}
      * owner ({@code Type.Owner.Predefined.ItemName}). Refuses the sibling payloads (Role / membership
-     * {@code content} / {@code template}) up front so they are never silently dropped,
+     * {@code content}) up front so they are never silently dropped,
      * then validates the owner kind (in lockstep with {@link PredefinedWriter#unsupportedOwnerTypeError}),
      * parses the properties via the SHARED {@link PredefinedWriter#parseProperties} (which also refuses
      * {@code name} and {@code parent} - a move - on modify), resolves the owner (yo-fallback) and
@@ -1194,10 +1080,6 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     private java.util.function.Supplier<String> preparePredefinedModification(ProjectContext ctx, String normFqn,
         PredefinedWriter.PredefinedRef ref, ModifyArgs args)
     {
-        if (args.hasTemplatePayload)
-        {
-            return () -> templateOnlyForTemplateFqnError(normFqn, "addresses a predefined item"); //$NON-NLS-1$
-        }
         if (args.hasRolePayload || args.hasContentPayload)
         {
             return () -> ToolResult.error("'rights'/'templates'/'roleProperties'/'content' do not apply to " //$NON-NLS-1$
@@ -1407,11 +1289,6 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 if (current.hasError()) return () -> current.error;
                 Subsystem subsystem = SubsystemUtils.resolveByFqn(current.config, normFqn);
                 if (subsystem == null) return () -> ToolResult.error(SubsystemUtils.notFoundMessage(args.fqn)).toJson();
-                if (args.hasTemplatePayload)
-                {
-                    String refusal = templateOnlyForTemplateFqnError(normFqn, ERR_IS_A + subsystem.eClass().getName());
-                    return () -> refusal;
-                }
                 String dropped = AdoptedPropertyRouter.refusalIfDropped(subsystem, membershipList(subsystem), normFqn,
                     current.project, resolvePlatformVersion(current));
                 if (dropped != null) return () -> dropped;
@@ -1422,14 +1299,6 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         if (subsystem == null)
         {
             return ToolResult.error(SubsystemUtils.notFoundMessage(args.fqn)).toJson();
-        }
-        // A 'template' payload addressed to a Subsystem FQN is refused here (a subsystem is not a
-        // spreadsheet template), so a template payload combined with a subsystem content[] payload is
-        // never silently dropped. The guard is at the call site to keep modifySubsystemContent
-        // byte-unchanged.
-        if (args.hasTemplatePayload)
-        {
-            return templateOnlyForTemplateFqnError(normFqn, ERR_IS_A + subsystem.eClass().getName());
         }
         // EDT's adopter marks an adopted subsystem's content Extended and EDT's .mdo writer then keeps the list, so
         // this refuses only a content state of None (issues #709 / #710).
@@ -1493,11 +1362,10 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 + "its own: change its commands with 'commands' = [{command, visible?, roles?, group?, " //$NON-NLS-1$
                 + "after? | before?}]. get_metadata_details on the same FQN lists them.").toJson(); //$NON-NLS-1$
         }
-        if (!args.properties.isEmpty() || args.hasRolePayload || args.hasContentPayload
-            || args.hasTemplatePayload)
+        if (!args.properties.isEmpty() || args.hasRolePayload || args.hasContentPayload)
         {
             return ToolResult.error("'commands' cannot be combined with 'properties', a Role payload, " //$NON-NLS-1$
-                + "'content' or 'template' in one call. Change the command interface alone, and its owner (" //$NON-NLS-1$
+                + "'content' in one call. Change the command interface alone, and its owner (" //$NON-NLS-1$
                 + address.ownerFqn() + ") in a separate call.").toJson(); //$NON-NLS-1$
         }
         if (ctx.scope.isExternalObjects())
@@ -1530,7 +1398,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 var root = ConfigurationRoot.resolve(preparationScope(ctx), args.fqn);
                 if (root == null) return new RootDispatch(false, null);
                 String refusal = configurationRootRefusal(root.error, args.hasRolePayload,
-                    args.hasContentPayload, args.hasTemplatePayload, args.properties);
+                    args.hasContentPayload, args.properties);
                 return new RootDispatch(true, refusal == null ? null : ToolResult.error(refusal).toJson());
             });
             if (!decision.matches) return null;
@@ -1539,7 +1407,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 args.properties, args.normReport);
         }
         return dispatchConfigurationRoot(ctx.scope, args.fqn, args.hasRolePayload, args.hasContentPayload,
-            args.hasTemplatePayload, args.properties,
+            args.properties,
             root -> applyGenericPropertyChanges(ctx, args.projectName, ConfigurationRoot.FQN, root,
                 args.properties, args.normReport));
     }
@@ -1557,14 +1425,13 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * @param fqn the requested address
      * @param rolePayload whether a role payload was sent
      * @param contentPayload whether a 'content' payload was sent
-     * @param templatePayload whether a 'template' payload was sent
      * @param properties the 'properties' entries
      * @param write writes the properties on the resolved root (a top-level node) and answers the result
      * @return {@code null} when {@code fqn} is not a root address; else the refusal as ready JSON, or
      *     what {@code write} answered
      */
     static String dispatchConfigurationRoot(MetadataScope scope, String fqn, boolean rolePayload,
-        boolean contentPayload, boolean templatePayload, List<JsonObject> properties,
+        boolean contentPayload, List<JsonObject> properties,
         Function<MetadataNodeResolver.MetadataNode, String> write)
     {
         ConfigurationRoot.Resolution root = readPreparation(scope.project(), () -> ConfigurationRoot.resolve(scope, fqn));
@@ -1572,8 +1439,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         {
             return null;
         }
-        String refusal = configurationRootRefusal(root.error, rolePayload, contentPayload, templatePayload,
-            properties);
+        String refusal = configurationRootRefusal(root.error, rolePayload, contentPayload, properties);
         if (refusal != null)
         {
             return ToolResult.error(refusal).toJson();
@@ -1589,18 +1455,17 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * @param resolutionError why the address does not name this project's root, or {@code null}
      * @param rolePayload whether a role payload was sent
      * @param contentPayload whether a 'content' payload was sent
-     * @param templatePayload whether a 'template' payload was sent
      * @param properties the 'properties' entries
      * @return the first refusal that applies, or {@code null} when the call may proceed
      */
     static String configurationRootRefusal(String resolutionError, boolean rolePayload, boolean contentPayload,
-        boolean templatePayload, List<JsonObject> properties)
+        List<JsonObject> properties)
     {
         if (resolutionError != null)
         {
             return resolutionError;
         }
-        String payloadError = configurationRootPayloadError(rolePayload, contentPayload, templatePayload);
+        String payloadError = configurationRootPayloadError(rolePayload, contentPayload);
         return payloadError != null ? payloadError : configurationRootPropertiesError(properties);
     }
 
@@ -1610,11 +1475,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      *
      * @param rolePayload whether a role payload was sent
      * @param contentPayload whether a 'content' payload was sent
-     * @param templatePayload whether a 'template' payload was sent
      * @return the refusal naming the payload, or {@code null} when none was sent
      */
-    static String configurationRootPayloadError(boolean rolePayload, boolean contentPayload,
-        boolean templatePayload)
+    static String configurationRootPayloadError(boolean rolePayload, boolean contentPayload)
     {
         String payload;
         if (rolePayload)
@@ -1624,10 +1487,6 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         else if (contentPayload)
         {
             payload = "'content'"; //$NON-NLS-1$
-        }
-        else if (templatePayload)
-        {
-            payload = "'template'"; //$NON-NLS-1$
         }
         else
         {
@@ -1796,7 +1655,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     // XdtoWriter.resolvePackageContent (shared with create_metadata / delete_metadata).
 
     /**
-     * Dispatches an XDTO PACKAGE MEMBER FQN: refuses a role / content / template payload (an XDTO
+     * Dispatches an XDTO PACKAGE MEMBER FQN: refuses a role / content payload (an XDTO
      * member is none of those - the same no-mixing policy every other cross-model-hop branch enforces,
      * so a sibling payload is never silently dropped while this branch reports success), then requires a
      * non-empty {@code properties} (the XDTO member's own change surface). Returns {@code null} when
@@ -1808,10 +1667,6 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         if (ref == null)
         {
             return null;
-        }
-        if (args.hasTemplatePayload)
-        {
-            return templateOnlyForTemplateFqnError(normFqn, "addresses an XDTO package member"); //$NON-NLS-1$
         }
         String payloadError =
             xdtoMemberPayloadError(normFqn, args.hasRolePayload, args.hasContentPayload, args.properties);
@@ -1826,9 +1681,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * The pure guard for an XDTO member FQN's payload: refuses a Role payload ({@code rights} /
      * {@code templates} / {@code roleProperties}) or a membership {@code content} payload (an XDTO
      * member is neither), then requires a non-empty {@code properties} (the XDTO member's own change
-     * surface - there is no dedicated {@code xdto} payload key, unlike {@code template}).
-     * Returns the ready JSON error, or {@code null} when the payload is valid. Package-visible for tests
-     * (mirrors {@link #templateMixError}).
+     * surface - there is no dedicated {@code xdto} payload key).
+     * Returns the ready JSON error, or {@code null} when the payload is valid. Package-visible for tests.
      */
     static String xdtoMemberPayloadError(String normFqn, boolean hasRolePayload, boolean hasContentPayload,
         List<JsonObject> properties)
@@ -2110,7 +1964,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
-     * Dispatches the payload surfaces against the resolved target, in the fixed template -> role ->
+     * Dispatches the payload surfaces against the resolved target, in the fixed role ->
      * membership-content order (each guard refuses its payload on a wrong-kind FQN, so a
      * sibling payload is never silently dropped). Returns the branch result, or {@code null} when no
      * payload surface applies and the generic 'properties' path should run. Extracted verbatim from
@@ -2118,19 +1972,6 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      */
     private String dispatchPayloads(ProjectContext ctx, String normFqn, MdObject target, ModifyArgs args)
     {
-        // A `template` spreadsheet-content payload on a BasicTemplate FQN is authored through the moxel
-        // content surface; the same payload on a NON-template FQN is refused. Dispatched BEFORE the role /
-        // content path so a template payload combined with a role / content payload is refused here (on a
-        // non-template FQN) or inside modifyTemplateContent (on a template FQN, the mixing guard) - never
-        // silently dropped. Returns null when there is no template payload, so the role / content /
-        // generic path below still runs.
-        String templatePayloadResult = dispatchTemplatePayload(ctx, normFqn, target, args.properties,
-            args.content, args.hasRolePayload, args.templateSpec);
-        if (templatePayloadResult != null)
-        {
-            return templatePayloadResult;
-        }
-
         // A ROLE FQN carrying a role payload (rights / templates / roleProperties) is dispatched to the
         // rights writer; the same payload on a NON-Role FQN is refused. Returns null only when there is
         // no role payload, so the content / generic property path below still runs.
@@ -2286,193 +2127,6 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         return target instanceof Subsystem ? MdClassPackage.Literals.SUBSYSTEM__CONTENT : null;
     }
 
-    /**
-     * Dispatches a {@code template} spreadsheet-content payload: a {@link BasicTemplate} FQN (a common
-     * template {@code CommonTemplate.<Name>} or an object-owned template
-     * {@code <Type>.<Owner>.Template.<Name>}) carrying the payload goes to {@link #modifyTemplateContent}
-     * (the SpreadsheetDocument content surface, not the generic property bag); the same payload on a
-     * NON-template FQN is refused (it must not fall through to the role / content / generic property path,
-     * which - with an empty {@code properties} - would apply nothing yet report a false success and
-     * silently drop the payload). Returns {@code null} when there is NO template payload, so the caller
-     * continues to the role / content / generic path. Entered only after the resolver has produced the
-     * target object.
-     */
-    private String dispatchTemplatePayload(ProjectContext ctx, String normFqn, MdObject target,
-        List<JsonObject> properties, List<JsonObject> content, boolean hasRolePayload,
-        JsonObject templateSpec)
-    {
-        // The payload presence is derivable from the spec itself (java:S107: 8 -> 7 params).
-        boolean hasTemplatePayload = templateSpec != null;
-        if (target instanceof BasicTemplate && hasTemplatePayload)
-        {
-            return modifyTemplateContent(ctx, normFqn, (BasicTemplate)target, properties, content,
-                hasRolePayload, templateSpec);
-        }
-        if (hasTemplatePayload)
-        {
-            return templateOnlyForTemplateFqnError(normFqn, ERR_IS_A + target.eClass().getName());
-        }
-        return null;
-    }
-
-    /**
-     * Authors TextDocument file text or SpreadsheetDocument cells through the template payload.
-     * Rejects mixed payloads and type mismatches before writing, then rechecks the model in the
-     * BM write transaction. Spreadsheet content has its own export FQN; file-backed text uses the
-     * shared initializer and a file journal so a failed BM transaction restores its original bytes.
-     */
-    private String modifyTemplateContent(ProjectContext ctx, String normFqn, BasicTemplate template,
-        List<JsonObject> properties, List<JsonObject> content, boolean hasRolePayload,
-        JsonObject templateSpec)
-    {
-        String mixError = templateMixError(properties, content, hasRolePayload);
-        if (mixError != null)
-        {
-            return mixError;
-        }
-
-        TemplateWriteContext writeCtx = readPreparation(ctx.project, () -> {
-            ProjectContext current = HostKind.current() == HostKind.HEADLESS
-                ? resolveProjectAndScope(ctx.project.getName(), normFqn) : ctx;
-            BasicTemplate currentTemplate = HostKind.current() == HostKind.HEADLESS
-                ? (BasicTemplate)MetadataNodeResolver.resolveAddress(current.scope, normFqn, true) : template;
-            String error = currentTemplate == null ? ToolResult.error("Template no longer exists: " + normFqn
-                + ". Re-read get_metadata_details before retrying.").toJson()
-                : TemplateContentSupport.payloadError(currentTemplate, templateSpec, normFqn);
-            boolean text = currentTemplate != null && currentTemplate.getTemplateType() == TemplateType.TEXT_DOCUMENT;
-            if (error == null && !text) error = nonSpreadsheetTemplateError(currentTemplate, normFqn);
-            if (error != null)
-            {
-                TemplateWriteContext refused = new TemplateWriteContext();
-                refused.error = error;
-                return refused;
-            }
-            TemplateWriteContext plan = resolveTemplateWriteContext(current, currentTemplate, normFqn, !text);
-            plan.text = text;
-            return plan;
-        });
-        if (writeCtx.error != null)
-        {
-            return writeCtx.error;
-        }
-
-        if (writeCtx.text) return modifyTextTemplateContent(ctx, normFqn, writeCtx, templateSpec);
-
-        // Captured inside the write: the moxel content's OWN canonical FQN (a template's content IS a
-        // distinct top BM object once attached - pre-existing on disk, or freshly attached below), so it is
-        // force-exported alongside the template so the sibling .mxlx drains to disk.
-        final String[] contentFqnHolder = {null};
-        SpreadsheetTemplateWriter.Result result;
-        try
-        {
-            result = BmTransactions.write(writeCtx.bmModel, "ModifyTemplateContent", //$NON-NLS-1$
-                (tx, pm) -> applyTemplateSpec(tx, writeCtx, normFqn, templateSpec, contentFqnHolder));
-        }
-        catch (TemplateWriteException e)
-        {
-            return e.getErrorJson();
-        }
-        catch (Exception e)
-        {
-            Activator.logError("Error modifying template content", e); //$NON-NLS-1$
-            return ToolResult.error("Failed to modify template content: " //$NON-NLS-1$
-                + unwrapCauseMessage(e)).toJson();
-        }
-
-        // The spreadsheet content serializes to the template's sibling .mxlx resource under the
-        // template's OWN top-object .mdo, so force-exporting the template's canonical FQN drains it. If
-        // EDT instead models that content as a distinct top BM object (the same shape as a Role's separate
-        // Rights.rights sub-resource, which modifyRoleRights exports by its own FQN), the template FQN
-        // alone would NOT drain it - so export the content resource's OWN FQN too, guarding against the
-        // #239-class silent-false-success (persisted=true while the authored cells never reach disk).
-        List<String> exportFqns = new ArrayList<>();
-        exportFqns.add(writeCtx.exportFqn);
-        String contentFqn = contentFqnHolder[0];
-        if (contentFqn != null && !contentFqn.equals(writeCtx.exportFqn))
-        {
-            exportFqns.add(contentFqn);
-        }
-        boolean persisted = BmTransactions.forceExportToDisk(ctx.project, exportFqns);
-        return buildTemplateResult(normFqn, result, persisted);
-    }
-
-    /** Write the file-backed text in the same BM boundary used for spreadsheet content. */
-    private String modifyTextTemplateContent(ProjectContext ctx, String normFqn, TemplateWriteContext writeCtx,
-        JsonObject templateSpec)
-    {
-        if (writeCtx.error != null)
-        {
-            return writeCtx.error;
-        }
-        final String hash;
-        try (TemplateContentSupport.Context files = new TemplateContentSupport.Context(ctx.project))
-        {
-            hash = BmTransactions.write(writeCtx.bmModel, "ModifyTextTemplateContent", (tx, monitor) ->
-            {
-                Object object = tx.getObjectById(writeCtx.templateBmId);
-                if (!(object instanceof BasicTemplate))
-                {
-                    throw new TemplateWriteException(ToolResult.error("Template '" + normFqn
-                        + "' no longer exists; re-read get_metadata_details.").toJson());
-                }
-                BasicTemplate current = (BasicTemplate)object;
-                String locked = vendorSupportRefusal(current, transactionScope(ctx, tx), normFqn, normFqn, "changed"); //$NON-NLS-1$
-                if (locked != null)
-                {
-                    throw new TemplateWriteException(locked);
-                }
-                EObject owner = current.eContainer();
-                if (owner instanceof MdObject && !(owner instanceof Configuration))
-                {
-                    locked = vendorSupportRefusal(owner, transactionScope(ctx, tx), writeCtx.exportFqn, normFqn, "changed"); //$NON-NLS-1$
-                    if (locked != null)
-                    {
-                        throw new TemplateWriteException(locked);
-                    }
-                }
-                String error = TemplateContentSupport.payloadError(current, templateSpec, normFqn);
-                if (error != null)
-                {
-                    throw new TemplateWriteException(error);
-                }
-                EObject currentContent = current.getTemplate();
-                if (!(currentContent instanceof FileAwareTextDocument)
-                    && !TemplateContentSupport.isPlaceholder(currentContent))
-                {
-                    throw new TemplateWriteException(ToolResult.error("Template '" + normFqn //$NON-NLS-1$
-                        + "' has incompatible content. Create a separate TextDocument template with create_metadata.") //$NON-NLS-1$
-                        .toJson());
-                }
-                IFile file = TemplateContentSupport.contentFile(ctx.project, current);
-                TemplateContentSupport.TextWriteResult written =
-                    TemplateContentSupport.writeTextResult(current, file, templateSpec, files);
-                if (written.error() != null)
-                {
-                    throw new TemplateWriteException(written.error());
-                }
-                TemplateContentSupport.initialize(current, TemplateType.TEXT_DOCUMENT, tx,
-                    writeCtx.dtProject, writeCtx.fqnGenerator, file);
-                return written.contentHash();
-            });
-            files.commit();
-        }
-        catch (TemplateWriteException error)
-        {
-            return error.getErrorJson();
-        }
-        catch (Exception error)
-        {
-            Refusals.log("Error modifying text template", error);
-            return ToolResult.error("Failed to modify template text: " + unwrapCauseMessage(error)).toJson();
-        }
-        boolean persisted = BmTransactions.forceExportToDisk(ctx.project, writeCtx.exportFqn);
-        JsonObject applied = new JsonObject();
-        applied.addProperty("contentHash", hash);
-        return ToolResult.success().put(McpKeys.ACTION, VAL_MODIFIED).put("fqn", MetadataTypeUtils.toCanonicalEnglishFqn(normFqn))
-            .put(KEY_TEMPLATE, applied).put(KEY_PERSISTED, persisted)
-            .put(McpKeys.MESSAGE, "Modified text template " + MetadataTypeUtils.toCanonicalEnglishFqn(normFqn)).toJson();
-    }
-
     /** The final templateType in a property batch, or null when it does not change this property. */
     private static TemplateType requestedTemplateType(List<PreparedChange> changes)
     {
@@ -2485,420 +2139,6 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             }
         }
         return result;
-    }
-
-    /**
-     * Everything the template-content write boundary needs (built by
-     * {@link #resolveTemplateWriteContext}): the template's BM id for the in-tx re-fetch, the TOP
-     * object's canonical FQN to force-export, the BM model, the (nullable) {@link IDtProject}
-     * driving the canonical languageSettings block, and the external-property FQN generator (only
-     * required for spreadsheet content). When
-     * {@link #error} is non-null (a ready JSON error), the other fields must not be used.
-     */
-    private static final class TemplateWriteContext
-    {
-        boolean text;
-        /** A ready {@link ToolResult#error} JSON when a service / export target is missing, else {@code null}. */
-        String error;
-        /** The template's stable BM id, re-fetched inside the write tx. */
-        long templateBmId;
-        /** The TOP object's canonical (all-English) FQN to force-export after the commit. */
-        String exportFqn;
-        IBmModel bmModel;
-        /** Nullable: a null project still yields a templateMode=true document. */
-        IDtProject dtProject;
-        ITopObjectFqnGenerator fqnGenerator;
-        /**
-         * The project's 1C:Enterprise runtime version (the DT project manifest's {@code Runtime-Version},
-         * which is what the moxel serializer gates its version-dependent members on). Nullable: a version
-         * that cannot be resolved skips the version check rather than refusing a legal write.
-         */
-        Version projectVersion;
-        /**
-         * Whether the template lives in an external-objects project: its configuration is another
-         * project's, so a cell colour may name platform colours only (as a form item's there).
-         */
-        boolean externalObjects;
-    }
-
-    /**
-     * Resolves everything the template-content write needs up front: the template's BM id, the TOP
-     * object's canonical FQN to force-export, the project's BM model, the (nullable)
-     * {@link IDtProject} and, when {@code attachSpreadsheet} is true, the external-property FQN
-     * generator needed to attach spreadsheet content. Returns a
-     * {@link TemplateWriteContext} whose non-null {@code error} (a ready JSON error) reports a
-     * missing service / unresolvable export target. Extracted verbatim from
-     * {@link #modifyTemplateContent}.
-     */
-    private static TemplateWriteContext resolveTemplateWriteContext(ProjectContext ctx,
-        BasicTemplate template, String normFqn, boolean attachSpreadsheet)
-    {
-        TemplateWriteContext writeCtx = new TemplateWriteContext();
-
-        // A common template (Template.X / CommonTemplate.X) is its OWN top BM object; an object-owned
-        // template (Catalog.Y.Template.Z) is INLINE in its owner's .mdo, so it is NOT a top object. Its
-        // stable BM id still re-fetches inside the tx (getObjectById resolves any managed object, not only
-        // top ones), but the force-export target must be the TOP object's canonical (all-English) FQN - the
-        // template itself when it is top, else the OWNER top object (bmGetTopObject) whose .mdo + sibling
-        // .mxlx carry the content. Mirrors RoleRightsWriter's top climb - self when already top, else
-        // bmGetTopObject. A bmGetFqn read is legal only on a top object, so it happens on `topObject`, never on a non-top
-        // template. A null top (should not happen for a resolved template) fails LOUD, nothing written.
-        IBmObject templateBm = (IBmObject)template;
-        writeCtx.templateBmId = templateBm.bmGetId();
-        IBmObject topObject = templateBm.bmIsTop() ? templateBm : templateBm.bmGetTopObject();
-        if (topObject == null)
-        {
-            writeCtx.error = ToolResult.error("Cannot resolve the on-disk file to export for template '" + normFqn //$NON-NLS-1$
-                + "': its owning top-level object could not be found; report it with the template FQN.") //$NON-NLS-1$
-                    .toJson();
-            return writeCtx;
-        }
-        writeCtx.exportFqn = topObject.bmGetFqn();
-
-        IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
-        if (bmModelManager == null)
-        {
-            writeCtx.error = ToolResult.error(ERR_NO_BM_MANAGER).toJson();
-            return writeCtx;
-        }
-        writeCtx.bmModel = BmModelResolver.resolve(ctx.project, bmModelManager).getModel();
-        if (writeCtx.bmModel == null)
-        {
-            writeCtx.error = ToolResult.error(ERR_NO_BM_MODEL
-                + ctx.project.getName()).toJson();
-            return writeCtx;
-        }
-
-        // Drives the canonical (project-aware) <languageSettings> block when an EMPTY template's content
-        // is materialized inside the tx (a freshly created template has getTemplate()==null). Resolved
-        // best-effort with the SAME manager the force-export below uses; a null project still yields a
-        // templateMode=true document (only the languageSettings block is skipped, which the platform's
-        // moxel reader null-guards). Carried on the write context captured by the write lambda.
-        IDtProjectManager dtProjectManager = Activator.getDefault().getDtProjectManager();
-        writeCtx.dtProject =
-            dtProjectManager == null ? null : dtProjectManager.getDtProject(ctx.project);
-
-        // The moxel serializer gates autoWidthCalculation / widthWeightFactor on the project's RUNTIME
-        // version (the DT manifest's Runtime-Version, which is exactly what IV8Project.getVersion()
-        // returns) - not on the configuration's compatibilityMode. Below 8.3.10 it writes neither, so the
-        // writer refuses them there instead of reporting success for a dropped value.
-        writeCtx.projectVersion = com.ditrix.edt.mcp.server.utils.ProjectContext.platformVersion(ctx.project);
-        writeCtx.externalObjects = ctx.scope != null && ctx.scope.isExternalObjects();
-
-        // The moxel content is a transient @ExternalProperty of the template - its own .mxlx resource, NOT
-        // an inline BM reference. A freshly-materialized content doc must be ATTACHED as a BM top object
-        // under its generated external-property FQN (the same machinery FormElementWriter uses for a form's
-        // content), else committing the write fails with "Failed to persist reference value". Carried on
-        // the write context captured by the write lambda.
-        if (attachSpreadsheet)
-        {
-            writeCtx.fqnGenerator = Activator.getDefault().getTopObjectFqnGenerator();
-            if (writeCtx.fqnGenerator == null)
-            {
-                writeCtx.error = ToolResult.error("ITopObjectFqnGenerator not available").toJson(); //$NON-NLS-1$
-                return writeCtx;
-            }
-        }
-        return writeCtx;
-    }
-
-    /**
-     * The template-content write-transaction body: re-fetches the template by its BM id, resolves
-     * (or materializes + attaches) its content {@link SpreadsheetDocument}, records the content
-     * resource's OWN export FQN into {@code contentFqnHolder}, and applies the payload via
-     * {@link SpreadsheetTemplateWriter}. Throws a {@link TemplateWriteException} carrying a ready
-     * JSON error on a resolution / validation failure, so the surrounding tx rolls back with no
-     * partial mutation. Extracted verbatim from the write lambda of {@link #modifyTemplateContent}.
-     */
-    private static SpreadsheetTemplateWriter.Result applyTemplateSpec(IBmTransaction tx,
-        TemplateWriteContext writeCtx, String normFqn, JsonObject templateSpec,
-        String[] contentFqnHolder)
-    {
-        Object inTx = tx.getObjectById(writeCtx.templateBmId);
-        if (!(inTx instanceof BasicTemplate))
-        {
-            throw new TemplateWriteException(ToolResult.error("The template could not be " //$NON-NLS-1$
-                + "resolved inside the transaction.").toJson());
-        }
-        BasicTemplate txTemplate = (BasicTemplate)inTx;
-        String payloadError = TemplateContentSupport.payloadError(txTemplate, templateSpec, normFqn);
-        if (payloadError == null)
-        {
-            payloadError = nonSpreadsheetTemplateError(txTemplate, normFqn);
-        }
-        if (payloadError != null)
-        {
-            throw new TemplateWriteException(payloadError);
-        }
-        SpreadsheetDocument doc =
-            resolveSpreadsheetContent(txTemplate, tx, writeCtx.dtProject, writeCtx.fqnGenerator, normFqn);
-        // The content doc is now an attached BM top object (pre-existing on disk, or freshly
-        // materialized + attachTopObject'd inside resolveSpreadsheetContent), so its own resource
-        // FQN resolves and is force-exported alongside the template so the sibling .mxlx drains.
-        contentFqnHolder[0] = contentResourceExportFqn(doc);
-        // A named cell colour resolves as EDT's spreadsheet reader does: the platform colour first, then
-        // the configuration's style / palette item read in THIS transaction (the writer binds the
-        // reference to it); an external-objects project offers platform colours only.
-        SpreadsheetTemplateWriter.Result applied = SpreadsheetTemplateWriter.apply(doc, templateSpec,
-            writeCtx.projectVersion, SpreadsheetTemplateWriter.projectColors(writeCtx.externalObjects ? null
-                : () -> (Configuration)tx.getTopObjectByFqn("Configuration"), writeCtx.projectVersion)); //$NON-NLS-1$
-        if (applied.hasError())
-        {
-            // Roll the whole write back so a validation failure leaves nothing on disk.
-            throw new TemplateWriteException(applied.error);
-        }
-        return applied;
-    }
-
-    /**
-     * A template's external-property moxel {@link SpreadsheetDocument}'s OWN canonical top-object FQN
-     * when EDT models it as a DISTINCT top BM object (so force-exporting the template's FQN alone would
-     * NOT drain the sibling {@code .mxlx}, the same shape as a Role's separate
-     * {@code Rights.rights} sub-resource), else
-     * {@code null} when the content is a contained child that the template's own export already serializes
-     * (the export list is then unchanged). MUST run inside the write boundary:
-     * {@code bmGetFqn()} is legal only on a top object, so the call is guarded by {@code bmIsTop()}.
-     */
-    private static String contentResourceExportFqn(EObject content)
-    {
-        if (content instanceof IBmObject)
-        {
-            IBmObject contentBm = (IBmObject)content;
-            if (contentBm.bmIsTop())
-            {
-                return contentBm.bmGetFqn();
-            }
-        }
-        return null;
-    }
-
-    /**
-     * The up-front refusal for a {@code template} payload aimed at a real {@link BasicTemplate} whose type
-     * is NOT {@link TemplateType#SPREADSHEET_DOCUMENT} (a text / binary-data / DCS / graphical template
-     * cannot host cells): a ready {@link ToolResult#error} JSON naming the FQN and the template's ACTUAL
-     * type (or {@code "unset"} for a null type - no NPE), pointing at the only template kind {@code template}
-     * can author. Returns {@code null} when the template IS a SpreadsheetDocument (the write may proceed).
-     * Pure (no model mutation, no transaction) so the guard is unit-testable headlessly; called fail-fast
-     * before any BM write, mirrored inside the tx by {@link #resolveSpreadsheetContent}'s content re-check.
-     */
-    static String nonSpreadsheetTemplateError(BasicTemplate template, String normFqn)
-    {
-        if (template.getTemplateType() == TemplateType.SPREADSHEET_DOCUMENT)
-        {
-            return null;
-        }
-        String actual = template.getTemplateType() == null
-            ? "unset" : template.getTemplateType().getName(); //$NON-NLS-1$
-        return ToolResult.error("Template '" + normFqn + "' is not a SpreadsheetDocument template " //$NON-NLS-1$ //$NON-NLS-2$
-            + "(its type is '" + actual + "'). Only a SpreadsheetDocument (print form / макет) " //$NON-NLS-1$ //$NON-NLS-2$
-            + "template can be authored with 'template'.").toJson(); //$NON-NLS-1$
-    }
-
-    /**
-     * Reuses spreadsheet content or initializes an empty placeholder through EDT's creation helper.
-     * Real foreign content is refused. Must run inside the BM write boundary.
-     */
-    private static SpreadsheetDocument resolveSpreadsheetContent(BasicTemplate txTemplate, IBmTransaction tx,
-        IDtProject dtProject, ITopObjectFqnGenerator fqnGenerator, String normFqn)
-    {
-        EObject contentObj = txTemplate.getTemplate();
-        if (contentObj instanceof SpreadsheetDocument)
-        {
-            return (SpreadsheetDocument)contentObj;
-        }
-        if (!TemplateContentSupport.isPlaceholder(contentObj))
-        {
-            throw new TemplateWriteException(ToolResult.error("Template '" + normFqn
-                + "' has incompatible content. Create a separate SpreadsheetDocument template with create_metadata.")
-                .toJson());
-        }
-        TemplateContentSupport.initialize(txTemplate, TemplateType.SPREADSHEET_DOCUMENT,
-            tx, dtProject, fqnGenerator, null);
-        return (SpreadsheetDocument)txTemplate.getTemplate();
-    }
-
-    /**
-     * Builds the success JSON for a completed template content change: the {@code template} counts object
-     * ({@code cells} / {@code merges} / {@code areas} / {@code columnWidths} / {@code rowHeights} /
-     * {@code unmerges} / {@code removedAreas} / {@code renamedAreas}) plus
-     * {@code persisted} and a confirmation message. Pure helper.
-     */
-    private static String buildTemplateResult(String normFqn, SpreadsheetTemplateWriter.Result result,
-        boolean persisted)
-    {
-        JsonObject applied = new JsonObject();
-        applied.addProperty("cells", result.cells); //$NON-NLS-1$
-        applied.addProperty("merges", result.merges); //$NON-NLS-1$
-        applied.addProperty("areas", result.areas); //$NON-NLS-1$
-        applied.addProperty("columnWidths", result.columnWidths); //$NON-NLS-1$
-        applied.addProperty("rowHeights", result.rowHeights); //$NON-NLS-1$
-        applied.addProperty("unmerges", result.unmerges); //$NON-NLS-1$
-        applied.addProperty("removedAreas", result.removedAreas); //$NON-NLS-1$
-        applied.addProperty("renamedAreas", result.renamedAreas); //$NON-NLS-1$
-        return ToolResult.success()
-            .put(McpKeys.ACTION, VAL_MODIFIED)
-            .put("fqn", MetadataTypeUtils.toCanonicalEnglishFqn(normFqn)) //$NON-NLS-1$
-            .put(KEY_TEMPLATE, applied)
-            .put(KEY_PERSISTED, persisted)
-            .put(McpKeys.MESSAGE, "Modified template " + MetadataTypeUtils.toCanonicalEnglishFqn(normFqn) + " content (cells: " + result.cells //$NON-NLS-1$ //$NON-NLS-2$
-                + ", merges: " + result.merges + ", areas: " + result.areas + ", columnWidths: " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                + result.columnWidths + ", rowHeights: " + result.rowHeights + ", merges removed: " //$NON-NLS-1$ //$NON-NLS-2$
-                + result.unmerges + ", areas removed: " + result.removedAreas + ", areas renamed: " //$NON-NLS-1$ //$NON-NLS-2$
-                + result.renamedAreas + ")") //$NON-NLS-1$
-            .toJson();
-    }
-
-    /**
-     * The actionable error for a {@code template} payload addressed to a FQN that is not a
-     * SpreadsheetDocument template (a form member, a subsystem, or any other non-template object): names
-     * the offending FQN + what it is, and points at the valid template FQN shapes. {@code isClause}
-     * describes the resolved target (e.g. {@code "is a Catalog"} or {@code "addresses a FORM member"}).
-     * Package-visible for tests.
-     */
-    static String templateOnlyForTemplateFqnError(String normFqn, String isClause)
-    {
-        return ToolResult.error("'template' is only valid for a SpreadsheetDocument template FQN (a " //$NON-NLS-1$
-            + "common template 'CommonTemplate.<Name>' or an object-owned template " //$NON-NLS-1$
-            + "'<Type>.<Owner>.Template.<Name>'); '" + normFqn + "' " + isClause + ". 'template' " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            + "authors a spreadsheet template's cells / merges / areas; use 'properties' for a generic " //$NON-NLS-1$
-            + "property change, or address a template FQN.").toJson(); //$NON-NLS-1$
-    }
-
-    /**
-     * The refusal for a {@code template} payload combined with another payload in the same call: a
-     * generic {@code properties} change, a membership {@code content} payload or a Role payload
-     * ({@code rights} / {@code templates} / {@code roleProperties}). A template's content is authored
-     * through its own dedicated surface, so mixing is rejected up front - the same no-mixing policy the
-     * Role rights / membership content branches enforce, so a sibling payload is never silently dropped
-     * while the tool reports success. Returns the ready JSON error, or {@code null} when the
-     * {@code template} payload stands alone. Package-visible for tests.
-     */
-    static String templateMixError(List<JsonObject> properties, List<JsonObject> content,
-        boolean hasRolePayload)
-    {
-        if (!properties.isEmpty())
-        {
-            return ToolResult.error("A template content change ('template') cannot be combined with a " //$NON-NLS-1$
-                + "generic 'properties' change in one call. Set the template's own properties " //$NON-NLS-1$
-                + "(comment / synonym) separately.").toJson(); //$NON-NLS-1$
-        }
-        if (!content.isEmpty() || hasRolePayload)
-        {
-            return ToolResult.error("A template content change ('template') cannot be combined with a " //$NON-NLS-1$
-                + "membership 'content' payload or a Role payload ('rights' / 'templates' / " //$NON-NLS-1$
-                + "'roleProperties') in one call. 'template' authors a SpreadsheetDocument template's " //$NON-NLS-1$
-                + "cells / merges / areas only.").toJson(); //$NON-NLS-1$
-        }
-        return null;
-    }
-
-    /**
-     * Carries a ready JSON error out of the template write transaction (a validation / resolution failure)
-     * so {@link #modifyTemplateContent} returns it verbatim AND the throw rolls the write back (no partial
-     * mutation persists). Unchecked so it crosses the BM task boundary; the message is a validated
-     * {@link ToolResult#error} JSON string. Mirrors {@code ReferenceMembershipWriter.ContentWriteException}.
-     */
-    private static final class TemplateWriteException extends RuntimeException
-    {
-        private static final long serialVersionUID = 1L;
-        private final transient String errorJson;
-
-        TemplateWriteException(String errorJson)
-        {
-            super(errorJson);
-            this.errorJson = errorJson;
-        }
-
-        String getErrorJson()
-        {
-            return errorJson;
-        }
-    }
-
-    /**
-     * Parses the optional {@code template} argument (a single JSON object - the spreadsheet content spec)
-     * from the raw params into a {@link TemplateArg}: {@link TemplateArg#absent()} when the argument is
-     * absent / blank / JSON null; a ready {@link TemplateArg#invalid} error when it is present but is NOT a
-     * JSON object (unparseable, or a string / number / array). Unlike {@link #parseRolePropertiesArg}
-     * (whose sibling {@code rights} / {@code templates} arrays still drive a role change if it is
-     * malformed), {@code template} is the SOLE surface for the template-authoring feature, so a
-     * present-but-malformed value must be an actionable error, NOT a silent drop that would apply a stray
-     * {@code properties} - or misreport {@code properties is required} - while the authoring vanished. An
-     * invalid INNER shape of a well-formed object is surfaced later by {@link SpreadsheetTemplateWriter}'s
-     * validation. Package-visible for tests.
-     */
-    static TemplateArg parseTemplateArg(Map<String, String> params)
-    {
-        String raw = params.get(KEY_TEMPLATE);
-        if (raw == null || raw.trim().isEmpty())
-        {
-            return TemplateArg.absent();
-        }
-        JsonElement element;
-        try
-        {
-            element = JsonParser.parseString(raw.trim());
-        }
-        catch (RuntimeException e)
-        {
-            return TemplateArg.invalid(malformedTemplateError());
-        }
-        if (element.isJsonNull())
-        {
-            return TemplateArg.absent();
-        }
-        if (!element.isJsonObject())
-        {
-            return TemplateArg.invalid(malformedTemplateError());
-        }
-        return TemplateArg.of(element.getAsJsonObject());
-    }
-
-    /**
-     * The actionable error for a present-but-malformed {@code template} argument (unparseable JSON, or a
-     * string / number / array rather than an object): the {@code template} payload authors a
-     * TextDocument or SpreadsheetDocument template's content, so it must be a JSON object.
-     */
-    private static String malformedTemplateError()
-    {
-        return ToolResult.error("'template' must be a JSON object, e.g. " //$NON-NLS-1$
-            + "{cells:[{row:0,col:0,text:'Total'}]}. It authors a SpreadsheetDocument template's cells / " //$NON-NLS-1$
-            + "merges / areas / column & row sizes on a template FQN. For a TextDocument use " //$NON-NLS-1$
-            + "{text:'...'} with optional expectedHash from get_metadata_details.").toJson(); //$NON-NLS-1$
-    }
-
-    /**
-     * The parsed {@code template} argument: {@link #absent()} (no payload - both fields {@code null}), a
-     * valid parsed {@link #spec}, or a ready {@link #error} JSON for a present-but-malformed value. At most
-     * one of {@code spec} / {@code error} is non-null. Package-visible for tests.
-     */
-    static final class TemplateArg
-    {
-        /** The parsed content spec, or {@code null} when the argument is absent or malformed. */
-        final JsonObject spec;
-        /** A ready {@link ToolResult#error} JSON when the argument is present-but-malformed, else {@code null}. */
-        final String error;
-
-        private TemplateArg(JsonObject spec, String error)
-        {
-            this.spec = spec;
-            this.error = error;
-        }
-
-        static TemplateArg absent()
-        {
-            return new TemplateArg(null, null);
-        }
-
-        static TemplateArg of(JsonObject spec)
-        {
-            return new TemplateArg(spec, null);
-        }
-
-        static TemplateArg invalid(String error)
-        {
-            return new TemplateArg(null, error);
-        }
     }
 
     /**

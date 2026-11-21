@@ -1,9 +1,9 @@
 """
-e2e tests for modify_metadata template LAYOUT authoring (#1001): cell borders, border / back / text
+e2e tests for template_content LAYOUT authoring (#1001): cell borders, border / back / text
 colours, unmerging an existing merge, and removing / renaming a named area, through the same
 `template` payload as #245:
 
-    modify_metadata(fqn="Catalog.Catalog.Template.<Name>",
+    template_content(method="modify", fqn="Catalog.Catalog.Template.<Name>",
                     template={cells: [{row, col, borders?, borderColor?, backColor?, textColor?, ...}],
                               unmerges: [{fromRow, fromCol, toRow, toCol}],
                               removeAreas: [name], renameAreas: [{name, newName}], ...})
@@ -54,6 +54,7 @@ def _seed_owned_template(name):
 def _counts(r, ctx):
     assert r.structured is not None, "%s: JSON tool must return structuredContent: %r" % (ctx, r.raw)
     assert r.structured.get("action") == "modified", "%s: must report modified: %r" % (ctx, r.structured)
+    assert r.structured.get("method") == "modify", r.structured
     counts = r.structured.get("template")
     assert isinstance(counts, dict), "%s: the template counts object is missing: %r" % (ctx, r.structured)
     return counts
@@ -112,11 +113,12 @@ def _merges(doc):
 # Happy — borders and colours land in the .mxlx in the platform's own spelling
 # ══════════════════════════════════════════════════════════════════════════════
 
-@e2e_test(tool="modify_metadata", kind="write-metadata")
+@e2e_test(tool="template_content", kind="write-metadata")
 def test_cell_borders_and_colours_land_in_mxlx_on_disk():
     fqn, mxlx = _seed_owned_template("E2ELayoutBorders1001")
     text = "E2E Bordered 1001"
-    r = call("modify_metadata", {
+    r = call("template_content", {
+        "method": "modify",
         "projectName": PROJECT, "fqn": fqn,
         "template": {"cells": [
             {"row": 0, "col": 0, "text": text,
@@ -157,7 +159,7 @@ def test_cell_borders_and_colours_land_in_mxlx_on_disk():
     assert _png_ok(shot), "the render must return a PNG; got: %r" % (str(shot.raw)[:300],)
 
 
-@e2e_test(tool="modify_metadata", kind="write-metadata")
+@e2e_test(tool="template_content", kind="write-metadata")
 def test_back_colour_names_a_configuration_style_item():
     style = "E2EAccent1001"
     r = call("create_metadata", {"projectName": PROJECT, "fqn": "StyleItem." + style})
@@ -168,7 +170,8 @@ def test_back_colour_names_a_configuration_style_item():
     assert_ok(r, "give the style item a colour")
     wait_for_project_ready()
     fqn, mxlx = _seed_owned_template("E2ELayoutStyle1001")
-    r = call("modify_metadata", {
+    r = call("template_content", {
+        "method": "modify",
         "projectName": PROJECT, "fqn": fqn,
         "template": {"cells": [{"row": 0, "col": 0, "text": "Styled 1001", "backColor": "Style." + style}]},
     })
@@ -180,9 +183,10 @@ def test_back_colour_names_a_configuration_style_item():
     assert "#0A141E" not in doc, "the style item's RGB must not be inlined in %s: %r" % (mxlx, doc[:1500])
 
 
-@e2e_test(tool="modify_metadata", kind="write-metadata")
+@e2e_test(tool="template_content", kind="write-metadata")
 def test_unknown_line_style_is_refused_naming_the_platform_styles():
-    r = call("modify_metadata", {
+    r = call("template_content", {
+        "method": "modify",
         "projectName": PROJECT, "fqn": FIXTURE_TEMPLATE,
         "template": {"cells": [{"row": 0, "col": 0, "text": "x", "borders": "Wavy1001"}]},
     })
@@ -195,11 +199,12 @@ def test_unknown_line_style_is_refused_naming_the_platform_styles():
 # Happy — unmerge an existing merge and author a new layout in the same call
 # ══════════════════════════════════════════════════════════════════════════════
 
-@e2e_test(tool="modify_metadata", kind="write-metadata")
+@e2e_test(tool="template_content", kind="write-metadata")
 def test_unmerge_removes_the_old_merge_and_a_new_one_is_written():
     fqn, mxlx = _seed_owned_template("E2ELayoutUnmerge1001")
     title = "E2E Unmerge 1001"
-    r = call("modify_metadata", {
+    r = call("template_content", {
+        "method": "modify",
         "projectName": PROJECT, "fqn": fqn,
         "template": {"cells": [{"row": 0, "col": 0, "text": title, "borders": "Solid"}],
                      "merges": [{"fromRow": 0, "fromCol": 0, "toRow": 1, "toCol": 3}]},
@@ -209,7 +214,8 @@ def test_unmerge_removes_the_old_merge_and_a_new_one_is_written():
     assert _merges(doc) == [(0, 0, 1, 3)], "the old merge must be on disk first (%s): %r" % (mxlx, doc[:1500])
 
     # An inner cell is enough: every merge touching the range goes, as with EDT's Unmerge on a selection.
-    r = call("modify_metadata", {
+    r = call("template_content", {
+        "method": "modify",
         "projectName": PROJECT, "fqn": fqn,
         "template": {"unmerges": [{"fromRow": 1, "fromCol": 2, "toRow": 1, "toCol": 2}],
                      "merges": [{"fromRow": 0, "fromCol": 0, "toRow": 0, "toCol": 1}]},
@@ -226,12 +232,12 @@ def test_unmerge_removes_the_old_merge_and_a_new_one_is_written():
 
     # MODEL read-back: the old merge is gone from the model too, so unmerging its former inner cell again
     # touches nothing, while the new merge is still found.
-    r = call("modify_metadata", {"projectName": PROJECT, "fqn": fqn,
+    r = call("template_content", {"method": "modify", "projectName": PROJECT, "fqn": fqn,
                                  "template": {"unmerges": [{"fromRow": 1, "fromCol": 2, "toRow": 1, "toCol": 2}]}})
     assert_ok(r, "unmerge the former inner cell again")
     assert _counts(r, "repeat unmerge").get("unmerges") == 0, "the old merge must be gone from the model: %r" % (
         r.structured,)
-    r = call("modify_metadata", {"projectName": PROJECT, "fqn": fqn,
+    r = call("template_content", {"method": "modify", "projectName": PROJECT, "fqn": fqn,
                                  "template": {"unmerges": [{"fromRow": 0, "fromCol": 1, "toRow": 0, "toCol": 1}]}})
     assert_ok(r, "unmerge the new merge")
     assert _counts(r, "unmerge the new merge").get("unmerges") == 1, "the new merge must be in the model: %r" % (
@@ -242,10 +248,11 @@ def test_unmerge_removes_the_old_merge_and_a_new_one_is_written():
 # Happy — remove one named area and rename another
 # ══════════════════════════════════════════════════════════════════════════════
 
-@e2e_test(tool="modify_metadata", kind="write-metadata")
+@e2e_test(tool="template_content", kind="write-metadata")
 def test_remove_and_rename_named_areas_on_disk():
     fqn, mxlx = _seed_owned_template("E2ELayoutAreas1001")
-    r = call("modify_metadata", {
+    r = call("template_content", {
+        "method": "modify",
         "projectName": PROJECT, "fqn": fqn,
         "template": {"cells": [{"row": 0, "col": 0, "text": "Areas 1001"}],
                      "areas": [{"name": "E2EHeader1001", "fromRow": 0, "fromCol": 0, "toRow": 0, "toCol": 3},
@@ -256,7 +263,8 @@ def test_remove_and_rename_named_areas_on_disk():
     assert "E2EHeader1001" in doc and "E2EFooter1001" in doc, "the two areas must be on disk first (%s): %r" % (
         mxlx, doc[:1500])
 
-    r = call("modify_metadata", {
+    r = call("template_content", {
+        "method": "modify",
         "projectName": PROJECT, "fqn": fqn,
         "template": {"removeAreas": ["E2EFooter1001"],
                      "renameAreas": [{"name": "E2EHeader1001", "newName": "E2ETitle1001"}]},
@@ -273,7 +281,7 @@ def test_remove_and_rename_named_areas_on_disk():
         assert gone not in doc, "%s must be gone from %s: %r" % (gone, mxlx, doc[:1500])
 
     # MODEL read-back: the old names are gone from the model, the new one is there.
-    r = call("modify_metadata", {"projectName": PROJECT, "fqn": fqn,
+    r = call("template_content", {"method": "modify", "projectName": PROJECT, "fqn": fqn,
                                  "template": {"removeAreas": ["E2EHeader1001"]}})
     e = assert_error(r, "the old name is no longer an area")
     assert_error_quality(e, names=["E2EHeader1001", "E2ETitle1001"], suggests=["Existing areas"],
@@ -281,9 +289,10 @@ def test_remove_and_rename_named_areas_on_disk():
     assert "E2EFooter1001" not in e, "the removed area must not be listed as existing: %r" % (e,)
 
 
-@e2e_test(tool="modify_metadata", kind="write-metadata")
+@e2e_test(tool="template_content", kind="write-metadata")
 def test_removing_an_unknown_area_is_refused_and_writes_nothing():
-    r = call("modify_metadata", {
+    r = call("template_content", {
+        "method": "modify",
         "projectName": PROJECT, "fqn": FIXTURE_TEMPLATE,
         "template": {"cells": [{"row": 0, "col": 0, "text": "never written 1001"}],
                      "removeAreas": ["E2ENoSuchArea1001"]},

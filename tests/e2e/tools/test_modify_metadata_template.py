@@ -1,15 +1,15 @@
 """
-e2e tests for modify_metadata authoring a SpreadsheetDocument (.mxlx) print-form template's CONTENT
+e2e tests for template_content authoring a SpreadsheetDocument (.mxlx) print-form template's CONTENT
 (#245).
 
 A 1C template (макет) of type SpreadsheetDocument is a POOLED cell grid — text / parameter cells with
 per-cell formatting (bold / font size / alignment / word-wrap), cell MERGES, named AREAS, and column /
-row sizes. #245 lets that content be AUTHORED through modify_metadata via a sibling `template` payload
+row sizes. #245 lets that content be AUTHORED through template_content via its `template` payload
 on a template FQN (a BasicTemplate — a common `CommonTemplate.<Name>` OR an object-owned
 `<Type>.<Owner>.Template.<Name>`), mirroring the Role `rights[]` / CommonAttribute `content[]`
 precedent — NO new tool:
 
-    modify_metadata(fqn="CommonTemplate.X" | "Catalog.Y.Template.Z",
+    template_content(method="modify", fqn="CommonTemplate.X" | "Catalog.Y.Template.Z",
                     template={
                         cells:  [{row, col, text?|parameter?, bold?, fontSize?, hAlign?, vAlign?,
                                   wrap?, textOrientation?, autoIndent?, autoMarkIncomplete?}],
@@ -22,7 +22,7 @@ The write goes through a BM write transaction and force-exports the template so 
 (the `Template.mxlx` moxel file that lives BESIDE the .mdo, not inline in it) drains to disk — the
 load-bearing proof here, the #239 force-export-target lesson: a change committed only in-memory is
 silently discarded on the next refresh. The success payload reports action="modified" like every other
-modify_metadata payload.
+template_content payload.
 
 reset: kind="write-metadata" -> reset_fixture()+reset_model() after each test.
 
@@ -80,9 +80,10 @@ def _seed_owned_template(name):
 
 
 def _template_result(r, ctx):
-    """A modify_metadata template write reports the shared modified envelope (action='modified')."""
+    """A template_content write reports the shared modified envelope (action='modified')."""
     assert r.structured is not None, "%s: JSON tool must return structuredContent: %r" % (ctx, r.raw)
     assert r.structured.get("action") == "modified", "%s: must report modified: %r" % (ctx, r.structured)
+    assert r.structured.get("method") == "modify", r.structured
 
 
 def _png_ok(r):
@@ -127,7 +128,7 @@ def _assert_text_under_neutral_key(doc, text, mxlx):
 # content DRAINS to the template's own .mxlx moxel resource on disk
 # ══════════════════════════════════════════════════════════════════════════════
 
-@e2e_test(tool="modify_metadata", kind="write-metadata")
+@e2e_test(tool="template_content", kind="write-metadata")
 def test_template_content_lands_in_mxlx_on_disk():
     fqn, mxlx = _seed_owned_template("E2EMxlxContent")
     text = "E2E MXLX Cell 245"
@@ -139,7 +140,8 @@ def test_template_content_lands_in_mxlx_on_disk():
     col_width = 137
     row_height = 43
 
-    r = call("modify_metadata", {
+    r = call("template_content", {
+        "method": "modify",
         "projectName": PROJECT, "fqn": fqn,
         "template": {
             "cells": [
@@ -188,7 +190,7 @@ def test_template_content_lands_in_mxlx_on_disk():
 # in EXACTLY the platform's own spelling and unit
 # ══════════════════════════════════════════════════════════════════════════════
 
-@e2e_test(tool="modify_metadata", kind="write-metadata")
+@e2e_test(tool="template_content", kind="write-metadata")
 def test_cell_rotation_and_auto_column_width_land_in_mxlx_on_disk():
     fqn, mxlx = _seed_owned_template("E2EMxlxFormat")
 
@@ -199,7 +201,8 @@ def test_cell_rotation_and_auto_column_width_land_in_mxlx_on_disk():
     auto_indent = 7
     weight = 3
 
-    r = call("modify_metadata", {
+    r = call("template_content", {
+        "method": "modify",
         "projectName": PROJECT, "fqn": fqn,
         "template": {
             "cells": [
@@ -236,9 +239,10 @@ def test_cell_rotation_and_auto_column_width_land_in_mxlx_on_disk():
 # written where the platform never reads it
 # ══════════════════════════════════════════════════════════════════════════════
 
-@e2e_test(tool="modify_metadata", kind="write-metadata")
+@e2e_test(tool="template_content", kind="write-metadata")
 def test_width_weight_factor_without_auto_width_is_refused():
-    r = call("modify_metadata", {
+    r = call("template_content", {
+        "method": "modify",
         "projectName": PROJECT, "fqn": FIXTURE_TEMPLATE,
         "template": {"columnWidths": [{"col": 0, "width": 40, "widthWeightFactor": 3}]},
     })
@@ -252,11 +256,12 @@ def test_width_weight_factor_without_auto_width_is_refused():
 # Happy — round-trip smoke: an authored template RENDERS via get_template_screenshot
 # ══════════════════════════════════════════════════════════════════════════════
 
-@e2e_test(tool="modify_metadata", kind="write-metadata")
+@e2e_test(tool="template_content", kind="write-metadata")
 def test_authored_template_renders_via_screenshot():
     fqn, mxlx = _seed_owned_template("E2EMxlxRender")
     text = "Rendered 245"
-    r = call("modify_metadata", {
+    r = call("template_content", {
+        "method": "modify",
         "projectName": PROJECT, "fqn": fqn,
         "template": {"cells": [{"row": 0, "col": 0, "text": text}]},
     })
@@ -285,12 +290,13 @@ def test_authored_template_renders_via_screenshot():
 # Negative — a bad alignment enum names the value + lists the accepted literals
 # ══════════════════════════════════════════════════════════════════════════════
 
-@e2e_test(tool="modify_metadata", kind="write-metadata")
+@e2e_test(tool="template_content", kind="write-metadata")
 def test_bad_alignment_enum_is_error():
     # An unrecognized hAlign token is rejected UP FRONT (before any BM write), naming the bad value and
     # listing the accepted alignment literals. Targets the pristine fixture template so a rejected write
     # can be proven to change nothing on disk.
-    r = call("modify_metadata", {
+    r = call("template_content", {
+        "method": "modify",
         "projectName": PROJECT, "fqn": FIXTURE_TEMPLATE,
         "template": {"cells": [{"row": 0, "col": 0, "text": "x", "hAlign": "BOGUS_zz"}]},
     })
@@ -304,12 +310,13 @@ def test_bad_alignment_enum_is_error():
 # Negative — a template payload on a NON-template FQN is rejected (wrong kind)
 # ══════════════════════════════════════════════════════════════════════════════
 
-@e2e_test(tool="modify_metadata", kind="write-metadata")
+@e2e_test(tool="template_content", kind="write-metadata")
 def test_template_payload_on_non_template_fqn_is_error():
     # A `template` payload is only valid for a BasicTemplate FQN. Addressed to a Catalog (a real object
     # of the WRONG kind), it is refused UP FRONT naming the FQN — it must NOT fall through to the generic
     # property path (which, with no properties, would report a false success and drop the payload).
-    r = call("modify_metadata", {
+    r = call("template_content", {
+        "method": "modify",
         "projectName": PROJECT, "fqn": NON_TEMPLATE_FQN,
         "template": {"cells": [{"row": 0, "col": 0, "text": "x"}]},
     })
@@ -324,15 +331,22 @@ def test_template_payload_on_non_template_fqn_is_error():
 # ══════════════════════════════════════════════════════════════════════════════
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")
-def test_template_mixed_with_properties_is_error():
-    # Like the Role rights[] / content[] dispatch guards, a `template` change is its own surface and
-    # cannot be mixed with a generic `properties` change in one call — the two are applied separately.
+def test_legacy_template_payload_is_migration_error():
+    # The legacy authoring route must refuse explicitly instead of dropping template content.
     r = call("modify_metadata", {
         "projectName": PROJECT, "fqn": FIXTURE_TEMPLATE,
         "template": {"cells": [{"row": 0, "col": 0, "text": "x"}]},
-        "properties": [{"name": "comment", "value": "y"}],
     })
-    e = assert_error(r, "a template payload mixed with a properties change")
-    assert_error_quality(e, suggests=["cannot be combined", "separately"],
-                         ctx="a template change cannot be combined with a generic properties change")
-    assert_no_diff("a rejected mixed template+properties call must change nothing on disk")
+    e = assert_error(r, "a legacy template payload")
+    assert_error_quality(e, suggests=["template_content", "modify"],
+                         ctx="legacy template authors are directed to the new facade")
+    assert_no_diff("a rejected legacy template call must change nothing on disk")
+
+
+@e2e_test(tool="template_content", kind="read")
+def test_help_describes_both_template_surfaces_without_a_project():
+    r = call("template_content", {"method": "help"})
+    assert_ok(r, "template help without a project")
+    doc = r.structured.get("help", "")
+    assert "SpreadsheetDocument" in doc and "TextDocument" in doc, r.structured
+    assert "renameAreas" in doc and "expectedHash" in doc, r.structured

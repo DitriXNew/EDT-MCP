@@ -127,9 +127,11 @@ public final class PreferenceConstants
      * 21 = recorded read-only profiles gain {@code sort_metadata}.
      * 22 = recorded read-only profiles gain {@code edt_dialog}.
      * 23 = recorded read-only profiles gain {@code standalone_server};
-     * 24 = recorded read-only profiles gain {@code manage_profiling_results} and {@code manage_tech_log}.
+     * 24 = recorded read-only profiles gain {@code manage_profiling_results} and {@code manage_tech_log};
+     * 25 = recorded read-only profiles gain {@code template_content}, also disabled when its old
+     * writer {@code modify_metadata} was disabled.
      */
-    public static final int TOOL_PREFS_MIGRATION_VERSION = 24;
+    public static final int TOOL_PREFS_MIGRATION_VERSION = 25;
 
     /** Explicit opt-ins: raw git commands, the external Workmate agent and buffered form screenshots. */
     public static final String DEFAULT_DISABLED_TOOLS = "git,ask_workmate,get_form_screenshot"; //$NON-NLS-1$

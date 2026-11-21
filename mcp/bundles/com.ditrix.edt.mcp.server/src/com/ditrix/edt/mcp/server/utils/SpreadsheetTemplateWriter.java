@@ -20,7 +20,6 @@ import org.eclipse.emf.common.util.EMap;
 import org.eclipse.emf.common.util.Enumerator;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.EStructuralFeature;
-import org.eclipse.emf.ecore.InternalEObject;
 import org.eclipse.emf.ecore.util.EcoreUtil;
 
 import com._1c.g5.v8.dt.mcore.Color;
@@ -374,7 +373,8 @@ public final class SpreadsheetTemplateWriter
         return wrapped -> {
             IEObjectProvider catalogue = AppearanceValueBuilder.colorCatalogue(projectVersion);
             AppearanceValueBuilder.Result platform = AppearanceValueBuilder.buildColor(wrapped, null, catalogue);
-            Configuration own = platform.error == null || configuration == null ? null : configuration.get();
+            Configuration own = platform.lookupStatus != PlatformCatalogue.Status.NOT_FOUND || configuration == null
+                ? null : configuration.get();
             return own == null ? platform : AppearanceValueBuilder.buildColor(wrapped, own, catalogue);
         };
     }
@@ -779,7 +779,7 @@ public final class SpreadsheetTemplateWriter
     /**
      * Mirrors EDT's {@code MoxelUtil.prepareRectForRemoveMerge}: the merged range showed the format of its
      * top-left cell, so once the merge is gone every cell of the range receives that format, keeping a
-     * border only on the side that lies on the range's outer edge (inner sides are unset).
+     * border only on the side that lies on the range's outer edge (inner sides explicitly bind the empty line).
      *
      * <p>Two deliberate departures, both because a merge this tool writes may cover POPULATED cells (EDT's
      * editor empties the covered cells when it merges, so it never meets content there): a covered cell
@@ -797,6 +797,7 @@ public final class SpreadsheetTemplateWriter
             return; // anchored at the start of the call; an overlapping earlier unmerge cannot remove a cell
         }
         Format source = document.getFormats().get(topLeft.getFormatIndex());
+        int emptyLine = internLine(document, new BorderPlan(CellLineStyle.NONE, 0));
         // Offsets, not coordinates: a far corner at the top of the int range must not wrap the loop.
         for (int dy = 0; dy <= range.getHeight(); dy++)
         {
@@ -805,19 +806,19 @@ public final class SpreadsheetTemplateWriter
                 Format format = EcoreUtil.copy(source);
                 if (dy != 0)
                 {
-                    format.unsetTopBorder();
+                    format.setTopBorder(emptyLine);
                 }
                 if (dy != range.getHeight())
                 {
-                    format.unsetBottomBorder();
+                    format.setBottomBorder(emptyLine);
                 }
                 if (dx != 0)
                 {
-                    format.unsetLeftBorder();
+                    format.setLeftBorder(emptyLine);
                 }
                 if (dx != range.getWidth())
                 {
-                    format.unsetRightBorder();
+                    format.setRightBorder(emptyLine);
                 }
                 Cell cell = getOrCreateCell(getOrCreateRow(document, top + dy), left + dx);
                 if (cell != topLeft && (cell.getText() != null || cell.getParameter() != null))
@@ -1212,9 +1213,12 @@ public final class SpreadsheetTemplateWriter
             {
                 return targetA != null;
             }
-            return targetA instanceof InternalEObject && targetB instanceof InternalEObject
-                && ((InternalEObject)targetA).eIsProxy() && ((InternalEObject)targetB).eIsProxy()
-                && Objects.equals(((InternalEObject)targetA).eProxyURI(), ((InternalEObject)targetB).eProxyURI());
+            if (targetA instanceof EObject && targetB instanceof EObject
+                && (((EObject)targetA).eIsProxy() || ((EObject)targetB).eIsProxy()))
+            {
+                return Objects.equals(EcoreUtil.getURI((EObject)targetA), EcoreUtil.getURI((EObject)targetB));
+            }
+            return false;
         }
         return EcoreUtil.equals(a, b);
     }
