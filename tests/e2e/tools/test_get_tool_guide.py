@@ -242,17 +242,21 @@ def test_large_modify_metadata_summary_is_small_and_lists_every_h2():
     """The real large guide exposes all H2 headings, parameters and the full resource."""
     full = call("get_tool_guide", {"toolName": "modify_metadata"})
     assert_ok(full, "full modify_metadata guide")
-    if len(full.text) <= 90_000:
-        _fail("the regression must exercise the real large modify_metadata guide")
+    assert_contains(full.text, "# modify_metadata", "full guide identifies the real tool")
+    headings = [line[3:] for line in full.text.splitlines() if line.startswith("## ")]
+    for heading in ("Parameters", "Setting role access rights", "Vendor support", "Additional columns"):
+        if heading not in headings:
+            _fail("full modify_metadata guide must include the %r heading" % heading)
+    role_body = "When the `fqn` is a **Role**"
+    assert_contains(full.text, role_body, "full guide includes body instructions")
     r = call("get_tool_guide", {"toolName": "modify_metadata", "mode": "summary"})
     assert_ok(r, "large guide summary")
     if len(r.text) >= 15_000 or len(r.text) >= len(full.text) / 4:
         _fail("summary must retain only the description, parameters and a small heading index")
     assert_contains(r.text, "| fqn |", "summary retains the real parameter table")
-    for line in full.text.splitlines():
-        if line.startswith("## "):
-            assert_contains(r.text, "| " + line[3:] + " | #", "every H2 is discoverable")
-    assert_not_contains(r.text, "When the `fqn` is a **Role**", "summary excludes body instructions")
+    for heading in headings:
+        assert_contains(r.text, "| " + heading + " | #", "every H2 is discoverable")
+    assert_not_contains(r.text, role_body, "summary excludes body instructions")
     assert_contains(r.text, "guide://modify_metadata", "summary offers the full guide resource")
     assert_no_diff("large guide discovery must not change the fixture")
 

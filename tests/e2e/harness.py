@@ -861,7 +861,7 @@ MODEL_MUTATION_TOOLS = frozenset({
     "manage_tech_log",  # Writes only config/capture/export files; never the fixture model.
     # A conflict-dialog Import press can rewrite project sources through EDT.
     "edt_dialog",
-    "sort_metadata", "create_metadata", "modify_metadata", "write_module_source",
+    "sort_metadata", "create_metadata", "modify_metadata", "template_content", "write_module_source",
     "apply_quick_fix", "build_external_objects",
     # The preview never writes; a confirmed clone writes only after validation and the hash check.
     "clone_metadata_object",

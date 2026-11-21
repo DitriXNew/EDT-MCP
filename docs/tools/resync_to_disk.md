@@ -38,7 +38,7 @@ Bulk re-synchronize the in-memory EDT model to the on-disk `src/` files, and rep
 - A top object (`Catalog.Goods`, `CommonModule.Utils`, `Subsystem.Sales`) rewrites its own file (`Goods.mdo`).
 - A form (`Catalog.Goods.Form.ItemForm`, `CommonForm.Main`) rewrites its `Form.form` - not the owner's `.mdo`. The content-form FQN EDT itself uses (`Catalog.Goods.Form.ItemForm.Form`) works too.
 - Type tokens are bilingual: `Справочник.Goods.Форма.ItemForm` is the same form. The object and form names are programmatic Names.
-- Other content stored in a file of its own (template content such as `CommonTemplate.Print.Template`, a role's rights) is refused: re-saving it is not supported. Re-save the owning object for its `.mdo`; edit a template with `modify_metadata`.
+- Other content stored in a file of its own (template content such as `CommonTemplate.Print.Template`, a role's rights) is refused: re-saving it is not supported. Re-save the owning object for its `.mdo`; edit a template with `template_content`.
 - A nested member (`Catalog.Goods.Attribute.Weight`) is stored in its owner's file and is refused with the owner to re-save instead; an unknown FQN is refused by name. When any entry is refused, nothing is written.
 - It requires `overwriteDiskEdits=true` and refuses `fullExport`, `cleanDanglingReferences` and `cleanOrphanRoleRights` in the same call. `revalidate` still applies.
 

@@ -69,7 +69,7 @@ For an object that a configuration on vendor support locks, the output carries o
 
 ## Text templates
 
-A TextDocument template FQN (`CommonTemplate.Name` or `<Type>.<Owner>.Template.Name`) returns a `## Text template` section with the exact text in a fenced block and a `contentHash` from the same helper as `write_module_source`. Pass that hash as `modify_metadata.template.expectedHash`. Long text is bounded using the standard `[OUTPUT TRUNCATED]` notice; the hash always covers the full text, including the part omitted from the response. Request a single template FQN to keep its section within the overall response budget. This read does not write the model or the file.
+A TextDocument template FQN (`CommonTemplate.Name` or `<Type>.<Owner>.Template.Name`) returns a `## Text template` section with the exact text in a fenced block and a `contentHash` from the same helper as `write_module_source`. Pass that hash as `template_content.template.expectedHash`. Long text is bounded using the standard `[OUTPUT TRUNCATED]` notice; the hash always covers the full text, including the part omitted from the response. Request a single template FQN to keep its section within the overall response budget. This read does not write the model or the file.
 
 ## External data source members
 

@@ -73,7 +73,6 @@ public class GetToolGuideToolReviewTest
         ModifyMetadataTool target = new ModifyMetadataTool();
         assertFalse("The real bundled guide must be available", target.getGuide().isEmpty());
         String full = GuideRenderer.render(target);
-        assertTrue(full.length() > 90_000);
         for (String query : List.of("type", "in"))
         {
             long total = full.lines().filter(line -> line.toLowerCase(Locale.ROOT).contains(query)).count();
@@ -249,12 +248,12 @@ public class GetToolGuideToolReviewTest
         ModifyMetadataTool target = new ModifyMetadataTool();
         assertFalse(GuideLoader.load("modify_metadata").isEmpty());
         String full = GuideRenderer.render(target);
-        assertTrue(full.length() > 90_000);
         String summary = execute(target, "mode", "summary");
         assertTrue("Summary must be only a few KB: " + summary.length(), summary.length() < 15_000);
         assertTrue(summary.contains(target.getDescription()));
         assertTrue(summary.contains("| fqn |"));
         GuideSections index = GuideSections.parse(full);
+        assertNotNull("The full guide must include even its trailing section", index.find("Additional columns"));
         for (String line : full.lines().filter(value -> value.startsWith("## ")).toList())
         {
             String title = line.substring(3);

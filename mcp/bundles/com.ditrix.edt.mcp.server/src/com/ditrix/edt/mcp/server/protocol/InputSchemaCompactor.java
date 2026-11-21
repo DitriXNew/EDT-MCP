@@ -89,7 +89,8 @@ public final class InputSchemaCompactor
      */
     static final Map<String, Set<String>> MEMBERS_CHECKED_ON_SERVER = Map.of(
         "modify_metadata", asSet("properties", "rights", "templates", "roleProperties", "content", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
-            "commands", "template"), //$NON-NLS-1$ //$NON-NLS-2$
+            "commands"), //$NON-NLS-1$
+        "template_content", asSet("template"), //$NON-NLS-1$ //$NON-NLS-2$
         "create_metadata", asSet("properties"), //$NON-NLS-1$ //$NON-NLS-2$
         "merge_rules", asSet("decisions"), //$NON-NLS-1$ //$NON-NLS-2$
         "business_process_route_map", asSet("points", "connections")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
@@ -372,7 +373,8 @@ public final class InputSchemaCompactor
         keep.put("create_metadata", asSet("insertPosition", "normalizeYo", "commonModuleKind", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             "serverCall", "privileged", "returnValuesReuse", "properties")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
         keep.put("modify_metadata", asSet("normalizeYo", "properties", "rights", "templates", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
-            "roleProperties", "content", "commands", "template")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            "roleProperties", "content", "commands")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        keep.put("template_content", asSet("method", "fqn", "template")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
         // A CONDITIONAL protocol the schema cannot express: expectedHash carries the
         // preview's contentHash and becomes REQUIRED once confirm=true is paired with a
         // non-empty disableIndices. Without it the selective confirm is simply rejected.

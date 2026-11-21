@@ -205,7 +205,7 @@ public class ResyncToDiskResaveTest
             && text.contains("'CommonTemplate.Print.Template'") //$NON-NLS-1$
             && text.contains("SpreadsheetDocument") //$NON-NLS-1$
             && text.contains("not supported") //$NON-NLS-1$
-            && text.contains("modify_metadata")); //$NON-NLS-1$
+            && text.contains("template_content")); //$NON-NLS-1$
         Object rightsRefusal = ResyncToDiskTool.resolveResaveTarget(model.scope, lookup, "Role.Admin.Rights"); //$NON-NLS-1$
         assertTrue(String.valueOf(rightsRefusal), rightsRefusal instanceof String text
             && text.contains("not supported")); //$NON-NLS-1$

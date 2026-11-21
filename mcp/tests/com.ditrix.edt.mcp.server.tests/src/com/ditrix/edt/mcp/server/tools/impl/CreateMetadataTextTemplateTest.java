@@ -97,7 +97,7 @@ public class CreateMetadataTextTemplateTest
 
     @Test public void testModifyTemplateSchemaDescribesTextAndExpectedHash()
     {
-        JsonObject schema = com.google.gson.JsonParser.parseString(new ModifyMetadataTool().getInputSchema())
+        JsonObject schema = com.google.gson.JsonParser.parseString(new TemplateContentTool().getInputSchema())
             .getAsJsonObject();
         String description = schema.getAsJsonObject("properties").getAsJsonObject("template")
             .get("description").getAsString();
@@ -132,7 +132,7 @@ public class CreateMetadataTextTemplateTest
 
         // Stop at the real BM boundary: this unit test needs no file service or running EDT.
         String boundary = ToolResult.error("Reached text BM boundary without a generator").toJson();
-        var exception = Class.forName(ModifyMetadataTool.class.getName() + "$TemplateWriteException")
+        var exception = Class.forName(TemplateContentTool.class.getName() + "$TemplateWriteException")
             .getDeclaredConstructor(String.class);
         exception.setAccessible(true);
         doThrow((RuntimeException)exception.newInstance(boundary)).when(model).execute(any());
@@ -145,9 +145,9 @@ public class CreateMetadataTextTemplateTest
         Field projectField = contextType.getField("project");
         projectField.setAccessible(true);
         projectField.set(context, project);
-        Method write = ModifyMetadataTool.class.getDeclaredMethod("modifyTemplateContent", contextType,
-            String.class, BasicTemplate.class, List.class, List.class, boolean.class, JsonObject.class);
-        write.setAccessible(true);
+        Method prepare = TemplateContentTool.class.getDeclaredMethod("resolveTemplateWriteContext", contextType,
+            BasicTemplate.class, String.class, boolean.class);
+        prepare.setAccessible(true);
         JsonObject spec = new JsonObject();
         if (required) { spec.add("cells", new com.google.gson.JsonArray()); }
         else
@@ -162,8 +162,11 @@ public class CreateMetadataTextTemplateTest
         try
         {
             plugin.set(null, activator);
-            String result = (String)write.invoke(new ModifyMetadataTool(), context,
-                "CommonTemplate.Contract730", template, List.of(), List.of(), false, spec);
+            Object prepared = prepare.invoke(null, context, template, "CommonTemplate.Contract730", required);
+            Method write = TemplateContentTool.class.getDeclaredMethod("modifyTemplateContent", contextType,
+                prepared.getClass(), JsonObject.class);
+            write.setAccessible(true);
+            String result = (String)write.invoke(new TemplateContentTool(), context, prepared, spec);
             if (required)
             {
                 assertTrue(result, result.contains("ITopObjectFqnGenerator"));

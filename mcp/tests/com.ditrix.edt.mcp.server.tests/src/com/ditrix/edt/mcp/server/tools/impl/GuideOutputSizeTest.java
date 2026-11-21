@@ -67,7 +67,8 @@ public class GuideOutputSizeTest
     public void testTheModifyMetadataGuideFitsTheOutputCap()
     {
         String guide = fullGuide("modify_metadata"); //$NON-NLS-1$
-        assertTrue("the real bundled guide must be rendered", guide.length() > 90_000);
+        assertTrue("the real bundled guide must render through its trailing section", //$NON-NLS-1$
+            guide.contains("## Additional columns\nAn additional column is")); //$NON-NLS-1$
         int budget = OutputSizeGuard.MAX_CONTENT_CHARS - WRAPPER_OVERHEAD;
         System.out.println("get_tool_guide('modify_metadata'): " + guide.length() + " of " + budget //$NON-NLS-1$ //$NON-NLS-2$
             + " characters"); //$NON-NLS-1$

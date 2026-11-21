@@ -55,7 +55,7 @@ import com._1c.g5.v8.dt.moxel.SpreadsheetDocument;
 import com._1c.g5.v8.dt.moxel.sheet.SheetFactory;
 import com._1c.g5.v8.dt.platform.version.Version;
 import com.ditrix.edt.mcp.server.Activator;
-import com.ditrix.edt.mcp.server.tools.impl.ModifyMetadataTool;
+import com.ditrix.edt.mcp.server.tools.impl.TemplateContentTool;
 import com.google.inject.Injector;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -769,18 +769,18 @@ public class TemplateContentSupportTest
             Field project = contextType.getField("project");
             project.setAccessible(true);
             project.set(context, services.project);
-            var prepare = ModifyMetadataTool.class.getDeclaredMethod("resolveTemplateWriteContext", contextType,
+            var prepare = TemplateContentTool.class.getDeclaredMethod("resolveTemplateWriteContext", contextType,
                 BasicTemplate.class, String.class, boolean.class);
             prepare.setAccessible(true);
             Object prepared = prepare.invoke(null, context, template, "CommonTemplate.Contract730", false);
-            var write = ModifyMetadataTool.class.getDeclaredMethod("modifyTextTemplateContent", contextType,
+            var write = TemplateContentTool.class.getDeclaredMethod("modifyTextTemplateContent", contextType,
                 String.class, prepared.getClass(), JsonObject.class);
             write.setAccessible(true);
             JsonObject spec = new JsonObject();
             spec.addProperty("mode", "replace");
             spec.addProperty("overwrite", true);
             spec.addProperty("text", text);
-            JsonObject result = JsonParser.parseString((String)write.invoke(new ModifyMetadataTool(), context,
+            JsonObject result = JsonParser.parseString((String)write.invoke(new TemplateContentTool(), context,
                 "CommonTemplate.Contract730", prepared, spec)).getAsJsonObject();
             assertTrue(result.toString(), result.get("success").getAsBoolean());
             String returnedHash = result.getAsJsonObject("template").get("contentHash").getAsString();
@@ -1105,7 +1105,7 @@ public class TemplateContentSupportTest
     {
         ITopObjectFqnGenerator names = mock(ITopObjectFqnGenerator.class);
         when(names.generateExternalPropertyFqn(any(), any())).thenReturn("CommonTemplate.Contract730.Content");
-        var resolve = ModifyMetadataTool.class.getDeclaredMethod("resolveSpreadsheetContent",
+        var resolve = TemplateContentTool.class.getDeclaredMethod("resolveSpreadsheetContent",
             BasicTemplate.class, IBmTransaction.class, IDtProject.class, ITopObjectFqnGenerator.class, String.class);
         resolve.setAccessible(true);
         try
@@ -1183,13 +1183,15 @@ public class TemplateContentSupportTest
             Field scopeField = contextType.getField("scope");
             scopeField.setAccessible(true);
             scopeField.set(context, scope);
-            var write = ModifyMetadataTool.class.getDeclaredMethod("modifyTemplateContent", contextType,
-                String.class, BasicTemplate.class, java.util.List.class, java.util.List.class,
-                boolean.class, JsonObject.class);
+            var prepare = TemplateContentTool.class.getDeclaredMethod("resolveTemplateWriteContext", contextType,
+                BasicTemplate.class, String.class, boolean.class);
+            prepare.setAccessible(true);
+            Object prepared = prepare.invoke(null, context, outer, "CommonTemplate.Contract730", false);
+            var write = TemplateContentTool.class.getDeclaredMethod("modifyTemplateContent", contextType,
+                prepared.getClass(), JsonObject.class);
             write.setAccessible(true);
-            return JsonParser.parseString((String)write.invoke(new ModifyMetadataTool(), context,
-                "CommonTemplate.Contract730", outer, java.util.Collections.emptyList(),
-                java.util.Collections.emptyList(), false, spec)).getAsJsonObject();
+            return JsonParser.parseString((String)write.invoke(new TemplateContentTool(), context,
+                prepared, spec)).getAsJsonObject();
         }
     }
 

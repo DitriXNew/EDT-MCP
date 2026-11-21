@@ -29,7 +29,7 @@ public class HostToolCapabilitiesTest
             for (String name : List.of("read_method_source", "get_module_structure", "get_symbol_info",
                 "go_to_definition", "find_references", "get_method_call_hierarchy", "validate_query",
                 "get_configuration_properties", "get_outgoing_structures", "list_subsystems", "get_subsystem_content",
-                "get_platform_documentation", "create_metadata", "modify_metadata", "sort_metadata", "resync_to_disk",
+                "get_platform_documentation", "create_metadata", "modify_metadata", "template_content", "sort_metadata", "resync_to_disk",
                 "clone_metadata_object", "rename_metadata_object", "delete_metadata", "dcs", "business_process_route_map",
                 "adopt_metadata_object", "apply_quick_fix", "git", "project_checks", "merge_rules", "delete_project", "delete_infobase", "update_database", "evaluate_expression", "ask_workmate")) {
                 AtomicInteger calls = new AtomicInteger();

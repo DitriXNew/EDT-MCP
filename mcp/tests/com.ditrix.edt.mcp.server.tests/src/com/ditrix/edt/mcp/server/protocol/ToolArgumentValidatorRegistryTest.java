@@ -79,7 +79,7 @@ public class ToolArgumentValidatorRegistryTest
         assertNull(call("run_yaxunit_tests", "debug", "true")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         assertNull(call("run_yaxunit_tests", "tags", "smoke,nodb")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         assertNull(call("enable_toolset", "toolsets", "core")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-        assertNull(call("modify_metadata", "template", "null")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertNull(call("template_content", "template", "null")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         assertNull(call("get_comparison_node", "nodeId", "2.")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         assertNull(call("step", "kind", " OVER ")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         assertNull(call("create_infobase", "mode", "")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$

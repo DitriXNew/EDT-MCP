@@ -130,8 +130,18 @@ public final class AppearanceValueBuilder
         /** The configuration StyleItem / PaletteColor {@link #value} is to be {@link #bind bound} to. */
         public final MdObject configurationItem;
 
+        /** Platform lookup outcome for a named-value refusal; null for other results. */
+        final PlatformCatalogue.Status lookupStatus;
+
         private Result(String error, boolean clear, EObject value, MdObject configurationItem)
         {
+            this(error, clear, value, configurationItem, null);
+        }
+
+        private Result(String error, boolean clear, EObject value, MdObject configurationItem,
+            PlatformCatalogue.Status lookupStatus)
+        {
+            this.lookupStatus = lookupStatus;
             this.error = error;
             this.clear = clear;
             this.value = value;
@@ -400,8 +410,9 @@ public final class AppearanceValueBuilder
             setTarget(ref, found.proxy);
             return Result.ok(ref, null);
         }
-        return Result.error("Unknown " + source + " " + kind.label + " '" + name + "'. " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-            + candidatesTail(kind, source, name, searched, catalogue, found.status, forms));
+        return new Result("Unknown " + source + " " + kind.label + " '" + name + "'. " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            + candidatesTail(kind, source, name, searched, catalogue, found.status, forms),
+            false, null, null, found.status);
     }
 
     /** The shared named-color lookup; attachment and accepted forms are caller-specific. */

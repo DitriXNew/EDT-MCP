@@ -30,7 +30,7 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
 /**
- * The payload parameters of modify_metadata, create_metadata, merge_rules and business_process_route_map
+ * The payload parameters of modify_metadata, template_content, create_metadata, merge_rules and business_process_route_map
  * declare their members, the validator refuses a wrong member before the tool runs, and the compacted
  * tools/list still carries their prose.
  */
@@ -101,13 +101,15 @@ public class PayloadMemberSchemaTest
     @Test
     public void templateDeclaresTextAndSpreadsheetMembersLeavingTheMisplacedKeysToTheWriter()
     {
-        JsonObject template = param("modify_metadata", "template"); //$NON-NLS-1$ //$NON-NLS-2$
+        JsonObject template = param("template_content", "template"); //$NON-NLS-1$ //$NON-NLS-2$
         assertMembers(template, Set.of("text", "mode", "oldText", "expectedHash", "expectedSource", "overwrite", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
-            "cells", "merges", "areas", "columnWidths", "rowHeights"), Set.of(), true); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+            "cells", "merges", "areas", "columnWidths", "rowHeights", "unmerges", "removeAreas", "renameAreas"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$ //$NON-NLS-7$ //$NON-NLS-8$
+            Set.of(), true);
         JsonObject cells = items(member(template, "cells")); //$NON-NLS-1$
         assertMembers(cells, Set.of("row", "col", "replace", "text", "parameter", "bold", "fontSize", "hAlign", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$ //$NON-NLS-7$ //$NON-NLS-8$
-            "vAlign", "wrap", "textOrientation", "autoIndent", "autoMarkIncomplete"), Set.of("row", "col"), false); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$ //$NON-NLS-7$
-        for (String lenient : List.of("bold", "autoMarkIncomplete")) //$NON-NLS-1$ //$NON-NLS-2$
+            "vAlign", "wrap", "textOrientation", "autoIndent", "autoMarkIncomplete", "borders", "borderColor", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$ //$NON-NLS-7$
+            "backColor", "textColor"), Set.of("row", "col"), false); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        for (String lenient : List.of("bold", "autoMarkIncomplete", "borders", "borderColor", "backColor", "textColor")) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
         {
             assertFalse(lenient + " reads yes/1 too, so it stays untyped", member(cells, lenient).has("type")); //$NON-NLS-1$ //$NON-NLS-2$
         }
@@ -121,6 +123,11 @@ public class PayloadMemberSchemaTest
         assertFalse(member(columns, "autoWidthCalculation").has("type")); //$NON-NLS-1$ //$NON-NLS-2$
         assertMembers(items(member(template, "rowHeights")), Set.of("row", "height"), Set.of("row", "height"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
             false);
+        assertMembers(items(member(template, "unmerges")), Set.of("fromRow", "fromCol", "toRow", "toCol"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+            Set.of("fromRow", "fromCol", "toRow", "toCol"), true); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        assertEquals("string", items(member(template, "removeAreas")).get("type").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertMembers(items(member(template, "renameAreas")), Set.of("name", "newName"), Set.of("name", "newName"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+            true);
     }
 
     @Test
@@ -149,7 +156,8 @@ public class PayloadMemberSchemaTest
     {
         Map<String, List<String>> payloads = Map.of(
             "modify_metadata", List.of("properties", "rights", "templates", "roleProperties", "content", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
-                "commands", "template"), //$NON-NLS-1$ //$NON-NLS-2$
+                "commands"), //$NON-NLS-1$
+            "template_content", List.of("template"), //$NON-NLS-1$ //$NON-NLS-2$
             "create_metadata", List.of("properties"), //$NON-NLS-1$ //$NON-NLS-2$
             "merge_rules", List.of("decisions"), //$NON-NLS-1$ //$NON-NLS-2$
             "business_process_route_map", List.of("points", "connections")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
@@ -213,19 +221,21 @@ public class PayloadMemberSchemaTest
     @Test
     public void wrongTemplateMembersAreRefused()
     {
-        assertRefused("modify_metadata", "{\"template\":{\"cell\":[]}}", "template.cell is not a known key"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-        assertRefused("modify_metadata", "{\"template\":{\"cells\":[{\"row\":-1,\"col\":0,\"text\":\"A\"}]}}", //$NON-NLS-1$ //$NON-NLS-2$
+        assertRefused("template_content", "{\"template\":{\"cell\":[]}}", "template.cell is not a known key"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertRefused("template_content", "{\"template\":{\"cells\":[{\"row\":-1,\"col\":0,\"text\":\"A\"}]}}", //$NON-NLS-1$ //$NON-NLS-2$
             "template.cells[0].row must be at least 0"); //$NON-NLS-1$
-        assertRefused("modify_metadata", "{\"template\":{\"cells\":[{\"row\":0,\"col\":0,\"hAlign\":\"Middle\"}]}}", //$NON-NLS-1$ //$NON-NLS-2$
+        assertRefused("template_content", "{\"template\":{\"cells\":[{\"row\":0,\"col\":0,\"hAlign\":\"Middle\"}]}}", //$NON-NLS-1$ //$NON-NLS-2$
             "template.cells[0].hAlign must be one of"); //$NON-NLS-1$
-        assertRefused("modify_metadata", "{\"template\":{\"cells\":[{\"row\":0,\"col\":0,\"fontSize\":10.5}]}}", //$NON-NLS-1$ //$NON-NLS-2$
+        assertRefused("template_content", "{\"template\":{\"cells\":[{\"row\":0,\"col\":0,\"fontSize\":10.5}]}}", //$NON-NLS-1$ //$NON-NLS-2$
             "template.cells[0].fontSize must be an integer"); //$NON-NLS-1$
-        assertRefused("modify_metadata", "{\"template\":{\"cells\":[{\"row\":0,\"col\":0,\"textOrientation\":3601}]}}", //$NON-NLS-1$ //$NON-NLS-2$
+        assertRefused("template_content", "{\"template\":{\"cells\":[{\"row\":0,\"col\":0,\"textOrientation\":3601}]}}", //$NON-NLS-1$ //$NON-NLS-2$
             "template.cells[0].textOrientation must be at most 3600"); //$NON-NLS-1$
-        assertRefused("modify_metadata", "{\"template\":{\"merges\":[{\"fromRow\":0,\"fromCol\":0,\"toRow\":1," //$NON-NLS-1$ //$NON-NLS-2$
+        assertRefused("template_content", "{\"template\":{\"merges\":[{\"fromRow\":0,\"fromCol\":0,\"toRow\":1," //$NON-NLS-1$ //$NON-NLS-2$
             + "\"toCol\":1,\"name\":\"M\"}]}}", "template.merges[0].name is not a known key"); //$NON-NLS-1$ //$NON-NLS-2$
-        assertRefused("modify_metadata", "{\"template\":{\"rowHeights\":[{\"row\":0}]}}", //$NON-NLS-1$ //$NON-NLS-2$
+        assertRefused("template_content", "{\"template\":{\"rowHeights\":[{\"row\":0}]}}", //$NON-NLS-1$ //$NON-NLS-2$
             "template.rowHeights[0].height is required"); //$NON-NLS-1$
+        assertRefused("template_content", "{\"template\":{\"renameAreas\":[{\"name\":\"A\",\"to\":\"B\"}]}}", //$NON-NLS-1$ //$NON-NLS-2$
+            "template.renameAreas[0].to is not a known key"); //$NON-NLS-1$
     }
 
     @Test
@@ -242,13 +252,18 @@ public class PayloadMemberSchemaTest
         assertAccepted("modify_metadata", "{\"commands\":[{\"command\":\"CommonCommand.Print\",\"visible\":false," //$NON-NLS-1$ //$NON-NLS-2$
             + "\"roles\":[{\"role\":\"Role.A\",\"visible\":true},{\"role\":\"Role.B\",\"visible\":\"default\"}]," //$NON-NLS-1$
             + "\"group\":\"NavigationPanelImportant\",\"after\":\"CommonCommand.Other\"}]}"); //$NON-NLS-1$
-        assertAccepted("modify_metadata", "{\"template\":{\"mode\":\"replace\",\"text\":\"T\",\"overwrite\":true}}"); //$NON-NLS-1$ //$NON-NLS-2$
-        assertAccepted("modify_metadata", "{\"template\":{\"cells\":[{\"row\":0,\"col\":0,\"text\":\"A\",\"bold\":\"yes\"," //$NON-NLS-1$ //$NON-NLS-2$
+        assertAccepted("template_content", "{\"template\":{\"mode\":\"replace\",\"text\":\"T\",\"overwrite\":true}}"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertAccepted("template_content", "{\"template\":{\"cells\":[{\"row\":0,\"col\":0,\"text\":\"A\",\"bold\":\"yes\"," //$NON-NLS-1$ //$NON-NLS-2$
             + "\"wrap\":true,\"hAlign\":\"center\",\"autoMarkIncomplete\":1},{\"row\":1,\"col\":0,\"wrap\":\"Cut\"}]," //$NON-NLS-1$
             + "\"merges\":[{\"fromRow\":0,\"fromCol\":0,\"toRow\":0,\"toCol\":1}]," //$NON-NLS-1$
             + "\"areas\":[{\"name\":\"Header\",\"fromRow\":0,\"fromCol\":0,\"toRow\":0,\"toCol\":1}]," //$NON-NLS-1$
             + "\"columnWidths\":[{\"col\":0,\"autoWidthCalculation\":\"1\",\"widthWeightFactor\":2}]," //$NON-NLS-1$
             + "\"rowHeights\":[{\"row\":0,\"height\":20}]}}"); //$NON-NLS-1$
+        assertAccepted("template_content", "{\"template\":{\"cells\":[{\"row\":0,\"col\":0,\"borders\":\"Solid\"," //$NON-NLS-1$ //$NON-NLS-2$
+            + "\"backColor\":{\"red\":1,\"green\":2,\"blue\":3},\"textColor\":\"Web.Red\"," //$NON-NLS-1$
+            + "\"borderColor\":\"auto\"},{\"row\":1,\"col\":0,\"borders\":{\"left\":{\"style\":\"Double\",\"width\":2}}}]," //$NON-NLS-1$
+            + "\"unmerges\":[{\"fromRow\":0,\"fromCol\":0,\"toRow\":0,\"toCol\":1}],\"removeAreas\":[\"Old\"]," //$NON-NLS-1$
+            + "\"renameAreas\":[{\"name\":\"Header\",\"newName\":\"Title\"}]}}"); //$NON-NLS-1$
         assertAccepted("create_metadata", "{\"properties\":[{\"name\":\"comment\",\"value\":\"Goods\"}]}"); //$NON-NLS-1$ //$NON-NLS-2$
         assertAccepted("merge_rules", "{\"decisions\":[{\"path\":[],\"rule\":\"GetFromOther\"}," //$NON-NLS-1$ //$NON-NLS-2$
             + "{\"path\":[\"commonModules\",\"A:A:A\"],\"rule\":\"DoNotMerge\"}]}"); //$NON-NLS-1$
@@ -262,7 +277,7 @@ public class PayloadMemberSchemaTest
     {
         // A misplaced column key on a cell, a deferred route-map key and a point type the reader
         // refuses with a follow-up note: each keeps the reader's tailored message.
-        assertAccepted("modify_metadata", "{\"template\":{\"cells\":[{\"row\":0,\"col\":0,\"text\":\"A\"," //$NON-NLS-1$ //$NON-NLS-2$
+        assertAccepted("template_content", "{\"template\":{\"cells\":[{\"row\":0,\"col\":0,\"text\":\"A\"," //$NON-NLS-1$ //$NON-NLS-2$
             + "\"widthWeightFactor\":2}],\"columnWidths\":[{\"col\":0,\"width\":5,\"textOrientation\":900}]}}"); //$NON-NLS-1$
         assertAccepted("business_process_route_map", "{\"points\":[{\"name\":\"S\",\"type\":\"Switch\"," //$NON-NLS-1$ //$NON-NLS-2$
             + "\"bounds\":{}}],\"connections\":[{\"from\":\"S\",\"to\":\"S\",\"fromPort\":9,\"line\":[]}]}"); //$NON-NLS-1$

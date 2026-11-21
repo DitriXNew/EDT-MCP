@@ -115,6 +115,7 @@ public final class HostToolCapabilities
         define("delete_metadata", Capability.HEADLESS, "EDT 2026.2.2 real headless probe confirmed mutation and object-file changes; root export is checked separately by stdio_headless");
         define("create_metadata", Capability.HEADLESS, "EDT 2026.2.2 real headless probe returned content on the caller thread; stdio_headless exercises this path");
         define("modify_metadata", Capability.HEADLESS, "EDT 2026.2.2 real headless probe returned content on the caller thread; stdio_headless exercises this path");
+        define("template_content", Capability.HEADLESS, "Template content writes reuse the metadata caller-thread BM and export boundaries");
         define("adopt_metadata_object", Capability.HEADLESS, "EDT 2026.2.2 real headless host adopted English/Cyrillic catalogs into an extension; exported object files read before another call");
         define("clone_metadata_object", Capability.HEADLESS, "EDT 2026.2.2 real headless probe confirmed mutation and object-file changes; root export is checked separately by stdio_headless");
         define("validate_xdto_package", Capability.HEADLESS, "Core/file service path; platform readiness and ordinary tool preconditions still apply");

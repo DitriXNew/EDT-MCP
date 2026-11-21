@@ -155,7 +155,7 @@ def test_vendor_text_template_edit_is_refused_without_changing_bytes():
         for spec in ({"mode": "append", "text": "E2E vendor"},
                      {"oldText": "#826", "text": "E2E vendor"},
                      {"mode": "replace", "text": "E2E vendor", "overwrite": True}):
-            err = _refused("modify_metadata", {"fqn": address, "template": spec},
+            err = _refused("template_content", {"method": "modify", "fqn": address, "template": spec},
                            [fqn, "Locked"], "edit text owned by a locked catalog")
             assert_not_contains(err, "Макет", "the refused address must not retain a Russian KIND")
             _assert_byte_identical(before, "refused text template edit")
