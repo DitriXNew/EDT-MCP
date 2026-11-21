@@ -8,9 +8,12 @@ package com.ditrix.edt.mcp.server.utils;
 
 import java.util.Locale;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.TreeSet;
+import java.util.function.Supplier;
 
 import org.eclipse.emf.common.util.EList;
 import org.eclipse.emf.common.util.EMap;
@@ -19,27 +22,37 @@ import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.EStructuralFeature;
 import org.eclipse.emf.ecore.util.EcoreUtil;
 
+import com._1c.g5.v8.dt.mcore.Color;
+import com._1c.g5.v8.dt.mcore.ColorRef;
 import com._1c.g5.v8.dt.mcore.Font;
 import com._1c.g5.v8.dt.mcore.FontRef;
 import com._1c.g5.v8.dt.mcore.McoreFactory;
+import com._1c.g5.v8.dt.mcore.McorePackage;
 import com._1c.g5.v8.dt.mcore.MutableFont;
+import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.moxel.Cell;
 import com._1c.g5.v8.dt.moxel.Column;
 import com._1c.g5.v8.dt.moxel.Columns;
 import com._1c.g5.v8.dt.moxel.Format;
 import com._1c.g5.v8.dt.moxel.Merge;
 import com._1c.g5.v8.dt.moxel.MoxelFactory;
+import com._1c.g5.v8.dt.moxel.NamedItem;
 import com._1c.g5.v8.dt.moxel.NamedItemCells;
 import com._1c.g5.v8.dt.moxel.Rect;
 import com._1c.g5.v8.dt.moxel.RectArea;
 import com._1c.g5.v8.dt.moxel.Row;
 import com._1c.g5.v8.dt.moxel.SpreadsheetDocument;
+import com._1c.g5.v8.dt.moxel.content.CellLine;
+import com._1c.g5.v8.dt.moxel.content.CellLineStyle;
 import com._1c.g5.v8.dt.moxel.content.ContentFactory;
 import com._1c.g5.v8.dt.moxel.content.FillType;
 import com._1c.g5.v8.dt.moxel.content.HorizontalAlignment;
 import com._1c.g5.v8.dt.moxel.content.LocalString;
+import com._1c.g5.v8.dt.moxel.content.SpreadsheetLine;
 import com._1c.g5.v8.dt.moxel.content.TextPlacement;
 import com._1c.g5.v8.dt.moxel.content.VerticalAlignment;
+import com._1c.g5.v8.dt.moxel.validation.NameValidationHelper;
+import com._1c.g5.v8.dt.platform.IEObjectProvider;
 import com._1c.g5.v8.dt.platform.version.Version;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
@@ -86,7 +99,19 @@ import com.google.gson.JsonPrimitive;
  * from the COLUMN's format ({@code SheetAccessor.isAutoWidthCalculation} /
  * {@code getWidthWeightFactor}), never from a cell's, and the weight factor is consulted only for a
  * column whose width IS auto-calculated.</li>
+ * <li>A border is a {@link Format} int ({@code leftBorder} / {@code topBorder} / {@code rightBorder} /
+ * {@code bottomBorder}) indexing the {@link SpreadsheetDocument#getLines()} pool of {@link CellLine}
+ * ({@code style} + {@code width} + {@code gap}); ONE {@code borderColor} serves all four sides. The back
+ * and text colours are {@link Format} ints indexing the {@link SpreadsheetDocument#getColors()} pool of
+ * mcore {@link Color} (a {@code ColorDef} RGB, or a {@link ColorRef} to a style / palette / web /
+ * windows colour). Both pools are interned like the font and format pools.</li>
  * </ul>
+ *
+ * <p>Removal mirrors EDT's template editor. Unmerge ({@code MergeAndUnmergeOperation}) drops every
+ * {@code merges} entry touching the range and hands each freed cell the merged cell's format with only the
+ * outer borders ({@code MoxelUtil.prepareRectForRemoveMerge}). Deleting a named area removes its
+ * {@link SpreadsheetDocument#getNamedItems()} key ({@code SheetAccessor.removeName}); renaming re-keys the
+ * same area, the name checked by EDT's own {@link NameValidationHelper#isCorrectName}.</p>
  *
  * <p>A cell holds literal text as a {@link LocalString} ({@link Cell#setText(LocalString)}, keyed by
  * language code) OR a report parameter name ({@link Cell#setParameter(String)}); a parameter cell is
@@ -110,6 +135,9 @@ public final class SpreadsheetTemplateWriter
     private static final String KEY_AREAS = "areas"; //$NON-NLS-1$
     private static final String KEY_COLUMN_WIDTHS = "columnWidths"; //$NON-NLS-1$
     private static final String KEY_ROW_HEIGHTS = "rowHeights"; //$NON-NLS-1$
+    private static final String KEY_UNMERGES = "unmerges"; //$NON-NLS-1$
+    private static final String KEY_REMOVE_AREAS = "removeAreas"; //$NON-NLS-1$
+    private static final String KEY_RENAME_AREAS = "renameAreas"; //$NON-NLS-1$
 
     // ---- per-entry keys -----------------------------------------------------------------------
 
@@ -135,10 +163,22 @@ public final class SpreadsheetTemplateWriter
     private static final String KEY_AUTO_MARK_INCOMPLETE = "autoMarkIncomplete"; //$NON-NLS-1$
     private static final String KEY_AUTO_WIDTH_CALCULATION = "autoWidthCalculation"; //$NON-NLS-1$
     private static final String KEY_WIDTH_WEIGHT_FACTOR = "widthWeightFactor"; //$NON-NLS-1$
+    private static final String KEY_BORDERS = "borders"; //$NON-NLS-1$
+    private static final String KEY_BORDER_COLOR = "borderColor"; //$NON-NLS-1$
+    private static final String KEY_BACK_COLOR = "backColor"; //$NON-NLS-1$
+    private static final String KEY_TEXT_COLOR = "textColor"; //$NON-NLS-1$
+    private static final String KEY_STYLE = "style"; //$NON-NLS-1$
+    private static final String KEY_NEW_NAME = "newName"; //$NON-NLS-1$
+
+    /** The four border sides, in the order a {@link BorderPlan} holds them. */
+    private static final String[] BORDER_SIDES = { "left", "top", "right", "bottom" }; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+
+    /** The three colour keys of a cell, in the order a {@link CellPlan} holds them. */
+    private static final String[] COLOR_KEYS = { KEY_BORDER_COLOR, KEY_BACK_COLOR, KEY_TEXT_COLOR };
 
     /** Cell-only format keys (a column / row band entry carries none of them). */
-    private static final String[] CELL_ONLY_KEYS =
-        { KEY_TEXT_ORIENTATION, KEY_AUTO_INDENT, KEY_AUTO_MARK_INCOMPLETE };
+    private static final String[] CELL_ONLY_KEYS = { KEY_TEXT_ORIENTATION, KEY_AUTO_INDENT, KEY_AUTO_MARK_INCOMPLETE,
+        KEY_BORDERS, KEY_BORDER_COLOR, KEY_BACK_COLOR, KEY_TEXT_COLOR };
 
     /** Column-only format keys (a cell / row entry carries neither). */
     private static final String[] COLUMN_ONLY_KEYS = { KEY_AUTO_WIDTH_CALCULATION, KEY_WIDTH_WEIGHT_FACTOR };
@@ -146,7 +186,25 @@ public final class SpreadsheetTemplateWriter
     /** Every key a cells entry may carry. */
     private static final String[] CELL_KEYS = { KEY_ROW, KEY_COL, KEY_REPLACE, KEY_TEXT, KEY_PARAMETER, KEY_BOLD,
         KEY_FONT_SIZE, KEY_H_ALIGN, KEY_V_ALIGN, KEY_WRAP, KEY_TEXT_ORIENTATION, KEY_AUTO_INDENT,
-        KEY_AUTO_MARK_INCOMPLETE };
+        KEY_AUTO_MARK_INCOMPLETE, KEY_BORDERS, KEY_BORDER_COLOR, KEY_BACK_COLOR, KEY_TEXT_COLOR };
+
+    /**
+     * Width bounds of a drawn border line - the spinner range of EDT's line dialog
+     * ({@code LineSelectionDialog(shell, line)} delegates with {@code minWidth=1, maxWidth=3}).
+     */
+    private static final int MIN_LINE_WIDTH = 1;
+    private static final int MAX_LINE_WIDTH = 3;
+
+    /** How many existing area names a refusal lists before it summarizes the rest. */
+    private static final int MAX_LISTED_NAMES = 25;
+
+    /**
+     * The most cells one call's unmerges may re-format. A merge stores only its rectangle, but unmerging
+     * it gives EVERY cell of that rectangle its own format (as EDT's editor does), so an accidental
+     * whole-sheet merge would otherwise turn into millions of model objects inside the write transaction.
+     * A print form's merged header or total spans a few dozen cells.
+     */
+    static final long MAX_UNMERGE_CELLS = 10_000L;
 
     /** Every key a columnWidths entry may carry. */
     private static final String[] COLUMN_KEYS = { KEY_COL, KEY_WIDTH, KEY_AUTO_WIDTH_CALCULATION,
@@ -206,25 +264,34 @@ public final class SpreadsheetTemplateWriter
         public final int columnWidths;
         /** Number of row heights applied. */
         public final int rowHeights;
+        /** Number of existing merges the {@code unmerges} ranges removed. */
+        public final int unmerges;
+        /** Number of named areas removed. */
+        public final int removedAreas;
+        /** Number of named areas renamed. */
+        public final int renamedAreas;
 
-        private Result(String error, int cells, int merges, int areas, int columnWidths, int rowHeights)
+        private Result(String error, Plan plan, int unmerges)
         {
             this.error = error;
-            this.cells = cells;
-            this.merges = merges;
-            this.areas = areas;
-            this.columnWidths = columnWidths;
-            this.rowHeights = rowHeights;
+            this.cells = plan == null ? 0 : plan.cells.size();
+            this.merges = plan == null ? 0 : plan.merges.size();
+            this.areas = plan == null ? 0 : plan.areas.size();
+            this.columnWidths = plan == null ? 0 : plan.columnWidths.size();
+            this.rowHeights = plan == null ? 0 : plan.rowHeights.size();
+            this.unmerges = unmerges;
+            this.removedAreas = plan == null ? 0 : plan.removeAreas.size();
+            this.renamedAreas = plan == null ? 0 : plan.renameAreas.size();
         }
 
         static Result failed(String error)
         {
-            return new Result(error, 0, 0, 0, 0, 0);
+            return new Result(error, null, 0);
         }
 
-        static Result ok(int cells, int merges, int areas, int columnWidths, int rowHeights)
+        static Result ok(Plan plan, int unmerges)
         {
-            return new Result(null, cells, merges, areas, columnWidths, rowHeights);
+            return new Result(null, plan, unmerges);
         }
 
         public boolean hasError()
@@ -267,22 +334,112 @@ public final class SpreadsheetTemplateWriter
      */
     public static Result apply(SpreadsheetDocument document, JsonObject spec, Version projectVersion)
     {
+        // The catalogue is looked up only when a colour is given: a payload without one never touches it.
+        return apply(document, spec, projectVersion,
+            raw -> AppearanceValueBuilder.buildColor(raw, null, AppearanceValueBuilder.colorCatalogue(projectVersion)));
+    }
+
+    /**
+     * Builds a cell colour ({@code borderColor} / {@code backColor} / {@code textColor}) from its
+     * {@code {color: ...}}-wrapped JSON, in the grammar of a form item's colour. The caller owning the
+     * write transaction supplies one that also resolves (and binds) the configuration's style / palette
+     * items; {@link SpreadsheetTemplateWriter#apply(SpreadsheetDocument, JsonObject, Version)} resolves
+     * platform colours only.
+     */
+    @FunctionalInterface
+    public interface ColorBuilder
+    {
+        /**
+         * @param wrapped the colour as {@code {color: <value>}}
+         * @return the built colour, a clear ({@code 'auto'}) or an actionable error
+         */
+        AppearanceValueBuilder.Result build(JsonElement wrapped);
+    }
+
+    /**
+     * The colour builder for a template of a project. EDT's spreadsheet reader resolves a stored
+     * {@code Style.<Name>} / {@code Palette.<Name>} to the PLATFORM colour first and only then to the
+     * configuration's item ({@code MoxelUtil.getRegistryColor}), the reverse of the form designer. The
+     * reference is built in that same order, so the colour a cell shows does not change when the template
+     * is read back.
+     *
+     * @param configuration supplies the configuration read in the caller's write transaction, or
+     *            {@code null} for one that offers platform colours only (an external-objects project)
+     * @param projectVersion the project's 1C runtime version (selects the platform colour catalogue)
+     * @return the builder
+     */
+    public static ColorBuilder projectColors(Supplier<Configuration> configuration, Version projectVersion)
+    {
+        return wrapped -> {
+            IEObjectProvider catalogue = AppearanceValueBuilder.colorCatalogue(projectVersion);
+            AppearanceValueBuilder.Result platform = AppearanceValueBuilder.buildColor(wrapped, null, catalogue);
+            Configuration own = platform.lookupStatus != PlatformCatalogue.Status.NOT_FOUND || configuration == null
+                ? null : configuration.get();
+            return own == null ? platform : AppearanceValueBuilder.buildColor(wrapped, own, catalogue);
+        };
+    }
+
+    /**
+     * Applies a {@code template} spec with the given colour builder (see {@link ColorBuilder}).
+     *
+     * @param document the template's SpreadsheetDocument content (must not be {@code null})
+     * @param spec the {@code template} payload (see the class javadoc for the shape)
+     * @param projectVersion the project's 1C runtime version, or {@code null} to skip the version check
+     * @param colors builds a cell colour; must not be {@code null}
+     * @return a {@link Result} - check {@link Result#hasError()} first
+     */
+    public static Result apply(SpreadsheetDocument document, JsonObject spec, Version projectVersion,
+        ColorBuilder colors)
+    {
         if (document == null)
         {
             return Result.failed(ToolResult.error(
                 "The template has no SpreadsheetDocument content to write to.").toJson()); //$NON-NLS-1$
         }
-        ParseResult parsed = parse(spec, projectVersion);
+        ParseResult parsed = parse(spec, projectVersion, colors);
         if (parsed.error != null)
         {
             return Result.failed(ToolResult.error(parsed.error).toJson());
         }
         Plan plan = parsed.plan;
+        // The area names are checked against the document before anything changes, so a refused
+        // removal / rename leaves the document untouched like every other refusal.
+        String areaError = areaNamesError(document, plan);
+        if (areaError == null)
+        {
+            areaError = unmergeSizeError(document, plan);
+        }
+        if (areaError != null)
+        {
+            return Result.failed(ToolResult.error(areaError).toJson());
+        }
 
         // Reserve a neutral format at index 0 on an empty pool: a cell's formatIndex defaults to 0, so a
         // styled format must never be interned at index 0 (it would silently style every un-formatted
         // cell). Only acts on an empty pool, so it never shifts existing formatIndex references.
         ensureBaseFormat(document);
+
+        // Removals run first, so one call can clear an old layout and author the new one.
+        // Which merges have a top-left cell is decided once, before anything changes - the same snapshot
+        // the size check counted, so a cell materialized by an earlier unmerge cannot enlarge the work.
+        java.util.Set<Merge> anchored = anchoredMerges(document, plan);
+        int unmerged = 0;
+        for (MergePlan unmerge : plan.unmerges)
+        {
+            unmerged += applyUnmerge(document, unmerge, anchored);
+        }
+        for (String name : plan.removeAreas)
+        {
+            document.getNamedItems().removeKey(name);
+        }
+        for (String[] rename : plan.renameAreas)
+        {
+            // Read the area BEFORE removing its key: the value removeKey hands back is not the
+            // contained area object (measured on moxel 19.0.0), so re-keying it would put a stand-in.
+            NamedItem item = document.getNamedItems().get(rename[0]);
+            document.getNamedItems().removeKey(rename[0]);
+            document.getNamedItems().put(rename[1], item);
+        }
 
         for (CellPlan cell : plan.cells)
         {
@@ -306,8 +463,7 @@ public final class SpreadsheetTemplateWriter
         }
         applyGridExtent(document, plan);
 
-        return Result.ok(plan.cells.size(), plan.merges.size(), plan.areas.size(),
-            plan.columnWidths.size(), plan.rowHeights.size());
+        return Result.ok(plan, unmerged);
     }
 
     // ---- model mutation (typed moxel API) -----------------------------------------------------
@@ -387,7 +543,73 @@ public final class SpreadsheetTemplateWriter
             fillType = FillType.TEXT;
         }
         applyCellFormatMembers(format, fontIndex, plan, fillType);
+        applyCellBordersAndColors(document, format, plan);
         cell.setFormatIndex(internFormat(document, format));
+    }
+
+    /**
+     * Sets the supplied border sides (interned {@link CellLine}s) and colours (interned {@link Color}s)
+     * on a private format copy; an omitted side / colour keeps its set-state, a cleared colour
+     * ({@code 'auto'}) is unset so it inherits again.
+     */
+    private static void applyCellBordersAndColors(SpreadsheetDocument document, Format format, CellPlan plan)
+    {
+        if (plan.borders != null)
+        {
+            BorderPlan[] sides = plan.borders.sides;
+            if (sides[0] != null)
+            {
+                format.setLeftBorder(internLine(document, sides[0]));
+            }
+            if (sides[1] != null)
+            {
+                format.setTopBorder(internLine(document, sides[1]));
+            }
+            if (sides[2] != null)
+            {
+                format.setRightBorder(internLine(document, sides[2]));
+            }
+            if (sides[3] != null)
+            {
+                format.setBottomBorder(internLine(document, sides[3]));
+            }
+        }
+        ColorPlan border = plan.colors[0];
+        if (border != null)
+        {
+            if (border.color == null)
+            {
+                format.unsetBorderColor();
+            }
+            else
+            {
+                format.setBorderColor(internColor(document, border.color));
+            }
+        }
+        ColorPlan back = plan.colors[1];
+        if (back != null)
+        {
+            if (back.color == null)
+            {
+                format.unsetBackColor();
+            }
+            else
+            {
+                format.setBackColor(internColor(document, back.color));
+            }
+        }
+        ColorPlan text = plan.colors[2];
+        if (text != null)
+        {
+            if (text.color == null)
+            {
+                format.unsetTextColor();
+            }
+            else
+            {
+                format.setTextColor(internColor(document, text.color));
+            }
+        }
     }
 
     /**
@@ -459,6 +681,283 @@ public final class SpreadsheetTemplateWriter
         NamedItemCells namedItem = MoxelFactory.eINSTANCE.createNamedItemCells();
         namedItem.setArea(rectArea);
         document.getNamedItems().put(plan.name, namedItem);
+    }
+
+    /**
+     * Unmerges a range the way EDT's template editor does ({@code MergeAndUnmergeOperation} with
+     * {@code doMerge=false} over a cell selection): every cell {@link Merge} touching the range is removed
+     * ({@code SheetAccessor.getMergesInRect} collects the merge of each cell, {@code removeCellsMerge}
+     * drops it), and the cells it covered are re-formatted by {@link #distributeMergedFormat}.
+     *
+     * @return how many merges were removed
+     */
+    private static int applyUnmerge(SpreadsheetDocument document, MergePlan plan, java.util.Set<Merge> anchored)
+    {
+        List<Merge> touching = touchingMerges(document, plan);
+        for (Merge merge : touching)
+        {
+            Rect position = merge.getPosition();
+            document.getMerges().remove(merge);
+            if (anchored.contains(merge))
+            {
+                distributeMergedFormat(document, position);
+            }
+        }
+        return touching.size();
+    }
+
+    /** The merges the unmerges touch that have a top-left cell now, before anything changes. */
+    private static java.util.Set<Merge> anchoredMerges(SpreadsheetDocument document, Plan plan)
+    {
+        java.util.Set<Merge> anchored = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+        for (MergePlan unmerge : plan.unmerges)
+        {
+            for (Merge merge : touchingMerges(document, unmerge))
+            {
+                if (topLeftCell(document, merge.getPosition()) != null)
+                {
+                    anchored.add(merge);
+                }
+            }
+        }
+        return anchored;
+    }
+
+    /** The cell merges of the document whose rectangle shares at least one cell with the range. */
+    private static List<Merge> touchingMerges(SpreadsheetDocument document, MergePlan plan)
+    {
+        List<Merge> touching = new ArrayList<>();
+        for (Merge merge : document.getMerges())
+        {
+            Rect position = merge.getPosition();
+            // long arithmetic: a stored far corner may sit at the top of the int range.
+            if (position != null && position.getX() <= plan.toCol
+                && (long)position.getX() + position.getWidth() >= plan.fromCol && position.getY() <= plan.toRow
+                && (long)position.getY() + position.getHeight() >= plan.fromRow)
+            {
+                touching.add(merge);
+            }
+        }
+        return touching;
+    }
+
+    /**
+     * Refuses unmerges that would re-format more than {@link #MAX_UNMERGE_CELLS} cells in total, before
+     * anything changes. Each merge counts once, however many ranges touch it, and a merge without a top-left
+     * cell counts nothing: removing it re-formats no cell ({@link #distributeMergedFormat}).
+     */
+    static String unmergeSizeError(SpreadsheetDocument document, Plan plan)
+    {
+        java.util.Set<Merge> counted = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+        java.util.Set<Merge> anchored = anchoredMerges(document, plan);
+        long cells = 0;
+        for (MergePlan unmerge : plan.unmerges)
+        {
+            for (Merge merge : touchingMerges(document, unmerge))
+            {
+                if (counted.add(merge) && anchored.contains(merge))
+                {
+                    Rect position = merge.getPosition();
+                    cells += ((long)position.getWidth() + 1) * ((long)position.getHeight() + 1);
+                }
+                if (cells > MAX_UNMERGE_CELLS)
+                {
+                    Rect position = merge.getPosition();
+                    return "The unmerges of this call would re-format " + cells + " cells (the merge from row " //$NON-NLS-1$ //$NON-NLS-2$
+                        + position.getY() + ", col " + position.getX() + " to row " //$NON-NLS-1$ //$NON-NLS-2$
+                        + ((long)position.getY() + position.getHeight()) + ", col " //$NON-NLS-1$
+                        + ((long)position.getX() + position.getWidth())
+                        + " among them); at most " + MAX_UNMERGE_CELLS + " are allowed, because every freed cell " //$NON-NLS-1$ //$NON-NLS-2$
+                        + "gets its own format. Unmerge it in EDT's template editor, or delete the template " //$NON-NLS-1$
+                        + "and create it again."; //$NON-NLS-1$
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Mirrors EDT's {@code MoxelUtil.prepareRectForRemoveMerge}: the merged range showed the format of its
+     * top-left cell, so once the merge is gone every cell of the range receives that format, keeping a
+     * border only on the side that lies on the range's outer edge (inner sides explicitly bind the empty line).
+     *
+     * <p>Two deliberate departures, both because a merge this tool writes may cover POPULATED cells (EDT's
+     * editor empties the covered cells when it merges, so it never meets content there): a covered cell
+     * that holds text or a parameter keeps its own fill type (the top-left cell's parameter fill would make
+     * the serializer drop that cell's text, and vice versa), and a range whose top-left cell does not exist
+     * keeps its cells as they are (EDT removes them, which would discard their content).</p>
+     */
+    private static void distributeMergedFormat(SpreadsheetDocument document, Rect range)
+    {
+        int top = range.getY();
+        int left = range.getX();
+        Cell topLeft = topLeftCell(document, range);
+        if (topLeft == null)
+        {
+            return; // anchored at the start of the call; an overlapping earlier unmerge cannot remove a cell
+        }
+        Format source = document.getFormats().get(topLeft.getFormatIndex());
+        int emptyLine = internLine(document, new BorderPlan(CellLineStyle.NONE, 0));
+        // Offsets, not coordinates: a far corner at the top of the int range must not wrap the loop.
+        for (int dy = 0; dy <= range.getHeight(); dy++)
+        {
+            for (int dx = 0; dx <= range.getWidth(); dx++)
+            {
+                Format format = EcoreUtil.copy(source);
+                if (dy != 0)
+                {
+                    format.setTopBorder(emptyLine);
+                }
+                if (dy != range.getHeight())
+                {
+                    format.setBottomBorder(emptyLine);
+                }
+                if (dx != 0)
+                {
+                    format.setLeftBorder(emptyLine);
+                }
+                if (dx != range.getWidth())
+                {
+                    format.setRightBorder(emptyLine);
+                }
+                Cell cell = getOrCreateCell(getOrCreateRow(document, top + dy), left + dx);
+                if (cell != topLeft && (cell.getText() != null || cell.getParameter() != null))
+                {
+                    keepOwnFill(document.getFormats().get(cell.getFormatIndex()), format);
+                }
+                cell.setFormatIndex(internFormat(document, format));
+            }
+        }
+    }
+
+    /** The stored top-left cell of a merged range, or {@code null} when that cell does not exist. */
+    private static Cell topLeftCell(SpreadsheetDocument document, Rect range)
+    {
+        Row topRow = document.getRows().get(Integer.valueOf(range.getY()));
+        return topRow == null ? null : topRow.getCells().get(Integer.valueOf(range.getX()));
+    }
+
+    /** Gives {@code target} the fill-type set-state of a populated cell's own {@code current} format. */
+    private static void keepOwnFill(Format current, Format target)
+    {
+        if (current.isSetFillType())
+        {
+            target.setFillType(current.getFillType());
+        }
+        else
+        {
+            target.unsetFillType();
+        }
+    }
+
+    /**
+     * Refuses an area removal / rename the document cannot take, simulating the requested order: a
+     * removed or renamed name must exist as a cell area, a new name must be a valid area name (EDT's own
+     * {@link NameValidationHelper#isCorrectName}) and must not clash with a name still in use - compared
+     * ignoring case, as BSL looks an area up. The refusal lists the existing area names.
+     */
+    static String areaNamesError(SpreadsheetDocument document, Plan plan)
+    {
+        if (plan.removeAreas.isEmpty() && plan.renameAreas.isEmpty())
+        {
+            return null;
+        }
+        Map<String, NamedItem> existing = document.getNamedItems().map();
+        TreeSet<String> names = new TreeSet<>(existing.keySet());
+        java.util.Set<String> renamedTo = new java.util.LinkedHashSet<>();
+        for (int i = 0; i < plan.removeAreas.size(); i++)
+        {
+            String name = plan.removeAreas.get(i);
+            String error = areaToChangeError(existing, names, name, KEY_REMOVE_AREAS + "[" + i + "]"); //$NON-NLS-1$ //$NON-NLS-2$
+            if (error != null)
+            {
+                return error;
+            }
+            names.remove(name);
+        }
+        for (int i = 0; i < plan.renameAreas.size(); i++)
+        {
+            String[] rename = plan.renameAreas.get(i);
+            String where = KEY_RENAME_AREAS + "[" + i + "]"; //$NON-NLS-1$ //$NON-NLS-2$
+            String error = areaToChangeError(existing, names, rename[0], where);
+            if (error != null)
+            {
+                return error;
+            }
+            names.remove(rename[0]);
+            String clash = ignoringCase(names, rename[1]);
+            if (clash != null)
+            {
+                return "A '" + where + "' entry renames '" + rename[0] + "' to '" + rename[1] //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    + "', but an area named '" + clash + "' already exists (area names ignore case). Remove " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "it first with removeAreas, or choose another name."; //$NON-NLS-1$
+            }
+            names.add(rename[1]);
+            renamedTo.remove(rename[0]);
+            renamedTo.add(rename[1]);
+        }
+        // Additions run after every rename, so only the names the renamed areas END UP with can clash.
+        for (String target : renamedTo)
+        {
+            for (AreaPlan added : plan.areas)
+            {
+                if (added.name.equalsIgnoreCase(target))
+                {
+                    return "The renameAreas entries leave an area named '" + target + "', and the same call adds " //$NON-NLS-1$ //$NON-NLS-2$
+                        + "the area '" + added.name + "' (area names ignore case), which would replace the renamed " //$NON-NLS-1$ //$NON-NLS-2$
+                        + "one. Choose another name for one of them."; //$NON-NLS-1$
+                }
+            }
+        }
+        return null;
+    }
+
+    /** The refusal for a removed / renamed name that is not (any longer) a cell area of the document. */
+    private static String areaToChangeError(Map<String, NamedItem> existing, TreeSet<String> names, String name,
+        String where)
+    {
+        if (names.contains(name))
+        {
+            NamedItem item = existing.get(name);
+            if (item != null && !(item instanceof NamedItemCells))
+            {
+                return "A '" + where + "' entry names '" + name + "', which is a " + item.eClass().getName() //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    + ", not a cell area; only cell areas can be removed or renamed here - edit it in " //$NON-NLS-1$
+                    + "EDT's template editor."; //$NON-NLS-1$
+            }
+            return null;
+        }
+        String similar = ignoringCase(names, name);
+        String hint = similar == null ? "" //$NON-NLS-1$
+            : " Did you mean '" + similar + "'? Area names are matched exactly here."; //$NON-NLS-1$ //$NON-NLS-2$
+        return "A '" + where + "' entry names the area '" + name + "', which the template does not have" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + (existing.containsKey(name) ? " any longer (an earlier entry removed or renamed it)" : "") //$NON-NLS-1$ //$NON-NLS-2$
+            + "." + hint + " Existing areas: " + listNames(names) + "."; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    /** The name in {@code names} equal to {@code name} ignoring case, or {@code null}. */
+    private static String ignoringCase(TreeSet<String> names, String name)
+    {
+        for (String candidate : names)
+        {
+            if (candidate.equalsIgnoreCase(name))
+            {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    private static String listNames(TreeSet<String> names)
+    {
+        if (names.isEmpty())
+        {
+            return "none"; //$NON-NLS-1$
+        }
+        List<String> listed = new ArrayList<>(names);
+        String shown = String.join(", ", listed.subList(0, Math.min(MAX_LISTED_NAMES, listed.size()))); //$NON-NLS-1$
+        return listed.size() > MAX_LISTED_NAMES
+            ? shown + ", ... (" + (listed.size() - MAX_LISTED_NAMES) + " more)" : shown; //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     /**
@@ -658,6 +1157,73 @@ public final class SpreadsheetTemplateWriter
     }
 
     /**
+     * Interns a border line into the document's lines pool. An equal line already pooled is reused -
+     * {@link EcoreUtil#equals} is the comparison EDT's own {@code SheetAccessor.getCellLineIndex} makes.
+     */
+    private static int internLine(SpreadsheetDocument document, BorderPlan plan)
+    {
+        CellLine line = ContentFactory.eINSTANCE.createCellLine();
+        line.setStyle(plan.style);
+        line.setWidth(plan.width);
+        line.setGap(false);
+        EList<SpreadsheetLine> lines = document.getLines();
+        for (int i = 0; i < lines.size(); i++)
+        {
+            if (lines.get(i) instanceof CellLine && EcoreUtil.equals(lines.get(i), line))
+            {
+                return i;
+            }
+        }
+        lines.add(line);
+        return lines.size() - 1;
+    }
+
+    /** Interns a colour into the document's colours pool (see {@link #sameColor}). */
+    private static int internColor(SpreadsheetDocument document, Color color)
+    {
+        EList<Color> colors = document.getColors();
+        for (int i = 0; i < colors.size(); i++)
+        {
+            if (sameColor(colors.get(i), color))
+            {
+                return i;
+            }
+        }
+        colors.add(color);
+        return colors.size() - 1;
+    }
+
+    /**
+     * Whether two pooled colours are the same colour. A {@link ColorRef} is the same only when it names
+     * the same target (the same object, or a proxy of the same URI): a structural compare would follow the
+     * reference into the target's RGB and wrongly reuse another style item that happens to hold the same
+     * value. Any other colour (an RGB {@code ColorDef}) compares structurally.
+     */
+    private static boolean sameColor(Color a, Color b)
+    {
+        if (a.eClass() != b.eClass())
+        {
+            return false;
+        }
+        if (a instanceof ColorRef)
+        {
+            Object targetA = a.eGet(McorePackage.Literals.COLOR_REF__COLOR, false);
+            Object targetB = b.eGet(McorePackage.Literals.COLOR_REF__COLOR, false);
+            if (targetA == targetB)
+            {
+                return targetA != null;
+            }
+            if (targetA instanceof EObject && targetB instanceof EObject
+                && (((EObject)targetA).eIsProxy() || ((EObject)targetB).eIsProxy()))
+            {
+                return Objects.equals(EcoreUtil.getURI((EObject)targetA), EcoreUtil.getURI((EObject)targetB));
+            }
+            return false;
+        }
+        return EcoreUtil.equals(a, b);
+    }
+
+    /**
      * Structural, {@code eIsSet}-aware equality of two flat EMF objects (a font or a format) used for
      * pool dedup: same {@link EObject#eClass() eClass}, and for every persisted feature the same
      * set-state and, when set, the same value. {@code eIsSet} (not a value compare) is deliberate - a
@@ -774,6 +1340,20 @@ public final class SpreadsheetTemplateWriter
      */
     static ParseResult parse(JsonObject spec, Version projectVersion)
     {
+        return parse(spec, projectVersion, raw -> AppearanceValueBuilder.buildColor(raw, null, null));
+    }
+
+    /**
+     * Parses + validates a {@code template} spec, building each cell colour with {@code colors}. Touches
+     * no model: a colour is built detached (a named one is only looked up).
+     *
+     * @param spec the {@code template} payload
+     * @param projectVersion the project's 1C runtime version, or {@code null} to skip the version check
+     * @param colors builds a cell colour
+     * @return a {@link ParseResult} - its {@link ParseResult#error} is non-null on invalid input
+     */
+    static ParseResult parse(JsonObject spec, Version projectVersion, ColorBuilder colors)
+    {
         if (spec == null)
         {
             return ParseResult.failed("A 'template' payload is required, e.g. {cells:[{row:0,col:0," //$NON-NLS-1$
@@ -781,7 +1361,11 @@ public final class SpreadsheetTemplateWriter
         }
         Plan plan = new Plan();
 
-        String error = parseCells(spec, plan);
+        String error = parseRemovals(spec, plan);
+        if (error == null)
+        {
+            error = parseCells(spec, plan, colors);
+        }
         if (error == null)
         {
             error = parseMerges(spec, plan);
@@ -805,13 +1389,102 @@ public final class SpreadsheetTemplateWriter
         if (plan.isEmpty())
         {
             return ParseResult.failed("The 'template' payload is empty: provide at least one of 'cells', " //$NON-NLS-1$
-                + "'merges', 'areas', 'columnWidths' or 'rowHeights', e.g. " //$NON-NLS-1$
-                + "{cells:[{row:0,col:0,text:'Total'}]}."); //$NON-NLS-1$
+                + "'merges', 'areas', 'columnWidths', 'rowHeights', 'unmerges', 'removeAreas' or " //$NON-NLS-1$
+                + "'renameAreas', e.g. {cells:[{row:0,col:0,text:'Total'}]}."); //$NON-NLS-1$
         }
         return ParseResult.ok(plan);
     }
 
-    private static String parseCells(JsonObject spec, Plan plan)
+    /**
+     * Parses the removals: {@code unmerges} ranges (a single cell is a valid range), {@code removeAreas}
+     * names and {@code renameAreas} {@code {name, newName}} pairs. Whether a name exists is checked later
+     * against the document ({@link #areaNamesError}); here only the shape and the new name's validity.
+     */
+    private static String parseRemovals(JsonObject spec, Plan plan)
+    {
+        List<JsonObject> unmerges = objectArray(spec, KEY_UNMERGES);
+        if (unmerges == null)
+        {
+            return notAnObjectArray(KEY_UNMERGES);
+        }
+        for (int i = 0; i < unmerges.size(); i++)
+        {
+            String where = KEY_UNMERGES + "[" + i + "]"; //$NON-NLS-1$ //$NON-NLS-2$
+            String unknown = unknownKeyError(unmerges.get(i), where, KEY_FROM_ROW, KEY_FROM_COL, KEY_TO_ROW, KEY_TO_COL);
+            if (unknown != null)
+            {
+                return unknown;
+            }
+            RegionResult region = parseRegion(unmerges.get(i), where);
+            if (region.error != null)
+            {
+                return region.error;
+            }
+            plan.unmerges.add(new MergePlan(region.fromRow, region.fromCol, region.toRow, region.toCol));
+        }
+        String error = parseRemoveAreas(spec, plan);
+        return error != null ? error : parseRenameAreas(spec, plan);
+    }
+
+    private static String parseRemoveAreas(JsonObject spec, Plan plan)
+    {
+        if (!has(spec, KEY_REMOVE_AREAS))
+        {
+            return null;
+        }
+        JsonElement element = spec.get(KEY_REMOVE_AREAS);
+        String shape = "'" + KEY_REMOVE_AREAS + "' must be an array of area names, e.g. " //$NON-NLS-1$ //$NON-NLS-2$
+            + "removeAreas:['Header']."; //$NON-NLS-1$
+        if (!element.isJsonArray())
+        {
+            return shape;
+        }
+        for (JsonElement name : element.getAsJsonArray())
+        {
+            if (name == null || !name.isJsonPrimitive() || !name.getAsJsonPrimitive().isString()
+                || name.getAsString().isEmpty())
+            {
+                return shape + " Got " + name + "."; //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            plan.removeAreas.add(name.getAsString());
+        }
+        return null;
+    }
+
+    private static String parseRenameAreas(JsonObject spec, Plan plan)
+    {
+        List<JsonObject> entries = objectArray(spec, KEY_RENAME_AREAS);
+        if (entries == null)
+        {
+            return notAnObjectArray(KEY_RENAME_AREAS);
+        }
+        for (int i = 0; i < entries.size(); i++)
+        {
+            JsonObject entry = entries.get(i);
+            String where = KEY_RENAME_AREAS + "[" + i + "]"; //$NON-NLS-1$ //$NON-NLS-2$
+            String unknown = unknownKeyError(entry, where, KEY_NAME, KEY_NEW_NAME);
+            if (unknown != null)
+            {
+                return unknown;
+            }
+            String name = nonEmptyString(entry, KEY_NAME);
+            String newName = nonEmptyString(entry, KEY_NEW_NAME);
+            if (name == null || newName == null)
+            {
+                return "A '" + where + "' entry needs a non-empty 'name' (the existing area) and 'newName'."; //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            if (!NameValidationHelper.isCorrectName(newName))
+            {
+                return "A '" + where + "' entry's newName '" + newName + "' is not a valid area name: EDT's " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    + "template editor allows only Latin letters, Russian letters other than yo, digits and " //$NON-NLS-1$
+                    + "'_'."; //$NON-NLS-1$
+            }
+            plan.renameAreas.add(new String[] { name, newName });
+        }
+        return null;
+    }
+
+    private static String parseCells(JsonObject spec, Plan plan, ColorBuilder colors)
     {
         List<JsonObject> entries = objectArray(spec, KEY_CELLS);
         if (entries == null)
@@ -820,7 +1493,7 @@ public final class SpreadsheetTemplateWriter
         }
         for (int i = 0; i < entries.size(); i++)
         {
-            String error = parseCell(entries.get(i), i, plan);
+            String error = parseCell(entries.get(i), i, plan, colors);
             if (error != null)
             {
                 return error;
@@ -829,7 +1502,7 @@ public final class SpreadsheetTemplateWriter
         return null;
     }
 
-    private static String parseCell(JsonObject entry, int index, Plan plan)
+    private static String parseCell(JsonObject entry, int index, Plan plan, ColorBuilder colors)
     {
         String where = KEY_CELLS + "[" + index + "]"; //$NON-NLS-1$ //$NON-NLS-2$
         String misplaced = misplacedColumnKeyError(entry, where);
@@ -881,17 +1554,206 @@ public final class SpreadsheetTemplateWriter
         {
             return style.error;
         }
+        BordersResult borders = parseBorders(entry, where);
+        if (borders.error != null)
+        {
+            return borders.error;
+        }
+        ColorPlan[] cellColors = new ColorPlan[COLOR_KEYS.length];
+        for (int i = 0; i < COLOR_KEYS.length; i++)
+        {
+            if (has(entry, COLOR_KEYS[i]))
+            {
+                ColorResult color = parseColor(entry, where, COLOR_KEYS[i], colors);
+                if (color.error != null)
+                {
+                    return color.error;
+                }
+                cellColors[i] = color.value;
+            }
+        }
+        boolean decorated = borders.value != null || cellColors[0] != null || cellColors[1] != null
+            || cellColors[2] != null;
         if (!has(entry, KEY_TEXT) && !has(entry, KEY_PARAMETER) && !has(entry, KEY_BOLD)
-            && !has(entry, KEY_WRAP) && !style.hasAnyStyle()
+            && !has(entry, KEY_WRAP) && !style.hasAnyStyle() && !decorated
             && !Boolean.TRUE.equals(boolMember(entry, KEY_REPLACE)))
         {
             return ERR_CELL + where + ") needs at least one of 'text', 'parameter', 'bold', " //$NON-NLS-1$
-                + "'fontSize', 'hAlign', 'vAlign', 'wrap', 'textOrientation', 'autoIndent' or " //$NON-NLS-1$
-                + "'autoMarkIncomplete'."; //$NON-NLS-1$
+                + "'fontSize', 'hAlign', 'vAlign', 'wrap', 'textOrientation', 'autoIndent', " //$NON-NLS-1$
+                + "'autoMarkIncomplete', 'borders', 'borderColor', 'backColor' or 'textColor'."; //$NON-NLS-1$
         }
 
-        plan.cells.add(new CellPlan(row.intValue(), col.intValue(), text, parameter, style, entry));
+        CellPlan cell = new CellPlan(row.intValue(), col.intValue(), text, parameter, style, entry);
+        cell.borders = borders.value;
+        System.arraycopy(cellColors, 0, cell.colors, 0, cellColors.length);
+        plan.cells.add(cell);
         return null;
+    }
+
+    /**
+     * Parses a cell's {@code borders}: ONE line for all four sides, or {@code {left?, top?, right?,
+     * bottom?}} with a line per side. A line is a {@link CellLineStyle} name ({@code 'Solid'}) or
+     * {@code {style, width?}}; {@code width} is 1..3 (EDT's line dialog range, default 1) and {@code None}
+     * - EDT's empty line - takes no width.
+     */
+    private static BordersResult parseBorders(JsonObject entry, String where)
+    {
+        if (!has(entry, KEY_BORDERS))
+        {
+            return BordersResult.ok(null);
+        }
+        JsonElement element = entry.get(KEY_BORDERS);
+        String prefix = "A '" + where + "' entry's 'borders'"; //$NON-NLS-1$ //$NON-NLS-2$
+        BordersPlan plan = new BordersPlan();
+        if (element.isJsonObject() && !has(element.getAsJsonObject(), KEY_STYLE))
+        {
+            JsonObject sides = element.getAsJsonObject();
+            String unknown = unknownKeyError(sides, where + "." + KEY_BORDERS, BORDER_SIDES); //$NON-NLS-1$
+            if (unknown != null)
+            {
+                return BordersResult.failed(unknown + " A line for all four sides is a style name or " //$NON-NLS-1$
+                    + "{style, width?}."); //$NON-NLS-1$
+            }
+            boolean any = false;
+            for (int i = 0; i < BORDER_SIDES.length; i++)
+            {
+                if (has(sides, BORDER_SIDES[i]))
+                {
+                    LineResult line = parseLine(sides.get(BORDER_SIDES[i]), prefix + " side '" //$NON-NLS-1$
+                        + BORDER_SIDES[i] + "'"); //$NON-NLS-1$
+                    if (line.error != null)
+                    {
+                        return BordersResult.failed(line.error);
+                    }
+                    plan.sides[i] = line.value;
+                    any = true;
+                }
+            }
+            if (!any)
+            {
+                return BordersResult.failed(prefix + " names no side: give one line for all four sides " //$NON-NLS-1$
+                    + "('Solid' or {style:'Solid', width:2}) or {left?, top?, right?, bottom?}."); //$NON-NLS-1$
+            }
+            return BordersResult.ok(plan);
+        }
+        LineResult line = parseLine(element, prefix);
+        if (line.error != null)
+        {
+            return BordersResult.failed(line.error);
+        }
+        Arrays.fill(plan.sides, line.value);
+        return BordersResult.ok(plan);
+    }
+
+    /** Parses one border line: a style name, or {@code {style, width?}}. */
+    private static LineResult parseLine(JsonElement element, String what)
+    {
+        String token;
+        Integer width = null;
+        if (element != null && element.isJsonPrimitive() && element.getAsJsonPrimitive().isString())
+        {
+            token = element.getAsString();
+        }
+        else if (element != null && element.isJsonObject())
+        {
+            JsonObject line = element.getAsJsonObject();
+            String unknown = unknownKeyError(line, what, KEY_STYLE, KEY_WIDTH);
+            if (unknown != null)
+            {
+                return LineResult.failed(unknown);
+            }
+            token = stringMember(line, KEY_STYLE);
+            if (has(line, KEY_WIDTH))
+            {
+                JsonElement raw = line.get(KEY_WIDTH);
+                width = raw.isJsonPrimitive() && raw.getAsJsonPrimitive().isNumber()
+                    ? JsonUtils.parseIntegralInt(raw.getAsString()) : null;
+                if (width == null)
+                {
+                    return LineResult.failed(what + " has width " + line.get(KEY_WIDTH) //$NON-NLS-1$
+                        + "; a border line width is an integer " + MIN_LINE_WIDTH + ".." + MAX_LINE_WIDTH + "."); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                }
+            }
+        }
+        else
+        {
+            return LineResult.failed(what + " must be a line style name or {style, width?}, got " + element //$NON-NLS-1$
+                + ". Styles: " + lineStyles() + "."); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        if (token == null)
+        {
+            return LineResult.failed(what + " needs a 'style'. Styles: " + lineStyles() + "."); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        CellLineStyle style = resolveEnum(CellLineStyle.values(), token);
+        if (style == null)
+        {
+            return LineResult.failed(what + " has the unknown line style '" + token + "'. Styles: " //$NON-NLS-1$ //$NON-NLS-2$
+                + lineStyles() + "."); //$NON-NLS-1$
+        }
+        if (style == CellLineStyle.NONE)
+        {
+            if (width != null)
+            {
+                return LineResult.failed(what + " is 'None', which draws no line and takes no width; drop " //$NON-NLS-1$
+                    + "'width'."); //$NON-NLS-1$
+            }
+            // EDT's empty line (SheetAccessor.createEmptyCellLine): style None, width 0.
+            return LineResult.ok(new BorderPlan(style, 0));
+        }
+        int resolvedWidth = width == null ? MIN_LINE_WIDTH : width.intValue();
+        if (resolvedWidth < MIN_LINE_WIDTH || resolvedWidth > MAX_LINE_WIDTH)
+        {
+            return LineResult.failed(what + " has width " + resolvedWidth + "; a border line is " //$NON-NLS-1$ //$NON-NLS-2$
+                + MIN_LINE_WIDTH + ".." + MAX_LINE_WIDTH + " wide, as in EDT's line dialog."); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return LineResult.ok(new BorderPlan(style, resolvedWidth));
+    }
+
+    /** The {@link CellLineStyle} tokens in the platform's own spelling, for a refusal. */
+    private static String lineStyles()
+    {
+        StringBuilder sb = new StringBuilder();
+        for (CellLineStyle style : CellLineStyle.values())
+        {
+            if (sb.length() > 0)
+            {
+                sb.append(", "); //$NON-NLS-1$
+            }
+            sb.append(style.getLiteral());
+        }
+        return sb.toString();
+    }
+
+    /**
+     * Parses a cell colour with the injected builder; {@code 'auto'} becomes a clear (the feature is
+     * unset and inherits again).
+     */
+    private static ColorResult parseColor(JsonObject entry, String where, String key, ColorBuilder colors)
+    {
+        JsonObject wrapped = new JsonObject();
+        wrapped.add(AppearanceValueBuilder.COLOR, entry.get(key));
+        AppearanceValueBuilder.Result built = colors.build(wrapped);
+        if (built.error != null)
+        {
+            return ColorResult.failed("A '" + where + "' entry's '" + key + "' is not a colour: " + built.error //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                + " Here the value is the inner part, e.g. " + key + ":{red:255,green:0,blue:0} or " + key //$NON-NLS-1$ //$NON-NLS-2$
+                + ":'Web.Red'."); //$NON-NLS-1$
+        }
+        if (built.clear)
+        {
+            return ColorResult.ok(new ColorPlan(null));
+        }
+        if (!(built.value instanceof Color))
+        {
+            return ColorResult.failed("A '" + where + "' entry's '" + key + "' did not build a colour."); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        }
+        if (built.configurationItem != null)
+        {
+            // A configuration style / palette colour: the builder found the item in the caller's write
+            // transaction, so the reference is bound to it here.
+            AppearanceValueBuilder.bind(built.value, built.configurationItem);
+        }
+        return ColorResult.ok(new ColorPlan((Color)built.value));
     }
 
     /**
@@ -1543,11 +2405,47 @@ public final class SpreadsheetTemplateWriter
         final List<AreaPlan> areas = new ArrayList<>();
         final List<ColumnWidthPlan> columnWidths = new ArrayList<>();
         final List<RowHeightPlan> rowHeights = new ArrayList<>();
+        /** Ranges whose touching merges are removed (inclusive corners). */
+        final List<MergePlan> unmerges = new ArrayList<>();
+        /** Area names to remove. */
+        final List<String> removeAreas = new ArrayList<>();
+        /** Area renames as {@code {name, newName}}. */
+        final List<String[]> renameAreas = new ArrayList<>();
 
         boolean isEmpty()
         {
             return cells.isEmpty() && merges.isEmpty() && areas.isEmpty() && columnWidths.isEmpty()
-                && rowHeights.isEmpty();
+                && rowHeights.isEmpty() && unmerges.isEmpty() && removeAreas.isEmpty() && renameAreas.isEmpty();
+        }
+    }
+
+    /** One validated border line: a {@link CellLineStyle} and its width (0 only for {@code None}). */
+    static final class BorderPlan
+    {
+        final CellLineStyle style;
+        final int width;
+
+        BorderPlan(CellLineStyle style, int width)
+        {
+            this.style = style;
+            this.width = width;
+        }
+    }
+
+    /** A cell's validated border lines, left / top / right / bottom; a {@code null} side is untouched. */
+    static final class BordersPlan
+    {
+        final BorderPlan[] sides = new BorderPlan[BORDER_SIDES.length];
+    }
+
+    /** A validated cell colour: the detached {@link Color} to pool, or {@code null} to unset ('auto'). */
+    static final class ColorPlan
+    {
+        final Color color;
+
+        ColorPlan(Color color)
+        {
+            this.color = color;
         }
     }
 
@@ -1574,6 +2472,10 @@ public final class SpreadsheetTemplateWriter
         final Integer textOrientation;
         final Integer autoIndent;
         final Boolean autoMarkIncomplete;
+        /** The border lines to set, or {@code null} when {@code borders} was omitted. */
+        BordersPlan borders;
+        /** {@code borderColor}, {@code backColor}, {@code textColor} - {@code null} when omitted. */
+        final ColorPlan[] colors = new ColorPlan[COLOR_KEYS.length];
 
         CellPlan(int row, int col, String text, String parameter, CellStyleResult style, JsonObject entry)
         {
@@ -1765,6 +2667,75 @@ public final class SpreadsheetTemplateWriter
         {
             return bold || fontSize != null || hAlign != null || vAlign != null || wrap != null
                 || textOrientation != null || autoIndent != null || autoMarkIncomplete != null;
+        }
+    }
+
+    /** A cell's parsed {@code borders} ({@code null} = absent) or a ready error. */
+    private static final class BordersResult
+    {
+        final BordersPlan value;
+        final String error;
+
+        private BordersResult(BordersPlan value, String error)
+        {
+            this.value = value;
+            this.error = error;
+        }
+
+        static BordersResult ok(BordersPlan value)
+        {
+            return new BordersResult(value, null);
+        }
+
+        static BordersResult failed(String error)
+        {
+            return new BordersResult(null, error);
+        }
+    }
+
+    /** One parsed border line or a ready error. */
+    private static final class LineResult
+    {
+        final BorderPlan value;
+        final String error;
+
+        private LineResult(BorderPlan value, String error)
+        {
+            this.value = value;
+            this.error = error;
+        }
+
+        static LineResult ok(BorderPlan value)
+        {
+            return new LineResult(value, null);
+        }
+
+        static LineResult failed(String error)
+        {
+            return new LineResult(null, error);
+        }
+    }
+
+    /** One parsed cell colour or a ready error. */
+    private static final class ColorResult
+    {
+        final ColorPlan value;
+        final String error;
+
+        private ColorResult(ColorPlan value, String error)
+        {
+            this.value = value;
+            this.error = error;
+        }
+
+        static ColorResult ok(ColorPlan value)
+        {
+            return new ColorResult(value, null);
+        }
+
+        static ColorResult failed(String error)
+        {
+            return new ColorResult(null, error);
         }
     }
 

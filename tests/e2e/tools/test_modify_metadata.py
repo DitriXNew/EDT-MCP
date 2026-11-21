@@ -161,7 +161,7 @@ def test_from_base_refreshes_adopted_tabular_attribute_type():
             assert_no_diff_rel(TESTS_PROJECT_REL)
 
 
-@e2e_test(tool="modify_metadata", kind="write-metadata")
+@e2e_test(tool="template_content", kind="write-metadata")
 def test_template_cells_merge_preserves_parameter_and_supports_replace_and_clear():
     fqn = "Catalog.Catalog.Template.E2ECellMerge624"
     mxlx = "src/Catalogs/Catalog/Templates/E2ECellMerge624/Template.mxlx"
@@ -171,7 +171,7 @@ def test_template_cells_merge_preserves_parameter_and_supports_replace_and_clear
     wait_for_project_ready()
 
     def write(cells):
-        result = call("modify_metadata", {"projectName": PROJECT, "fqn": fqn,
+        result = call("template_content", {"method": "modify", "projectName": PROJECT, "fqn": fqn,
                                           "template": {"cells": cells}})
         assert_ok(result, "write template cells")
         assert result.structured["persisted"] is True, result.structured
@@ -211,9 +211,10 @@ def test_template_cells_merge_preserves_parameter_and_supports_replace_and_clear
     assert "<parameter>Clear624</parameter>" not in read_disk(mxlx), "empty parameter must clear binding"
 
 
-@e2e_test(tool="modify_metadata", kind="write-metadata")
+@e2e_test(tool="template_content", kind="write-metadata")
 def test_template_cells_invalid_replace_flag_is_atomic():
-    result = call("modify_metadata", {
+    result = call("template_content", {
+        "method": "modify",
         "projectName": PROJECT, "fqn": "CommonTemplate.PrintForm",
         "template": {"cells": [{"row": 1, "col": 0, "text": "MustNotWrite624"},
                                {"row": 2, "col": 0, "wrap": True, "replace": "yes"}]},
@@ -4893,7 +4894,7 @@ def test_dynamic_list_query_write_uses_shared_native_validator():
     assert "SELECT Ref AS GateValid513 FROM Catalog.Catalog" in read_back.text
 
 
-@e2e_test(tool="modify_metadata", kind="write-metadata")
+@e2e_test(tool="template_content", kind="write-metadata")
 def test_text_template_edit_modes_guards_and_exact_line_endings():
     from harness import settle_or_fail
     from tools.test_text_templates import (
@@ -4906,7 +4907,7 @@ def test_text_template_edit_modes_guards_and_exact_line_endings():
         russian_fqn = fqn.replace("DataProcessor.", "Обработка.").replace(".Template.", ".Макет.")
 
         def written(spec, expected, address=fqn):
-            result = call("modify_metadata", {"projectName": PROJECT, "fqn": address, "template": spec})
+            result = call("template_content", {"method": "modify", "projectName": PROJECT, "fqn": address, "template": spec})
             assert_ok(result, "text template edit")
             assert result.structured.get("fqn") == fqn, result.structured
             assert_contains(result.structured.get("message") or "", "Modified text template " + fqn)
@@ -4934,7 +4935,7 @@ def test_text_template_edit_modes_guards_and_exact_line_endings():
              ["expectedSource"]),
         ]:
             before_tree = tree_snapshot()
-            refused = call("modify_metadata", {"projectName": PROJECT, "fqn": fqn, "template": spec})
+            refused = call("template_content", {"method": "modify", "projectName": PROJECT, "fqn": fqn, "template": spec})
             assert_error_quality(assert_error(refused, "unsafe text edit"),
                                  names=words, suggests=["get_metadata_details"])
             assert_tree_unchanged(before_tree, "rejected edit must change no project file")

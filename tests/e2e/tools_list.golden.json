@@ -4957,10 +4957,6 @@
           "description": "ROLE only: {setForNewObjects?, setForAttributesByDefault?, independentRightsOfChildObjects?} booleans; omitted flags are unchanged.",
           "type": "object"
         },
-        "template": {
-          "description": "TEMPLATE FQN only, instead of 'properties'. TextDocument: {text, mode?, oldText?, expectedHash?, expectedSource?, overwrite?}; mode = 'searchReplace' (default, needs exactly one literal oldText match) / 'append' / 'replace' (the only mode that creates a missing file); replacing an existing file needs expectedHash or expectedSource from get_metadata_details, or overwrite=true. SpreadsheetDocument: {cells?, merges?, areas?, columnWidths?, rowHeights?}. cells [{row, col (both 0-based, required), replace?, text? | parameter?, bold?, fontSize?, hAlign? (Left/Center/Right/Auto/Width), vAlign? (Top/Center/Bottom), wrap?, textOrientation? (TENTHS of a degree: 90 degrees = 900), autoIndent? (0..100), autoMarkIncomplete?}]; merges [{fromRow, fromCol, toRow, toCol}]; areas [{name, fromRow, fromCol, toRow, toCol}]; columnWidths [{col, width?, autoWidthCalculation?, widthWeightFactor? (only with autoWidthCalculation:true)}]; rowHeights [{row, height}]. Omitted or null cell keys keep their values; replace:true resets them. Non-empty text clears parameter and vice versa; '' clears the named one. false / 0 on a format key overrides inheritance, but wrap:false restores inherited placement. Other cells, merges and areas are kept.",
-          "type": "object"
-        },
         "templates": {
           "description": "ROLE only: RLS templates as [{op?, name, condition?}]; op = 'add' (default) / 'edit' / 'delete'; condition is required for add and edit.",
           "items": {
@@ -5085,9 +5081,6 @@
         },
         "success": {
           "type": "boolean"
-        },
-        "template": {
-          "type": "object"
         },
         "unchanged": {
           "items": {
@@ -6667,6 +6660,109 @@
         },
         "success": {
           "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Edit an existing template's SpreadsheetDocument or TextDocument content. Use method='help' for guidance and method='modify' to write. Use metadata tools for the template object itself. Full parameters and examples: call get_tool_guide('template_content').",
+    "inputSchema": {
+      "properties": {
+        "fqn": {
+          "description": "Required for modify: CommonTemplate.Name or Type.Owner.Template.Name.",
+          "type": "string"
+        },
+        "method": {
+          "description": "help: show usage; modify: edit an existing template.",
+          "enum": [
+            "help",
+            "modify"
+          ],
+          "type": "string"
+        },
+        "projectName": {
+          "type": "string"
+        },
+        "template": {
+          "description": "Required for modify. TextDocument: {text, mode?, oldText?, expectedHash?, expectedSource?, overwrite?}; mode = 'searchReplace' (default, needs exactly one literal oldText match) / 'append' / 'replace' (the only mode that creates a missing file); replacing an existing file needs expectedHash or expectedSource from get_metadata_details, or overwrite=true. SpreadsheetDocument: {cells?, merges?, areas?, columnWidths?, rowHeights?, unmerges?, removeAreas?, renameAreas?}. cells [{row, col (both 0-based, required), replace?, text? | parameter?, bold?, fontSize?, hAlign? (Left/Center/Right/Auto/Width), vAlign? (Top/Center/Bottom), wrap?, textOrientation? (TENTHS of a degree: 90 degrees = 900), autoIndent? (0..100), autoMarkIncomplete?, borders? ('Solid' or {style, width? 1..3}, or {left?, top?, right?, bottom?} of those), borderColor? / backColor? / textColor? ({red, green, blue}, 'Web.Red', 'Style.<Name>', 'auto')}]; merges [{fromRow, fromCol, toRow, toCol}]; areas [{name, fromRow, fromCol, toRow, toCol}]; columnWidths [{col, width?, autoWidthCalculation?, widthWeightFactor? (only with autoWidthCalculation:true)}]; rowHeights [{row, height}]; unmerges [{fromRow, fromCol, toRow, toCol}] drops every merge touching the range; removeAreas [name]; renameAreas [{name, newName}]; these three run first. Omitted or null cell keys keep their values; replace:true resets them. Non-empty text clears parameter and vice versa; '' clears the named one. false / 0 on a format key overrides inheritance, but wrap:false restores inherited placement. Other cells, merges and areas are kept.",
+          "type": "object"
+        }
+      },
+      "required": [
+        "method"
+      ],
+      "type": "object"
+    },
+    "name": "template_content",
+    "outputSchema": {
+      "properties": {
+        "action": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        },
+        "fqn": {
+          "type": "string"
+        },
+        "help": {
+          "type": "string"
+        },
+        "markerCount": {
+          "type": "integer"
+        },
+        "markers": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "markersIncomplete": {
+          "type": "boolean"
+        },
+        "markersIncompleteReason": {
+          "enum": [
+            "readFailed",
+            "objectUnresolved",
+            "validationUnobservable",
+            "validationPending",
+            "checksDisabled"
+          ],
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "method": {
+          "enum": [
+            "help",
+            "modify"
+          ],
+          "type": "string"
+        },
+        "persisted": {
+          "type": "boolean"
+        },
+        "success": {
+          "type": "boolean"
+        },
+        "template": {
+          "type": "object"
+        },
+        "writtenProjects": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         }
       },
       "required": [

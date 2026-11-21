@@ -976,7 +976,7 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
             // A forced export of spreadsheet template content has written the file truncated.
             return "'" + requested + "' is content stored in a file of its own (" + bmTop.eClass().getName() //$NON-NLS-1$ //$NON-NLS-2$
                 + "); re-saving content other than a form is not supported. Re-save the owning metadata " //$NON-NLS-1$
-                + "object to rewrite its .mdo, and edit a template with modify_metadata."; //$NON-NLS-1$
+                + "object to rewrite its .mdo, and edit a template's content with template_content."; //$NON-NLS-1$
         }
         return bmTop;
     }

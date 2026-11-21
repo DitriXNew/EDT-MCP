@@ -47,7 +47,8 @@ public class ModifyMetadataGuideHeadroomTest
     {
         String guide = fullGuide();
         System.out.println("MODIFY_METADATA_HEADROOM_GUIDE_CHARS=" + guide.length());
-        assertTrue("must measure the actual full guide", guide.length() > 90_000);
+        assertNotNull("must measure the actual full guide through its trailing section",
+            GuideSections.parse(guide).find("Additional columns"));
         int budget = OutputSizeGuard.MAX_CONTENT_CHARS - 300;
         assertTrue("full modify_metadata guide must leave 300 characters of merge headroom: "
             + guide.length() + " > " + budget, guide.length() <= budget);

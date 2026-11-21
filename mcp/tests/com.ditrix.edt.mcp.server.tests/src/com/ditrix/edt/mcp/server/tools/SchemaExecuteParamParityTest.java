@@ -25,6 +25,7 @@ import java.util.regex.Pattern;
 import org.junit.After;
 import org.junit.Test;
 
+import com.ditrix.edt.mcp.server.tools.impl.ModifyMetadataTool;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonParser;
 
@@ -35,6 +36,8 @@ import com.google.gson.JsonParser;
  * declared {@code inputSchema} property, and every declared property must actually be
  * read. A renamed/typo'd key (schema {@code fqn} vs code {@code objectFqn}) or an
  * orphaned schema property then fails the build instead of slipping through review.
+ * A retired key may be checked solely to reject the request with migration advice;
+ * the named exception below is covered by a behavior test.
  * <p>
  * Mechanism: a source scan of each {@code tools/impl} tool's {@code .java} for the
  * project's parameter-accessor idioms ({@code JsonUtils.extract*Argument} /
@@ -114,6 +117,13 @@ public class SchemaExecuteParamParityTest
             }
             Set<String> declared = declaredProperties(tool);
             Set<String> read = readKeys(source, parseStringConstants(sharedKeys + "\n" + source)); //$NON-NLS-1$
+            // This retired key is inspected only by the pre-execution refusal, never accepted.
+            // ModifyMetadataToolTest.testRemovedTemplatePayloadRefusedBeforeAnyOtherMutation
+            // verifies the refusal and that tools/list does not advertise the key.
+            if (cls == ModifyMetadataTool.class)
+            {
+                read.remove("template"); //$NON-NLS-1$
+            }
             for (String key : read)
             {
                 if (!declared.contains(key))

@@ -78,7 +78,7 @@ public class RouteMapMigrationTest
         assertEquals(Set.of(TOOL), ToolSettingsService.CODE_REVIEW_MIGRATION_ADDITIONS_BY_VERSION.get(16));
         assertEquals(Set.of("get_form_screenshot"),
             ToolSettingsService.CODE_REVIEW_MIGRATION_ADDITIONS_BY_VERSION.get(15));
-        assertEquals(24, PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION);
+        assertEquals(25, PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION);
     }
 
     private static PreferenceStore stored(int version, String preset)

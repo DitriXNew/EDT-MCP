@@ -118,18 +118,15 @@ public class ModifyMetadataConfigurationRootTest
     @Test
     public void testOnlyPropertiesAreAcceptedOnTheRoot()
     {
-        assertNull(ModifyMetadataTool.configurationRootPayloadError(false, false, false));
-        String role = ModifyMetadataTool.configurationRootPayloadError(true, false, false);
+        assertNull(ModifyMetadataTool.configurationRootPayloadError(false, false));
+        String role = ModifyMetadataTool.configurationRootPayloadError(true, false);
         assertNotNull(role);
         assertTrue(role, role.contains("'rights'")); //$NON-NLS-1$
         assertTrue(role, role.contains("accepts only 'properties'")); //$NON-NLS-1$
-        String content = ModifyMetadataTool.configurationRootPayloadError(false, true, false);
+        String content = ModifyMetadataTool.configurationRootPayloadError(false, true);
         assertNotNull(content);
         assertTrue(content, content.contains("'content'")); //$NON-NLS-1$
-        String template = ModifyMetadataTool.configurationRootPayloadError(false, false, true);
-        assertNotNull(template);
-        assertTrue(template, template.contains("'template'")); //$NON-NLS-1$
-        for (String refusal : new String[] { role, content, template })
+        for (String refusal : new String[] { role, content })
         {
             assertTrue(refusal, refusal.startsWith("'Configuration' (the configuration root) accepts only " //$NON-NLS-1$
                 + "'properties'")); //$NON-NLS-1$
@@ -148,16 +145,16 @@ public class ModifyMetadataConfigurationRootTest
         List<JsonObject> settable = props("{name:'version', value:'1.0'}"); //$NON-NLS-1$
 
         assertEquals("the address error", //$NON-NLS-1$
-            ModifyMetadataTool.configurationRootRefusal("the address error", true, true, true, closed)); //$NON-NLS-1$
-        String payload = ModifyMetadataTool.configurationRootRefusal(null, false, true, false, closed);
+            ModifyMetadataTool.configurationRootRefusal("the address error", true, true, closed)); //$NON-NLS-1$
+        String payload = ModifyMetadataTool.configurationRootRefusal(null, false, true, closed);
         assertNotNull(payload);
         assertTrue(payload, payload.contains("'content'")); //$NON-NLS-1$
-        String property = ModifyMetadataTool.configurationRootRefusal(null, false, false, false, closed);
+        String property = ModifyMetadataTool.configurationRootRefusal(null, false, false, closed);
         assertNotNull(property);
         assertTrue(property, property.startsWith("'scriptVariant' is not settable")); //$NON-NLS-1$
-        assertNull(ModifyMetadataTool.configurationRootRefusal(null, false, false, false, settable));
+        assertNull(ModifyMetadataTool.configurationRootRefusal(null, false, false, settable));
         assertNull("a call with no properties at all is refused before the dispatch (properties is required)", //$NON-NLS-1$
-            ModifyMetadataTool.configurationRootRefusal(null, false, false, false, Collections.emptyList()));
+            ModifyMetadataTool.configurationRootRefusal(null, false, false, Collections.emptyList()));
     }
 
     /**
@@ -224,27 +221,27 @@ public class ModifyMetadataConfigurationRootTest
         List<JsonObject> settable = props("{name:'version', value:'1.0'}"); //$NON-NLS-1$
 
         String closed = errorOf(ModifyMetadataTool.dispatchConfigurationRoot(scope, "Configuration", false, //$NON-NLS-1$
-            false, false, props("{name:'version', value:'1.0'}", "{name:'catalogs', value:[]}"), write)); //$NON-NLS-1$ //$NON-NLS-2$
+            false, props("{name:'version', value:'1.0'}", "{name:'catalogs', value:[]}"), write)); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue(closed, closed.startsWith("'catalogs' is not settable on the configuration root")); //$NON-NLS-1$
         String payload = errorOf(ModifyMetadataTool.dispatchConfigurationRoot(scope, "Configuration", false, //$NON-NLS-1$
-            true, false, settable, write));
+            true, settable, write));
         assertTrue(payload, payload.contains("accepts only 'properties'")); //$NON-NLS-1$
         String otherName = errorOf(ModifyMetadataTool.dispatchConfigurationRoot(scope, "Configuration.Other", //$NON-NLS-1$
-            false, false, false, settable, write));
+            false, false, settable, write));
         assertTrue(otherName, otherName.contains("'Cfg'")); //$NON-NLS-1$
         String external = errorOf(ModifyMetadataTool.dispatchConfigurationRoot(
-            MetadataScopeTestFixtures.externalObjectsWithBase(config), "Configuration", false, false, false, //$NON-NLS-1$
+            MetadataScopeTestFixtures.externalObjectsWithBase(config), "Configuration", false, false, //$NON-NLS-1$
             settable, write));
         assertTrue(external, external.contains("external-objects")); //$NON-NLS-1$
         assertTrue("nothing refused may reach the write: " + write.written, write.written.isEmpty()); //$NON-NLS-1$
 
         assertNull("not a root address: the caller goes on down the normal path", //$NON-NLS-1$
-            ModifyMetadataTool.dispatchConfigurationRoot(scope, "Catalog.Goods", false, false, false, settable, //$NON-NLS-1$
+            ModifyMetadataTool.dispatchConfigurationRoot(scope, "Catalog.Goods", false, false, settable, //$NON-NLS-1$
                 write));
         assertTrue(write.written.toString(), write.written.isEmpty());
 
         assertEquals("WRITTEN", ModifyMetadataTool.dispatchConfigurationRoot(scope, "Configuration.Cfg", false, //$NON-NLS-1$ //$NON-NLS-2$
-            false, false, props("{name:'version', value:'1.0'}", "{name:'Synonym', value:'S', language:'en'}"), //$NON-NLS-1$ //$NON-NLS-2$
+            false, props("{name:'version', value:'1.0'}", "{name:'Synonym', value:'S', language:'en'}"), //$NON-NLS-1$ //$NON-NLS-2$
             write));
         assertEquals(1, write.written.size());
         assertSame(config, write.written.get(0).object);
