@@ -214,6 +214,7 @@ public class RoleRightsWriterNestedSubsystemTest
         view.setName("View");
         IRightInfosService infos = mock(IRightInfosService.class);
         when(infos.getRights(b)).thenReturn(Set.of(view));
+        when(infos.getEClassRights(b, b.eClass())).thenReturn(Set.of(view));
         List<IBmTask<?>> tasks = new ArrayList<>();
 
         RoleRightsWriter.Result result = apply(infos, tasks, rightsEntry("Subsystem.A.Subsystem.B", "View"));

@@ -1287,8 +1287,10 @@ public class RoleRightsWriterTest
 
         String withRights = RoleRightsWriter.rightNotFound(withRead, object, "Update", "Catalog.X"); //$NON-NLS-1$ //$NON-NLS-2$
         assertErrorMentions(withRights, "Read"); //$NON-NLS-1$
+        // The refusal echoes the rejected name, so scope the absence check to the valid-rights list
+        String validList = withRights.substring(withRights.indexOf("Valid rights:")); //$NON-NLS-1$
         assertFalse("version-wide out-of-class right must not leak into the list", //$NON-NLS-1$
-            withRights.contains("Update")); //$NON-NLS-1$
+            validList.contains("Update")); //$NON-NLS-1$
 
         String noRights = RoleRightsWriter.rightNotFound(empty, object, "Update", "Catalog.X"); //$NON-NLS-1$ //$NON-NLS-2$
         assertErrorMentions(noRights, "has no rights of its own"); //$NON-NLS-1$
