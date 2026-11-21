@@ -22,7 +22,6 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.withSettings;
 
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.regex.Pattern;
@@ -1262,8 +1261,8 @@ public class RoleRightsWriterTest
         Right update = rightNamed("Update", "Изменение"); //$NON-NLS-1$ //$NON-NLS-2$
         EObject object = objectOfAnyClass();
         IRightInfosService rightInfos = mock(IRightInfosService.class);
-        when(rightInfos.getRights(object)).thenReturn(Arrays.asList(read, update)); //$NON-NLS-1$
-        when(rightInfos.getEClassRights(object, object.eClass())).thenReturn(Collections.singletonList(read)); //$NON-NLS-1$
+        when(rightInfos.getRights(object)).thenReturn(java.util.Set.of(read, update)); //$NON-NLS-1$
+        when(rightInfos.getEClassRights(object, object.eClass())).thenReturn(Collections.singleton(read)); //$NON-NLS-1$
 
         assertNull("out-of-class right must not resolve by English name", //$NON-NLS-1$
             RoleRightsWriter.resolveRight(rightInfos, object, "Update")); //$NON-NLS-1$
@@ -1281,9 +1280,9 @@ public class RoleRightsWriterTest
         Right read = rightNamed("Read", "Чтение"); //$NON-NLS-1$ //$NON-NLS-2$
         EObject object = objectOfAnyClass();
         IRightInfosService empty = mock(IRightInfosService.class);
-        when(empty.getEClassRights(object, object.eClass())).thenReturn(Collections.<Right>emptyList()); //$NON-NLS-1$
+        when(empty.getEClassRights(object, object.eClass())).thenReturn(Collections.<Right>emptySet()); //$NON-NLS-1$
         IRightInfosService withRead = mock(IRightInfosService.class);
-        when(withRead.getEClassRights(object, object.eClass())).thenReturn(Collections.singletonList(read)); //$NON-NLS-1$
+        when(withRead.getEClassRights(object, object.eClass())).thenReturn(Collections.singleton(read)); //$NON-NLS-1$
 
         String withRights = RoleRightsWriter.rightNotFound(withRead, object, "Update", "Catalog.X"); //$NON-NLS-1$ //$NON-NLS-2$
         assertErrorMentions(withRights, "Read"); //$NON-NLS-1$
