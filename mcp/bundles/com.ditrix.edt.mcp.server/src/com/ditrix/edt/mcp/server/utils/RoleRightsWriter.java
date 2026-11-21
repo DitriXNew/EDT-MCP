@@ -1244,7 +1244,7 @@ public final class RoleRightsWriter
         {
             return null;
         }
-        for (Right right : rightInfos.getRights(object))
+        for (Right right : rightInfos.getEClassRights(object, object.eClass()))
         {
             if (namesMatch(rightName, right.getName(), right.getNameRu()))
             {
@@ -1552,11 +1552,19 @@ public final class RoleRightsWriter
         String objectFqn)
     {
         List<String> valid = new ArrayList<>();
-        for (Right right : rightInfos.getRights(object))
+        for (Right right : rightInfos.getEClassRights(object, object.eClass()))
         {
             valid.add(rightLabel(right));
         }
         Collections.sort(valid);
+        if (valid.isEmpty())
+        {
+            // Some classes (e.g. HTTP services) grant access at the URL-template method level
+            // (mdclass.Method.Use) and carry no rights of their own; say that instead of printing
+            // an empty "Valid rights" list.
+            return ToolResult.error("Right '" + rightName + "' is not applicable to '" + objectFqn //$NON-NLS-1$ //$NON-NLS-2$
+                + "': the object's class has no rights of its own (access is granted via its URL-template methods).").toJson(); //$NON-NLS-1$
+        }
         return ToolResult.error("Right '" + rightName + "' is not valid for '" + objectFqn //$NON-NLS-1$ //$NON-NLS-2$
             + "'. Valid rights: " + String.join(", ", valid) + ".").toJson(); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
     }
