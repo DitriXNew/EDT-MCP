@@ -22,7 +22,9 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.withSettings;
 
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.List;
 import java.util.List;
 import java.util.regex.Pattern;
 
@@ -30,6 +32,8 @@ import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.emf.common.util.BasicEList;
 import org.eclipse.emf.common.util.URI;
+import org.eclipse.emf.ecore.EClass;
+import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.InternalEObject;
 import org.junit.Test;
 import org.mockito.ArgumentCaptor;
@@ -1229,6 +1233,70 @@ public class RoleRightsWriterTest
         String exact = RoleRightsWriter.unresolvedTargetsRefusal("Sales", targets.subList(0, 20)); //$NON-NLS-1$
         assertErrorMentions(exact, "Catalog.Gone20)"); //$NON-NLS-1$
         assertFalse(exact, exact.contains("more)")); //$NON-NLS-1$
+    }
+
+    // Rights resolution must be scoped to the object's class: a right name present in the
+    // version-wide set but absent from the class's own set must NOT resolve (HTTP services on
+    // 8.3.27 carry no rights of their own; access goes via URL-template methods).
+
+    private static IRightInfosService rightsInfoWith(List<Right> classRights) throws Exception
+    {
+        IRightInfosService rightInfos = mock(IRightInfosService.class);
+        when(rightInfos.getEClassRights(any(), any())).thenReturn(classRights); //$NON-NLS-1$
+        return rightInfos;
+    }
+
+    private static EObject objectOfAnyClass() throws Exception
+    {
+        EObject object = mock(EObject.class); //$NON-NLS-1$
+        EClass eClass = mock(EClass.class); //$NON-NLS-1$
+        when(object.eClass()).thenReturn(eClass); //$NON-NLS-1$
+        return object;
+    }
+
+    private static Right rightNamed(String en, String ru) throws Exception
+    {
+        Right right = mock(Right.class); //$NON-NLS-1$
+        when(right.getName()).thenReturn(en); //$NON-NLS-1$
+        when(right.getNameRu()).thenReturn(ru); //$NON-NLS-1$
+        return right;
+    }
+
+    public void testResolveRightRefusesOutOfClassRightByEnglishAndRussianName() throws Exception
+    {
+        Right read = rightNamed("Read", "Чтение"); //$NON-NLS-1$ //$NON-NLS-2$
+        Right update = rightNamed("Update", "Изменение"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject object = objectOfAnyClass();
+        IRightInfosService rightInfos = mock(IRightInfosService.class);
+        when(rightInfos.getRights(object)).thenReturn(Arrays.asList(read, update)); //$NON-NLS-1$
+        when(rightInfos.getEClassRights(object, object.eClass())).thenReturn(Collections.singletonList(read)); //$NON-NLS-1$
+
+        assertNull("out-of-class right must not resolve by English name", //$NON-NLS-1$
+            RoleRightsWriter.resolveRight(rightInfos, object, "Update")); //$NON-NLS-1$
+        assertNull("out-of-class right must not resolve by Russian name", //$NON-NLS-1$
+            RoleRightsWriter.resolveRight(rightInfos, object, RU_UPDATE)); //$NON-NLS-1$
+        assertNotNull("in-class right resolves by English name", //$NON-NLS-1$
+            RoleRightsWriter.resolveRight(rightInfos, object, "Read")); //$NON-NLS-1$
+        assertNotNull("in-class right resolves by Russian name", //$NON-NLS-1$
+            RoleRightsWriter.resolveRight(rightInfos, object, RU_READ)); //$NON-NLS-1$
+    }
+
+    public void testRightNotFoundListsClassRightsAndExplainsEmptySet() throws Exception
+    {
+        Right read = rightNamed("Read", "Чтение"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject object = objectOfAnyClass();
+        IRightInfosService empty = mock(IRightInfosService.class);
+        when(empty.getEClassRights(object, object.eClass())).thenReturn(Collections.<Right>emptyList()); //$NON-NLS-1$
+        IRightInfosService withRead = mock(IRightInfosService.class);
+        when(withRead.getEClassRights(object, object.eClass())).thenReturn(Collections.singletonList(read)); //$NON-NLS-1$
+
+        String withRights = RoleRightsWriter.rightNotFound(withRead, object, "Update", "Catalog.X"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertErrorMentions(withRights, "Read"); //$NON-NLS-1$
+        assertFalse("version-wide out-of-class right must not leak into the list", //$NON-NLS-1$
+            withRights.contains("Update")); //$NON-NLS-1$
+
+        String noRights = RoleRightsWriter.rightNotFound(empty, object, "Update", "Catalog.X"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertErrorMentions(noRights, "has no rights of its own"); //$NON-NLS-1$
     }
 
     private static void assertErrorMentions(String errorJson, String needle)

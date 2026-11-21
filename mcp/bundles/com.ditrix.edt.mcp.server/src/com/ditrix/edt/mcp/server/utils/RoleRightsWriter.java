@@ -521,15 +521,53 @@ public final class RoleRightsWriter
     /** Runs {@code AddRightValuesTask} for a single object + right + value. */
     private static void setRightValue(Context ctx, EObject target, Right right, RightValue value)
     {
-        Map<Right, RightValue> rightToValue = new LinkedHashMap<>();
-        rightToValue.put(right, value);
-        Map<EObject, Map<Right, RightValue>> objectToRights = new LinkedHashMap<>();
-        objectToRights.put(target, rightToValue);
-        Map<Role, Map<EObject, Map<Right, RightValue>>> roleMap = new LinkedHashMap<>();
-        roleMap.put(ctx.role, objectToRights);
+        // EDT 2026.2 (com._1c.g5.v8.dt.internal.rights.cleanup) retries the runtime-order sort of
+        // Role.rights inside AddRightValuesTask, and the sort delegate's key map is a derived-data
+        // snapshot that does not yet contain a RightValue created in the same update window. A
+        // second task touching the same object therefore compares two entries, one of whose keys
+        // is still null: "Comparable.compareTo(Object) ... Map.get(Object) is null" NPE (observed
+        // on 8.3.27.2342 + EDT 2026.2.2 for the 2nd right on an HTTP service, consistently, while
+        // the 1st right on the same object commits). The derived-data key catches up within a
+        // second, so ONE retry of a fresh task instance converts the hard failure into a success.
+        // Single-entry collections never compare (size <= 1), which is why the 1st right works.
+        RuntimeException lastFailure = null;
+        for (int attempt = 1; attempt <= 2; attempt++)
+        {
+            Map<Right, RightValue> rightToValue = new LinkedHashMap<>();
+            rightToValue.put(right, value);
+            Map<EObject, Map<Right, RightValue>> objectToRights = new LinkedHashMap<>();
+            objectToRights.put(target, rightToValue);
+            Map<Role, Map<EObject, Map<Right, RightValue>>> roleMap = new LinkedHashMap<>();
+            roleMap.put(ctx.role, objectToRights);
 
-        IBmTask<?> task = AddRightValuesTask.create(roleMap, ctx.project, ctx.eventBroker, ctx.sorter);
-        ctx.execute(task);
+            IBmTask<?> task = AddRightValuesTask.create(roleMap, ctx.project, ctx.eventBroker, ctx.sorter);
+            try
+            {
+                ctx.execute(task);
+                return;
+            }
+            catch (RuntimeException failure)
+            {
+                lastFailure = failure;
+                String message = String.valueOf(failure.getMessage());
+                if (attempt == 1 && message.contains("Map.get(Object) is null")
+                    && message.contains("Comparable.compareTo"))
+                {
+                    try
+                    {
+                        Thread.sleep(700);
+                    }
+                    catch (InterruptedException interrupted)
+                    {
+                        Thread.currentThread().interrupt();
+                        throw failure;
+                    }
+                    continue;
+                }
+                throw failure;
+            }
+        }
+        throw lastFailure;
     }
 
     /**
@@ -1206,7 +1244,7 @@ public final class RoleRightsWriter
         {
             return null;
         }
-        for (Right right : rightInfos.getRights(object))
+        for (Right right : rightInfos.getEClassRights(object, object.eClass()))
         {
             if (namesMatch(rightName, right.getName(), right.getNameRu()))
             {
@@ -1514,11 +1552,19 @@ public final class RoleRightsWriter
         String objectFqn)
     {
         List<String> valid = new ArrayList<>();
-        for (Right right : rightInfos.getRights(object))
+        for (Right right : rightInfos.getEClassRights(object, object.eClass()))
         {
             valid.add(rightLabel(right));
         }
         Collections.sort(valid);
+        if (valid.isEmpty())
+        {
+            // Some classes (e.g. HTTP services) grant access at the URL-template method level
+            // (mdclass.Method.Use) and carry no rights of their own; say that instead of printing
+            // an empty "Valid rights" list.
+            return ToolResult.error("Right '" + rightName + "' is not applicable to '" + objectFqn //$NON-NLS-1$ //$NON-NLS-2$
+                + "': the object's class has no rights of its own (access is granted via its URL-template methods).").toJson(); //$NON-NLS-1$
+        }
         return ToolResult.error("Right '" + rightName + "' is not valid for '" + objectFqn //$NON-NLS-1$ //$NON-NLS-2$
             + "'. Valid rights: " + String.join(", ", valid) + ".").toJson(); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
     }
