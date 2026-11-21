@@ -16,6 +16,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 
 import org.eclipse.core.resources.IProject;
@@ -285,6 +287,25 @@ public final class WrittenObjectMarkers
         {
             return reason;
         }
+
+        /** @return the total markers in the slice, before the cap */
+        public int count()
+        {
+            return count;
+        }
+
+        /**
+         * The same report naming other addresses in its re-check advice. A slice keyed by an internal
+         * top-object FQN that {@code get_project_errors objectFqns} cannot resolve (a DCS content
+         * resource, for one) names the metadata address that covers it instead.
+         *
+         * @param recheckObjects the addresses the re-check sentence names
+         * @return a copy with those addresses
+         */
+        public Report withRecheckObjects(List<String> recheckObjects)
+        {
+            return new Report(reason, count, rows, new ArrayList<>(recheckObjects), budgetMs);
+        }
     }
 
     /**
@@ -341,6 +362,25 @@ public final class WrittenObjectMarkers
         return CommandInterfaceAddress.isConfigurationToken(dot < 0 ? targetFqn : targetFqn.substring(0, dot));
     }
 
+    /** The clock of the shared budget, in milliseconds: monotonic, so a wall-clock change neither grants nor takes time. */
+    private static final AtomicReference<LongSupplier> CLOCK = new AtomicReference<>(() -> System.nanoTime() / 1_000_000L);
+
+    private static long nowMs()
+    {
+        return CLOCK.get().getAsLong();
+    }
+
+    /**
+     * Test seam: replaces the budget clock.
+     *
+     * @param clock a monotonic reading in milliseconds
+     * @return the clock it replaced
+     */
+    static LongSupplier useClock(LongSupplier clock)
+    {
+        return CLOCK.getAndSet(clock);
+    }
+
     /**
      * Waits for and reads the markers of the written objects under one shared budget. Never throws:
      * a failure becomes {@link Reason#READ_FAILED}.
@@ -359,7 +399,7 @@ public final class WrittenObjectMarkers
         int count = 0;
         List<Row> rows = new ArrayList<>();
         List<String> objects = new ArrayList<>();
-        long deadlineAtMs = System.currentTimeMillis() + budgetMs;
+        long deadlineAtMs = nowMs() + budgetMs;
         for (Map.Entry<String, List<String>> entry : sliceByProject.entrySet())
         {
             String projectName = entry.getKey();
@@ -368,22 +408,22 @@ public final class WrittenObjectMarkers
             try
             {
                 Map<String, Long> ids = env.resolveTopObjects(projectName, fqns,
-                    readTimeoutMs(deadlineAtMs - System.currentTimeMillis()));
+                    readTimeoutMs(deadlineAtMs - nowMs()));
                 unresolved |= ids.size() < fqns.size();
                 if (ids.isEmpty())
                 {
                     continue;
                 }
-                long startedAtMs = System.currentTimeMillis();
+                long startedAtMs = nowMs();
                 long remainingMs = deadlineAtMs - startedAtMs;
                 BuildUtils.ValidationState state = remainingMs < MIN_USEFUL_WAIT_MS
                     ? BuildUtils.ValidationState.PENDING
                     : env.awaitValidation(projectName, ids.values(), remainingMs);
                 unobservable |= state == BuildUtils.ValidationState.UNOBSERVABLE;
                 pending |= state == BuildUtils.ValidationState.PENDING;
-                long waitedMs = System.currentTimeMillis() - startedAtMs;
+                long waitedMs = nowMs() - startedAtMs;
                 ProjectMarkers read = env.read(projectName, ids, MAX_ROWS,
-                    readTimeoutMs(deadlineAtMs - System.currentTimeMillis()));
+                    readTimeoutMs(deadlineAtMs - nowMs()));
                 count += read.total;
                 rows.addAll(read.rows);
                 // The timing line the validation budget is tuned from.
@@ -435,6 +475,30 @@ public final class WrittenObjectMarkers
     public static Report readFailed(List<String> objects, long budgetMs)
     {
         return new Report(Reason.READ_FAILED, 0, new ArrayList<>(), new ArrayList<>(objects), budgetMs);
+    }
+
+    /**
+     * The {@link #collect} budget under which a whole collection ends within {@code totalMs}: each of its two
+     * bounded BM reads may take up to {@link #MIN_READ_MS} past the collect deadline, so both are reserved.
+     *
+     * @param totalMs the time the caller can give the whole collection
+     * @return the budget to pass to {@link #collect}; below a second there is no useful wait
+     */
+    public static long collectBudgetWithin(long totalMs)
+    {
+        return totalMs - 2 * MIN_READ_MS;
+    }
+
+    /**
+     * The report for a validation the call did not wait for because its time budget was already spent:
+     * incomplete ({@link Reason#VALIDATION_PENDING}), nothing read, and its sentence says it was not awaited.
+     *
+     * @param objects the objects that were to be reported
+     * @return the report
+     */
+    public static Report notAwaited(List<String> objects)
+    {
+        return new Report(Reason.VALIDATION_PENDING, 0, new ArrayList<>(), new ArrayList<>(objects), 0L);
     }
 
     private static boolean checksDisabled(Environment env)
@@ -520,6 +584,35 @@ public final class WrittenObjectMarkers
     }
 
     /**
+     * The report as a Markdown section for a tool that answers in Markdown: the state, the count,
+     * the same sentence {@link #attach} adds to a JSON message, and the rows as an escaped table.
+     *
+     * @param report the report
+     * @return the section, starting with {@code **Validation:**}
+     */
+    public static String markdown(Report report)
+    {
+        StringBuilder md = new StringBuilder();
+        md.append("**Validation:** `").append(report.incomplete() ? "incomplete" : "complete") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            .append('`');
+        if (report.incomplete())
+        {
+            md.append(" (").append(report.reason.wire()).append(')'); //$NON-NLS-1$
+        }
+        md.append("\n\n**Markers:** `").append(report.count).append("`\n\n").append(sentence(report)); //$NON-NLS-1$ //$NON-NLS-2$
+        if (!report.rows.isEmpty())
+        {
+            md.append("\n\n").append(MarkdownUtils.tableHeader("Severity", "Check", "Message", "Location")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+            for (Row row : report.rows)
+            {
+                md.append(MarkdownUtils.tableRow(row.severity == null ? "" : row.severity.name(), //$NON-NLS-1$
+                    nullToEmpty(row.checkId), nullToEmpty(row.message), nullToEmpty(row.location)));
+            }
+        }
+        return md.toString().stripTrailing();
+    }
+
+    /**
      * Appends a sentence to a message, closing the message with a period unless it already ends
      * with sentence punctuation.
      *
@@ -578,7 +671,8 @@ public final class WrittenObjectMarkers
         switch (report.reason)
         {
         case VALIDATION_PENDING:
-            return "had not finished within " + Math.max(1L, report.budgetMs / 1000) + "s"; //$NON-NLS-1$ //$NON-NLS-2$
+            return report.budgetMs <= 0 ? "was not awaited because the call's time budget was spent" //$NON-NLS-1$
+                : "had not finished within " + Math.max(1L, report.budgetMs / 1000) + "s"; //$NON-NLS-1$ //$NON-NLS-2$
         case VALIDATION_UNOBSERVABLE:
             return "could not be observed"; //$NON-NLS-1$
         case OBJECT_UNRESOLVED:

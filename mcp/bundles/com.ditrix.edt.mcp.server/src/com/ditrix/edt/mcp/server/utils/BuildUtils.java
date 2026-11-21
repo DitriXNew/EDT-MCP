@@ -490,6 +490,21 @@ public final class BuildUtils
      */
     public static DiskExportState waitForDiskExport(IProject project, long timeoutMs)
     {
+        return waitForDiskExport(project, timeoutMs, timeoutMs);
+    }
+
+    /**
+     * {@link #waitForDiskExport(IProject, long)} with a caller deadline shorter than the export wait it
+     * replaces: the project's export slot is held as if the wait had {@code holdBasisMs}
+     * ({@link #beginExportWait(String, long, long)}), so the one-outstanding-wait limit keeps its pace.
+     *
+     * @param project the workspace project whose export queue to drain
+     * @param timeoutMs the caller's hard deadline in milliseconds
+     * @param holdBasisMs the deadline an unreturned wait holds the project's slot for, when longer
+     * @return how the wait ended; never {@code null}
+     */
+    public static DiskExportState waitForDiskExport(IProject project, long timeoutMs, long holdBasisMs)
+    {
         IDerivedDataManager ddManager;
         try
         {
@@ -511,7 +526,7 @@ public final class BuildUtils
         // otherwise get a fresh unkillable Job per call until the workbench ran out of them.
         // Pretending we can cancel it would be the dishonest fix; this is the honest limit.
         String key = project.getName();
-        AtomicBoolean returned = beginExportWait(key, timeoutMs);
+        AtomicBoolean returned = beginExportWait(key, timeoutMs, holdBasisMs);
         if (returned == null)
         {
             Activator.logInfo("A previous .mdo export wait for " + key //$NON-NLS-1$
@@ -867,6 +882,21 @@ public final class BuildUtils
     static AtomicBoolean beginExportWait(String projectName, long timeoutMs)
     {
         return beginWait(projectName, timeoutMs);
+    }
+
+    /**
+     * {@link #beginExportWait(String, long)} for a caller whose deadline is shorter than the wait it
+     * stands in for: an unreturned claim holds as long as a {@code holdBasisMs} wait's would, so a short
+     * caller deadline never lets a wedged pipeline collect unstoppable jobs faster.
+     *
+     * @param projectName the project whose slot to claim
+     * @param timeoutMs the caller's deadline
+     * @param holdBasisMs the deadline whose hold an unreturned claim keeps, when longer
+     * @return the flag, or {@code null} when a previous wait has not come back yet
+     */
+    static AtomicBoolean beginExportWait(String projectName, long timeoutMs, long holdBasisMs)
+    {
+        return beginWait(projectName, Math.max(timeoutMs, holdBasisMs));
     }
 
     /**

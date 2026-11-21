@@ -30,6 +30,7 @@ from harness import (
     poll_disk_contains_all, read_fixture_file, reset_fixture_rel, wait_for_project_ready,
     e2e_test, PROJECT, EXT_OBJECTS_PROJECT, EXT_OBJECTS_REL, _fail, assert_marker_contract,
 )
+from tools.test_dcs import _hash
 
 # The Russian TYPE tokens for the two external-objects types. The bilingual token catalogue
 # accepts them exactly like the English ones, and a caller in a Russian workspace types these.
@@ -519,6 +520,8 @@ def test_extobj_external_report_owned_dcs_round_trip_uses_inherited_language():
             "fqn": root,
             "action": "upsert",
             "type": "schema",
+            # The write carries the hash of the read above (#662: read before write).
+            "expectedHash": _hash(summary),
             "body": {"dataSets": [{
                 "name": "ExternalData",
                 "type": "query",
