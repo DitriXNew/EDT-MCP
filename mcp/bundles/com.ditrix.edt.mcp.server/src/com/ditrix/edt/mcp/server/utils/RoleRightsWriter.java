@@ -1548,7 +1548,7 @@ public final class RoleRightsWriter
         return Collections.emptyList();
     }
 
-    private static String rightNotFound(IRightInfosService rightInfos, EObject object, String rightName,
+    static String rightNotFound(IRightInfosService rightInfos, EObject object, String rightName,
         String objectFqn)
     {
         List<String> valid = new ArrayList<>();

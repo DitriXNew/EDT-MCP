@@ -25,7 +25,6 @@ import static org.mockito.Mockito.withSettings;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
-import java.util.List;
 import java.util.regex.Pattern;
 
 import org.eclipse.core.resources.IProject;
@@ -53,6 +52,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.Role;
 import com._1c.g5.v8.dt.rights.IRightInfosService;
 import com._1c.g5.v8.dt.rights.model.ObjectRights;
+import com._1c.g5.v8.dt.rights.model.Right;
 import com._1c.g5.v8.dt.rights.model.RightValue;
 import com._1c.g5.v8.dt.rights.model.RightsFactory;
 import com._1c.g5.v8.dt.rights.model.RoleDescription;
@@ -1239,13 +1239,6 @@ public class RoleRightsWriterTest
     // version-wide set but absent from the class's own set must NOT resolve (HTTP services on
     // 8.3.27 carry no rights of their own; access goes via URL-template methods).
 
-    private static IRightInfosService rightsInfoWith(List<Right> classRights) throws Exception
-    {
-        IRightInfosService rightInfos = mock(IRightInfosService.class);
-        when(rightInfos.getEClassRights(any(), any())).thenReturn(classRights); //$NON-NLS-1$
-        return rightInfos;
-    }
-
     private static EObject objectOfAnyClass() throws Exception
     {
         EObject object = mock(EObject.class); //$NON-NLS-1$
@@ -1262,6 +1255,7 @@ public class RoleRightsWriterTest
         return right;
     }
 
+    @Test
     public void testResolveRightRefusesOutOfClassRightByEnglishAndRussianName() throws Exception
     {
         Right read = rightNamed("Read", "Чтение"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -1281,6 +1275,7 @@ public class RoleRightsWriterTest
             RoleRightsWriter.resolveRight(rightInfos, object, RU_READ)); //$NON-NLS-1$
     }
 
+    @Test
     public void testRightNotFoundListsClassRightsAndExplainsEmptySet() throws Exception
     {
         Right read = rightNamed("Read", "Чтение"); //$NON-NLS-1$ //$NON-NLS-2$
