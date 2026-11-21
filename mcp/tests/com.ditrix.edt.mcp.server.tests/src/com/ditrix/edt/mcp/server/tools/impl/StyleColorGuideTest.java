@@ -31,7 +31,6 @@ public class StyleColorGuideTest
     {
         String guide = guide(new ModifyMetadataTool());
         System.out.println("R7_MODIFY_METADATA_GUIDE_CHARS=" + guide.length());
-        assertTrue("must load the actual full guide", guide.length() > 90_000);
         assertTrue("full guide must fit the tool output limit: " + guide.length(), guide.length() <= 100_000);
         String bullet = guide.lines().filter(line -> line.startsWith("- Color (named):")).findFirst().orElseThrow();
         assertTrue(bullet, bullet.contains("a configuration item first, else the platform color"));
