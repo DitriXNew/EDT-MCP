@@ -10,6 +10,7 @@ import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.function.BiFunction;
 
 import org.eclipse.core.resources.IProject;
@@ -21,6 +22,7 @@ import com._1c.g5.v8.dt.bsl.common.IModuleExtensionServiceProvider;
 import com._1c.g5.v8.dt.bsl.model.Method;
 import com._1c.g5.v8.dt.bsl.model.Module;
 import com._1c.g5.v8.dt.bsl.model.Pragma;
+import com._1c.g5.v8.dt.lcore.util.CaseInsensitiveString;
 import com.ditrix.edt.mcp.server.Activator;
 
 /**
@@ -41,8 +43,9 @@ import com.ditrix.edt.mcp.server.Activator;
  * ({@link IModuleExtensionServiceProvider#INSTANCE}) — the SAME service the EDT BSL
  * editor uses for interception hyperlinks/hover. {@code isExtensionModule} picks the
  * direction; {@code getSourceMethod} maps an extension method's annotation pragmas to
- * the core methods it targets; {@code getExtensionModules} is the inverse (the
- * extension modules adopting a given core module). All of this is best-effort: any
+ * the core methods it targets; {@code getExtensionModules} finds the adopting
+ * modules. The base-side footer reads annotation targets without needing an
+ * extension-to-core source lookup. All of this is best-effort: any
  * failure (service missing, model not yet indexed) yields {@code null} and the code
  * tool simply omits the footer rather than failing the read.
  */
@@ -102,36 +105,40 @@ public final class InterceptionUtils
         }
         try
         {
-            IModuleExtensionService svc = extensionService();
-            if (svc == null)
-            {
-                return null;
-            }
-            Set<String> lines = new LinkedHashSet<>();
-            if (svc.isExtensionModule(module))
-            {
-                collectExtensionSide(svc, method, lines);
-            }
-            else
-            {
-                collectBaseSide(svc, module, method.getName(), lines);
-            }
-            if (lines.isEmpty())
-            {
-                return null;
-            }
-            StringBuilder sb = new StringBuilder();
-            for (String line : lines)
-            {
-                sb.append("\n> ").append(line).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
-            }
-            return sb.toString();
+            return methodFooter(module, method, extensionService());
         }
         catch (RuntimeException e)
         {
             Activator.logWarning("read_method_source: interception footer unavailable: " + e.getMessage()); //$NON-NLS-1$
             return null;
         }
+    }
+
+    static String methodFooter(Module module, Method method, IModuleExtensionService svc)
+    {
+        if (svc == null)
+        {
+            return null;
+        }
+        Set<String> lines = new LinkedHashSet<>();
+        if (svc.isExtensionModule(module))
+        {
+            collectExtensionSide(svc, method, lines);
+        }
+        else
+        {
+            collectBaseSide(svc, module, method.getName(), lines);
+        }
+        if (lines.isEmpty())
+        {
+            return null;
+        }
+        StringBuilder sb = new StringBuilder();
+        for (String line : lines)
+        {
+            sb.append("\n> ").append(line).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return sb.toString();
     }
 
     /**
@@ -151,31 +158,31 @@ public final class InterceptionUtils
         }
         try
         {
-            IModuleExtensionService svc = extensionService();
-            if (svc == null)
-            {
-                return null;
-            }
-            Set<String> lines = new LinkedHashSet<>();
-            if (svc.isExtensionModule(module))
-            {
-                collectModuleExtensionSide(svc, module, lines);
-            }
-            else
-            {
-                collectModuleBaseSide(svc, module, lines);
-            }
-            if (lines.isEmpty())
-            {
-                return null;
-            }
-            return buildFooterSection(lines);
+            return moduleFooter(module, extensionService());
         }
         catch (RuntimeException e)
         {
             Activator.logWarning("module interception footer unavailable: " + e.getMessage()); //$NON-NLS-1$
             return null;
         }
+    }
+
+    static String moduleFooter(Module module, IModuleExtensionService svc)
+    {
+        if (svc == null)
+        {
+            return null;
+        }
+        Set<String> lines = new LinkedHashSet<>();
+        if (svc.isExtensionModule(module))
+        {
+            collectModuleExtensionSide(svc, module, lines);
+        }
+        else
+        {
+            collectModuleBaseSide(svc, module, lines);
+        }
+        return lines.isEmpty() ? null : buildFooterSection(lines);
     }
 
     /**
@@ -202,31 +209,59 @@ public final class InterceptionUtils
     }
 
     /**
-     * Module base-side (inverse): for a base {@code module}, lists every extension
-     * module that adopts it and each of its methods that resolves back to a method here.
+     * The method footer's forward lookup searches the adopting module for its
+     * annotation target. For a whole module, match those same targets in one pass:
+     * the native per-name lookup would rescan every adopting module for each base
+     * method. Unlike getSourceMethod, getSourceMethodNames does not require the
+     * extension's reverse source module to be resolved.
      */
     private static void collectModuleBaseSide(IModuleExtensionService svc, Module module, Set<String> lines)
     {
         Collection<Module> extensionModules = svc.getExtensionModules(module);
-        if (extensionModules == null)
+        if (extensionModules == null || extensionModules.isEmpty())
         {
             return;
         }
+        // Match the forward lookup's equalsIgnoreCase, including when the SDK's
+        // CaseInsensitiveString hash differs for equivalent Unicode spellings.
+        Map<String, String> baseNames = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
+        for (Method method : module.allMethods())
+        {
+            String name = method.getName();
+            if (name != null && !name.isEmpty())
+            {
+                baseNames.putIfAbsent(name, name);
+            }
+        }
         for (Module extModule : extensionModules)
         {
-            String extProject = projectName(extModule);
-            for (Method extMethod : extModule.getMethods())
+            collectAdoptingModuleLinks(svc, extModule, baseNames, lines);
+        }
+    }
+
+    private static void collectAdoptingModuleLinks(IModuleExtensionService svc, Module extModule,
+        Map<String, String> baseNames, Set<String> lines)
+    {
+        String extProject = projectName(extModule);
+        for (Method extMethod : extModule.allMethods())
+        {
+            Map<CaseInsensitiveString, Collection<Pragma>> targets = svc.getSourceMethodNames(extMethod);
+            if (targets == null)
             {
-                Map<Pragma, Method> sources = svc.getSourceMethod(extMethod);
-                if (sources == null)
+                continue;
+            }
+            for (Map.Entry<CaseInsensitiveString, Collection<Pragma>> target : targets.entrySet())
+            {
+                String baseName = baseNames.get(target.getKey().getString());
+                Collection<Pragma> pragmas = target.getValue();
+                if (baseName == null || pragmas == null)
                 {
                     continue;
                 }
-                for (Map.Entry<Pragma, Method> entry : sources.entrySet())
+                for (Pragma pragma : pragmas)
                 {
-                    String baseName = baseMethodName(entry);
                     lines.add("`" + baseName + "` <- intercepted by extension `" + extProject //$NON-NLS-1$ //$NON-NLS-2$
-                        + "`: `" + safeName(extMethod) + VIA_SEPARATOR + annotation(entry.getKey()) + "`"); //$NON-NLS-1$ //$NON-NLS-2$
+                        + "`: `" + safeName(extMethod) + VIA_SEPARATOR + annotation(pragma) + "`"); //$NON-NLS-1$ //$NON-NLS-2$
                 }
             }
         }
