@@ -103,6 +103,13 @@ public final class McpConstants
     
     /** Initialized notification */
     public static final String METHOD_INITIALIZED = "notifications/initialized"; //$NON-NLS-1$
+
+    /**
+     * Client-requested host shutdown. A plugin extension to MCP, not a protocol method: it is
+     * accepted only by a host that armed a shutdown channel ({@code StdioHostApplication}), and
+     * it is answered with nothing - the connection closing is the acknowledgement.
+     */
+    public static final String METHOD_HOST_SHUTDOWN = "notifications/host_shutdown"; //$NON-NLS-1$
     
     /** Tools list method */
     public static final String METHOD_TOOLS_LIST = "tools/list"; //$NON-NLS-1$

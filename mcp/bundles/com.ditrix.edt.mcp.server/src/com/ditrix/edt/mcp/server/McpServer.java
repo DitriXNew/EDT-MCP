@@ -14,11 +14,13 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 import com.ditrix.edt.mcp.server.preferences.PreferenceConstants;
+import com.ditrix.edt.mcp.server.protocol.McpConstants;
 import com.ditrix.edt.mcp.server.protocol.McpProtocolHandler;
 import com.ditrix.edt.mcp.server.tools.BuiltInToolRegistrar;
 import com.ditrix.edt.mcp.server.tools.McpToolRegistry;
@@ -55,6 +57,16 @@ public class McpServer
 
     /** Currently active tool call that can be interrupted */
     private final AtomicReference<ActiveToolCall> activeToolCall = new AtomicReference<>();
+
+    /**
+     * The host's shutdown channel, or {@code null} when this host has none. Armed only by the
+     * headless application: the windowed IDE must never be closed by a client's request, so it
+     * leaves this empty and the notification is refused in the log.
+     */
+    private final AtomicReference<Runnable> hostShutdown = new AtomicReference<>();
+
+    /** Whether the shutdown channel has already been fired; a repeat request is a no-op. */
+    private final AtomicBoolean hostShutdownRequested = new AtomicBoolean();
 
     /** Main thread pool for POST/OPTIONS/DELETE requests */
     private ThreadPoolExecutor mainExecutor;
@@ -279,6 +291,51 @@ public class McpServer
             }
             Activator.logInfo("MCP Server stopped"); //$NON-NLS-1$
         }
+    }
+
+    /**
+     * Arms the client-requested shutdown channel, or disarms it with {@code null}.
+     * <p>
+     * The test client's belief that the host can be stopped is a property of the host, not of
+     * the notification: this is the only place that decides it. Arming resets the one-shot guard,
+     * so a host started again in the same JVM accepts a fresh request.
+     *
+     * @param shutdown the action that begins a clean shutdown, or {@code null} to refuse the
+     *            notification
+     */
+    public void setHostShutdown(Runnable shutdown)
+    {
+        hostShutdown.set(shutdown);
+        hostShutdownRequested.set(false);
+    }
+
+    /**
+     * Begins a clean host shutdown on a client's request ({@code notifications/host_shutdown}).
+     * <p>
+     * Idempotent and safe to call from any transport thread: the first request runs the action,
+     * every later one is logged and dropped, so a client that repeats itself can never start a
+     * second closing cycle. A host with no channel refuses the request rather than failing it -
+     * the connection stays up and the caller keeps its session.
+     * <p>
+     * The action is expected to signal the shutdown and return, not to block until the host has
+     * exited: the caller is the connection that will close as the host goes down.
+     */
+    public void requestHostShutdown()
+    {
+        Runnable shutdown = hostShutdown.get();
+        if (shutdown == null)
+        {
+            Activator.logInfo("Client requested host shutdown (" + McpConstants.METHOD_HOST_SHUTDOWN
+                + "), but this host has no shutdown channel; the request is ignored."); //$NON-NLS-1$
+            return;
+        }
+        if (!hostShutdownRequested.compareAndSet(false, true))
+        {
+            Activator.logInfo("Client repeated host shutdown (" + McpConstants.METHOD_HOST_SHUTDOWN
+                + ") while already stopping; the request is ignored."); //$NON-NLS-1$
+            return;
+        }
+        shutdown.run();
     }
 
     /**

@@ -15,6 +15,15 @@ public class StdioHostApplication implements IApplication
     {
         boolean lockWorkspace() throws Exception;
         void initialize() throws Exception;
+        /**
+         * Arms the client-requested shutdown channel on the running MCP server. Called before the
+         * IPC listener exists, so a request that arrives during workspace loading is not lost, and
+         * before {@link #startCore}, so the channel is never live but unarmed.
+         *
+         * @param shutdown the action a {@code notifications/host_shutdown} request runs; the same
+         *            action the idle timer uses
+         */
+        void armHostShutdown(Runnable shutdown);
         void startCore(HeadlessLifetime lifetime) throws Exception;
         boolean ipcRunning();
         void stopContexts() throws Exception;
@@ -62,6 +71,10 @@ public class StdioHostApplication implements IApplication
             initialized = true;
             runtime.initialize();
             try (HeadlessLifetime lifetime = new HeadlessLifetime(idle, this::stop)) {
+                // One shutdown path for both triggers: the idle timer and a client's request run
+                // this same action, so the finally block below closes the workspace either way.
+                // A windowed host never arms it, and refuses the notification instead.
+                runtime.armHostShutdown(this::stop);
                 // Startup counts as work, including project restoration and import.
                 try (var startup = lifetime.tool()) { runtime.startCore(lifetime); }
                 if (!runtime.ipcRunning()) { throw new IllegalStateException("Headless IPC listener failed to start; inspect the EDT workspace log"); }

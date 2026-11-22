@@ -13,6 +13,7 @@ import com.ditrix.edt.mcp.server.McpServer;
 import com.ditrix.edt.mcp.server.ipc.StdioBootstrap;
 import com.ditrix.edt.mcp.server.protocol.ClientCapabilities;
 import com.ditrix.edt.mcp.server.protocol.GsonProvider;
+import com.ditrix.edt.mcp.server.protocol.McpConstants;
 import com.ditrix.edt.mcp.server.protocol.McpProtocolHandler;
 import com.ditrix.edt.mcp.server.protocol.jsonrpc.JsonRpcRequest;
 import com.google.gson.JsonParser;
@@ -22,6 +23,7 @@ import com.google.gson.JsonElement;
 /** One authenticated UDS peer with private capabilities, response waiters and notification sink. */
 public final class IpcConnection implements AutoCloseable
 {
+    private final McpServer server;
     private final McpProtocolHandler dispatcher;
     private final Consumer<String> sink;
     private final InterruptibleToolExecutor executor;
@@ -37,6 +39,7 @@ public final class IpcConnection implements AutoCloseable
 
     public IpcConnection(McpServer server, McpProtocolHandler dispatcher, Consumer<String> sink, Boolean plainTextMode)
     {
+        this.server = server;
         this.dispatcher = dispatcher; this.sink = sink; this.executor = new InterruptibleToolExecutor(server, dispatcher);
         this.plainTextMode = plainTextMode;
     }
@@ -65,6 +68,14 @@ public final class IpcConnection implements AutoCloseable
         else if (!initialized && !"ping".equals(request.getMethod()))
         {
             if (!id.isJsonNull()) { send(StdioBootstrap.error(id, -32600, "Initialize this MCP connection first")); }
+            return;
+        }
+        else if (McpConstants.METHOD_HOST_SHUTDOWN.equals(request.getMethod()))
+        {
+            // A notification: no response frame, and the connection's handshake secret plus this
+            // gate are the whole authorization. A host with no shutdown channel logs the refusal
+            // and keeps running.
+            server.requestHostShutdown();
             return;
         }
         if ("tools/call".equals(request.getMethod()))

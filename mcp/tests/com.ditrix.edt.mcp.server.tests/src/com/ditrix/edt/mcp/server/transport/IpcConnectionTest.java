@@ -102,6 +102,100 @@ public class IpcConnectionTest extends StdioTestSupport
         finally { registry.replaceAll(saved); }
     }
 
+    private static final String SHUTDOWN = "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/host_shutdown\"}";
+
+    private static IMcpTool sentinel(String name, String payload)
+    {
+        return new IMcpTool() {
+            public String getName() { return name; }
+            public String getDescription() { return "Shutdown sentinel"; }
+            public String getInputSchema() { return "{\"type\":\"object\",\"properties\":{}}"; }
+            public ResponseType getResponseType() { return ResponseType.JSON; }
+            public String execute(Map<String, String> arguments) { return payload; }
+        };
+    }
+
+    private static void awaitFrames(List<String> frames, int expected) throws Exception
+    {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (frames.size() < expected && System.nanoTime() < deadline) { Thread.sleep(5); }
+    }
+
+    @Test public void hostShutdownNotificationRunsItsChannelOnceAndNeverReplies() throws Exception
+    {
+        var registry = McpToolRegistry.getInstance(); var saved = registry.getAllTools();
+        try
+        {
+            registry.replaceAll(List.of(sentinel("test_shutdown", "{\"value\":\"alive\"}")));
+            List<String> frames = new CopyOnWriteArrayList<>();
+            var server = new com.ditrix.edt.mcp.server.McpServer();
+            java.util.concurrent.atomic.AtomicInteger shutdowns = new java.util.concurrent.atomic.AtomicInteger();
+            server.setHostShutdown(shutdowns::incrementAndGet);
+            try (var connection = new IpcConnection(server, new McpProtocolHandler(), frames::add))
+            {
+                connection.accept(init(1, false)); connection.accept(initialized());
+                assertEquals(1, frames.size());
+                connection.accept(SHUTDOWN);
+                assertEquals("A notification is never answered", 1, frames.size());
+                assertEquals(1, shutdowns.get());
+                // A repeat while the host is already stopping must not start a second cycle, and an
+                // id on it must not be answered either: the method is a notification, not a request.
+                connection.accept("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/host_shutdown\",\"id\":7}");
+                assertEquals("A repeat is a no-op, not a second closing cycle", 1, shutdowns.get());
+                assertEquals("An id on it must not produce a reply", 1, frames.size());
+            }
+        }
+        finally { registry.replaceAll(saved); }
+    }
+
+    @Test public void hostShutdownNotificationIsRefusedByAHostWithoutTheChannel() throws Exception
+    {
+        var registry = McpToolRegistry.getInstance(); var saved = registry.getAllTools();
+        try
+        {
+            registry.replaceAll(List.of(sentinel("test_shutdown", "{\"value\":\"alive\"}")));
+            List<String> frames = new CopyOnWriteArrayList<>();
+            // The windowed IDE: no channel armed, so the request is refused in the log - and the
+            // session is untouched, which is the half that matters to the user.
+            try (var connection = new IpcConnection(new com.ditrix.edt.mcp.server.McpServer(), new McpProtocolHandler(), frames::add))
+            {
+                connection.accept(init(1, false)); connection.accept(initialized());
+                connection.accept(SHUTDOWN);
+                assertEquals("A refused shutdown changes nothing on the wire", 1, frames.size());
+                connection.accept(call(2, "test_shutdown"));
+                awaitFrames(frames, 2);
+                assertEquals(2, frames.size());
+                var result = JsonParser.parseString(frames.get(1)).getAsJsonObject().getAsJsonObject("result");
+                assertEquals("{\"value\":\"alive\"}",
+                    result.getAsJsonObject("structuredContent").toString());
+            }
+        }
+        finally { registry.replaceAll(saved); }
+    }
+
+    @Test public void hostShutdownWaitsForInitializeLikeEveryOtherNotification() throws Exception
+    {
+        var registry = McpToolRegistry.getInstance(); var saved = registry.getAllTools();
+        try
+        {
+            registry.replaceAll(List.of());
+            List<String> frames = new CopyOnWriteArrayList<>();
+            var server = new com.ditrix.edt.mcp.server.McpServer();
+            java.util.concurrent.atomic.AtomicInteger shutdowns = new java.util.concurrent.atomic.AtomicInteger();
+            server.setHostShutdown(shutdowns::incrementAndGet);
+            try (var connection = new IpcConnection(server, new McpProtocolHandler(), frames::add))
+            {
+                connection.accept("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}");
+                connection.accept(SHUTDOWN);
+                assertEquals("An uninitialized peer cannot stop the host", 0, shutdowns.get());
+                connection.accept(init(1, false)); connection.accept(initialized());
+                connection.accept(SHUTDOWN);
+                assertEquals(1, shutdowns.get());
+            }
+        }
+        finally { registry.replaceAll(saved); }
+    }
+
     @Test public void actualUdsCarriesHandshakeRequestsAndPushedNotifications() throws Exception
     {
         var registry = new EndpointRegistry(temporary.getRoot().toPath(), temporary.newFolder().toPath());

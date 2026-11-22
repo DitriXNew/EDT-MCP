@@ -27,6 +27,17 @@ final class StdioHostPlatform implements StdioHostApplication.Runtime
         ServiceInitialization.startInitialization();
         ServiceInitialization.join();
     }
+    @Override public void armHostShutdown(Runnable shutdown) {
+        // The immersive host is the only one allowed to accept the request; the windowed EDT
+        // leaves the channel empty and logs the refusal. A host whose plugin is not active keeps
+        // running without a channel rather than failing to start over one optional request.
+        Activator activator = Activator.getDefault();
+        if (activator == null || activator.getMcpServer() == null) {
+            Activator.logError("Cannot arm the host shutdown channel: the MCP plugin is not active", null);
+            return;
+        }
+        activator.getMcpServer().setHostShutdown(shutdown);
+    }
     @Override public void startCore(HeadlessLifetime lifetime) {
         Activator.getDefault().startHeadlessCore(lifetime);
     }

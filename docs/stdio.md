@@ -45,6 +45,23 @@ Headless database updates use core synchronization callbacks: confirmed restruct
 
 The stdio drivers share 22 windowed response pins through `tests/e2e/read_host_contracts.py`. With the base and extension fixtures imported, 18 responses match byte for byte. The differences are `symbol-Calc` and `symbol-Вычисление` (EMF summaries, pinned in `stdio-read-headless.json`) and `source-full-Calc` and `source-range-Calc` (the optional interception footer). The Linux driver also checks real content from additional reads and confirmed English/Cyrillic writes by reading the exported files before another MCP call can repair them. Filesystem-wide module listing checks paths separately because traversal order is unspecified.
 
+## Stopping the host on request
+
+An idle timeout is not a control channel: a wrapper that has to release a workspace cannot wait 30 minutes, and killing the JVM leaves the workspace lock held and the model unsaved. A client can therefore ask for the same clean close the idle timer performs, with `notifications/host_shutdown` - a plugin extension to MCP, not a protocol method.
+
+The notification runs the identical action the idle timer runs (`StdioHostApplication.stop()`), so it reaches the one shutdown path: project contexts stopped, workspace saved, instance lock released. It is a notification and gets no reply; the connection closing as the host goes down is the acknowledgement. Acceptance is idempotent: a repeat while the host is already stopping is logged and dropped, never a second closing cycle. Like every request but `ping`, it is refused until that connection has initialized.
+
+Only the headless application arms the channel. The windowed IDE leaves it empty, refuses the notification with a log entry, and keeps the session - a client must never be able to close the user's IDE. The channel requires a live connection, so a client that has already disconnected cannot ask for anything; a wrapper that needs a guarantee keeps a bounded kill as its reserve.
+
+The sender is `com.ditrix.edt.mcp.server.ipc.HostShutdownClient` on the shipped runtime jar - the bootstrap already owns the framing and the handshake secret, so a shell script does not implement the protocol:
+
+```text
+java -cp <private root>/bootstrap/<install hash>/<sha256>.jar \
+     com.ditrix.edt.mcp.server.ipc.HostShutdownClient -data <workspace> [-timeout <seconds>]
+```
+
+It exits `0` when the host confirmed the request and exited, `1` when nothing confirmed within the timeout (a host running a plugin older than the notification lands here too, so the caller can fall back to a kill), and `2` when no host is registered. The workspace is the only key it needs; `-install` is accepted and ignored.
+
 A headless host exits cleanly after 30 minutes with no connected client and no running MCP tool or tracked background job, stopping project contexts and saving the workspace. Set the host JVM property `-Dedt.mcp.headlessIdleMinutes=<minutes>` to change the interval; `0` disables it. The timer restarts when the last client and last tool finish. A disconnected client's tool retains its lease until the operation actually finishes, even if its response waiter has detached. Windowed EDT continues to stay open until the user closes it.
 
 The owner's ERP measurements motivate this option: about 1.3 GB less RAM and 38% less CPU. The measured opening difference was only 2–3 seconds; this mode does not promise faster opening.
