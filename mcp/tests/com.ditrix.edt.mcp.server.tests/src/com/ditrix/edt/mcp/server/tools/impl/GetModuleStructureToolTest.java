@@ -89,15 +89,9 @@ public class GetModuleStructureToolTest
         assertTrue(BslMethodRecovery.isParseUnverified(module.eResource()));
         var diagnostic = BslMethodRecovery.firstSyntaxIssue(module.eResource());
         assertEquals(9, diagnostic.line());
-        // The message is rendered by the PLATFORM parser from its own message bundle, and the
-        // production it names is localized: under an English JVM the expectation reads
-        // "#EndRegion", under a Russian one "#КонецОбласти". Pinning either spelling makes this
-        // test a property of the machine's default locale, not of the tool. What the tool owes is
-        // that the diagnostic is reported with its location and the region end token - whichever
-        // dialect names it.
-        assertTrue(diagnostic.message(), diagnostic.message().contains("#"));
+        // EDT localizes this parser diagnostic, so accept either supported spelling.
         assertTrue(diagnostic.message(),
-            diagnostic.message().contains("EndRegion") || diagnostic.message().contains("\u041a\u043e\u043d\u0435\u0446\u041e\u0431\u043b\u0430\u0441\u0442\u0438")); //$NON-NLS-1$
+            diagnostic.message().contains("#EndRegion") || diagnostic.message().contains("#КонецОбласти")); //$NON-NLS-1$
 
         String result = new GetModuleStructureTool().formatStructure("Module.bsl", module, source, false, false, false);
         assertTrue(result, result.contains("EDT model methods: 4. Saved text declarations: 6."));
