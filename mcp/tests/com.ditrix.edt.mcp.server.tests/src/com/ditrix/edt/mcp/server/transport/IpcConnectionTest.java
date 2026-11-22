@@ -130,19 +130,28 @@ public class IpcConnectionTest extends StdioTestSupport
             List<String> frames = new CopyOnWriteArrayList<>();
             var server = new com.ditrix.edt.mcp.server.McpServer();
             java.util.concurrent.atomic.AtomicInteger shutdowns = new java.util.concurrent.atomic.AtomicInteger();
-            server.setHostShutdown(shutdowns::incrementAndGet);
+            var receipt = new java.util.concurrent.atomic.AtomicReference<java.util.function.Consumer<Boolean>>();
+            server.setHostShutdown(completion -> { shutdowns.incrementAndGet(); receipt.set(completion); });
             try (var connection = new IpcConnection(server, new McpProtocolHandler(), frames::add))
             {
                 connection.accept(init(1, false)); connection.accept(initialized());
                 assertEquals(1, frames.size());
+                connection.accept("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/host_shutdown\",\"id\":7}");
+                assertEquals("A request with an id must not stop the host", 0, shutdowns.get());
                 connection.accept(SHUTDOWN);
-                assertEquals("A notification is never answered", 1, frames.size());
+                assertEquals("No reply before cleanup", 1, frames.size());
                 assertEquals(1, shutdowns.get());
                 // A repeat while the host is already stopping must not start a second cycle, and an
                 // id on it must not be answered either: the method is a notification, not a request.
                 connection.accept("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/host_shutdown\",\"id\":7}");
                 assertEquals("A repeat is a no-op, not a second closing cycle", 1, shutdowns.get());
                 assertEquals("An id on it must not produce a reply", 1, frames.size());
+                receipt.get().accept(true);
+                assertEquals(2, frames.size());
+                var message = JsonParser.parseString(frames.get(1)).getAsJsonObject();
+                assertFalse(message.has("id"));
+                assertEquals("notifications/host_shutdown_complete", message.get("method").getAsString());
+                assertTrue(message.getAsJsonObject("params").get("success").getAsBoolean());
             }
         }
         finally { registry.replaceAll(saved); }
@@ -182,7 +191,7 @@ public class IpcConnectionTest extends StdioTestSupport
             List<String> frames = new CopyOnWriteArrayList<>();
             var server = new com.ditrix.edt.mcp.server.McpServer();
             java.util.concurrent.atomic.AtomicInteger shutdowns = new java.util.concurrent.atomic.AtomicInteger();
-            server.setHostShutdown(shutdowns::incrementAndGet);
+            server.setHostShutdown(completion -> shutdowns.incrementAndGet());
             try (var connection = new IpcConnection(server, new McpProtocolHandler(), frames::add))
             {
                 connection.accept("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}");

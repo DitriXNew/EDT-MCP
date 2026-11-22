@@ -22,6 +22,7 @@ public final class HeadlessLifetime implements AutoCloseable
     private int clients;
     private int tools;
     private boolean stopping;
+    private Runnable afterDrain;
 
     public HeadlessLifetime(Duration idle, Runnable shutdown)
     {
@@ -54,14 +55,32 @@ public final class HeadlessLifetime implements AutoCloseable
         return new Lease() {
             private boolean released;
             @Override public void close() {
+                Runnable ready = null;
                 synchronized (HeadlessLifetime.this) {
                     if (released) { return; }
                     released = true;
                     if (client) { clients--; } else { tools--; }
+                    if (tools == 0 && afterDrain != null) {
+                        ready = afterDrain;
+                        afterDrain = null;
+                    }
                     arm();
                 }
+                if (ready != null) { ready.run(); }
             }
         };
+    }
+
+    /** Stop admitting connections and operations, but leave existing sockets open for completion. */
+    public void requestShutdown(Runnable drained)
+    {
+        synchronized (this) {
+            if (stopping) { return; }
+            stopping = true;
+            cancel();
+            if (tools != 0) { afterDrain = drained; return; }
+        }
+        drained.run();
     }
 
     private synchronized void arm()
@@ -93,6 +112,7 @@ public final class HeadlessLifetime implements AutoCloseable
     @Override public synchronized void close()
     {
         stopping = true;
+        afterDrain = null;
         cancel();
         if (scheduler != null) { scheduler.shutdownNow(); }
     }

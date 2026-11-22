@@ -75,7 +75,10 @@ public final class IpcConnection implements AutoCloseable
             // A notification: no response frame, and the connection's handshake secret plus this
             // gate are the whole authorization. A host with no shutdown channel logs the refusal
             // and keeps running.
-            server.requestHostShutdown();
+            if (!tree.has("id")) {
+                server.requestHostShutdown(success -> send("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/host_shutdown_complete\",\"params\":{\"success\":"
+                    + success + "}}"));
+            }
             return;
         }
         if ("tools/call".equals(request.getMethod()))

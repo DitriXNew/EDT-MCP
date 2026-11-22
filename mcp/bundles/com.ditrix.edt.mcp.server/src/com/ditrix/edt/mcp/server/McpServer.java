@@ -18,6 +18,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 
 import com.ditrix.edt.mcp.server.preferences.PreferenceConstants;
 import com.ditrix.edt.mcp.server.protocol.McpConstants;
@@ -63,7 +64,7 @@ public class McpServer
      * headless application: the windowed IDE must never be closed by a client's request, so it
      * leaves this empty and the notification is refused in the log.
      */
-    private final AtomicReference<Runnable> hostShutdown = new AtomicReference<>();
+    private final AtomicReference<Consumer<Consumer<Boolean>>> hostShutdown = new AtomicReference<>();
 
     /** Whether the shutdown channel has already been fired; a repeat request is a no-op. */
     private final AtomicBoolean hostShutdownRequested = new AtomicBoolean();
@@ -303,7 +304,7 @@ public class McpServer
      * @param shutdown the action that begins a clean shutdown, or {@code null} to refuse the
      *            notification
      */
-    public void setHostShutdown(Runnable shutdown)
+    public void setHostShutdown(Consumer<Consumer<Boolean>> shutdown)
     {
         hostShutdown.set(shutdown);
         hostShutdownRequested.set(false);
@@ -320,9 +321,9 @@ public class McpServer
      * The action is expected to signal the shutdown and return, not to block until the host has
      * exited: the caller is the connection that will close as the host goes down.
      */
-    public void requestHostShutdown()
+    public void requestHostShutdown(Consumer<Boolean> completion)
     {
-        Runnable shutdown = hostShutdown.get();
+        var shutdown = hostShutdown.get();
         if (shutdown == null)
         {
             Activator.logInfo("Client requested host shutdown (" + McpConstants.METHOD_HOST_SHUTDOWN
@@ -335,7 +336,7 @@ public class McpServer
                 + ") while already stopping; the request is ignored."); //$NON-NLS-1$
             return;
         }
-        shutdown.run();
+        shutdown.accept(completion);
     }
 
     /**

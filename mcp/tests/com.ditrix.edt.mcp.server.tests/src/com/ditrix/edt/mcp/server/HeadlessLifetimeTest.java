@@ -99,6 +99,18 @@ public class HeadlessLifetimeTest
         }
     }
 
+    @Test public void requestedShutdownDrainsToolsButDoesNotWaitForItsOwnConnection() {
+        Clock clock = new Clock(); AtomicInteger drained = new AtomicInteger();
+        try (var lifetime = new HeadlessLifetime(IDLE, clock, () -> fail("Idle fired during shutdown"));
+             var requester = lifetime.connect(); var first = lifetime.tool(); var last = lifetime.tool()) {
+            lifetime.requestShutdown(drained::incrementAndGet);
+            lifetime.requestShutdown(() -> fail("Duplicate"));
+            assertNull(lifetime.connect()); assertNull(lifetime.tool());
+            first.close(); clock.fire(); assertEquals(0, drained.get());
+            last.close(); assertEquals(1, drained.get());
+        }
+    }
+
     @Test public void closeDisarmsQueuedExpiry() {
         Clock clock = new Clock();
         var lifetime = new HeadlessLifetime(IDLE, clock, () -> fail("Closed"));

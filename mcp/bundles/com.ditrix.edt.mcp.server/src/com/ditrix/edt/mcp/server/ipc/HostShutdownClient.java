@@ -13,6 +13,8 @@ import java.nio.channels.SocketChannel;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -164,33 +166,84 @@ public final class HostShutdownClient
             return ABSENT;
         }
 
-        try (var socket = new JsonFrames.Socket(SocketChannel.open(StandardProtocolFamily.UNIX)))
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(Math.max(0, timeoutMillis));
+        SocketChannel channel;
+        try { channel = SocketChannel.open(StandardProtocolFamily.UNIX); }
+        catch (IOException | RuntimeException e)
         {
+            err.println("edt-mcp-shutdown: cannot reach the host of " + workspace + " over its IPC socket: " + message(e));
+            return NOT_STOPPED;
+        }
+        ScheduledExecutorService closer = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "edt-mcp-shutdown-timeout"); t.setDaemon(true); return t;
+        });
+        try (var socket = new JsonFrames.Socket(channel))
+        {
+            closer.schedule(() -> { try { channel.close(); } catch (IOException ignored) { } },
+                Math.max(0, deadline - System.nanoTime()), TimeUnit.NANOSECONDS);
             socket.connect(UnixDomainSocketAddress.of(endpoint.socket()));
             IpcHandshake.client(socket, endpoint);
             socket.write("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}");
             String reply = socket.read();
-            if (reply == null || !JsonParser.parseString(reply).isJsonObject()
-                || !JsonParser.parseString(reply).getAsJsonObject().has("result"))
+            if (!isInitializeSuccess(reply))
             {
                 err.println("edt-mcp-shutdown: the host rejected the MCP initialize; it was not asked to stop.");
                 return NOT_STOPPED;
             }
             socket.write("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}");
-            // A notification is never answered. The host closing this connection during its own
-            // shutdown is the acknowledgement; the exit check below is what proves it happened.
             socket.write("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/host_shutdown\"}");
+            String receipt;
+            do { receipt = socket.read(); }
+            while (receipt != null && !isShutdownReceipt(receipt) && isUnrelatedNotification(receipt));
+            if (!isShutdownReceipt(receipt))
+            {
+                err.println("edt-mcp-shutdown: shutdown receipt was missing or reported failure.");
+                return NOT_STOPPED;
+            }
+            if (exitedBy(endpoint, deadline)) { return STOPPED; }
+            err.println("edt-mcp-shutdown: PID " + endpoint.pid() + " is still running after the shutdown request; the host did not close.");
+            return NOT_STOPPED;
         }
         catch (IOException | RuntimeException e)
         {
             err.println("edt-mcp-shutdown: cannot reach the host of " + workspace + " over its IPC socket: " + message(e));
             return NOT_STOPPED;
         }
+        finally { closer.shutdownNow(); }
+    }
 
-        if (exited(endpoint, timeoutMillis)) { return STOPPED; }
-        err.println("edt-mcp-shutdown: PID " + endpoint.pid() + " is still running "
-            + (timeoutMillis / 1000) + "s after the shutdown request; the host did not close.");
-        return NOT_STOPPED;
+    static boolean isInitializeSuccess(String frame)
+    {
+        try { return frame != null && JsonParser.parseString(frame).isJsonObject()
+            && JsonParser.parseString(frame).getAsJsonObject().has("result"); }
+        catch (RuntimeException e) { return false; }
+    }
+
+    static boolean isUnrelatedNotification(String frame)
+    {
+        try
+        {
+            JsonObject object = JsonParser.parseString(frame).getAsJsonObject();
+            return object.has("jsonrpc") && "2.0".equals(object.get("jsonrpc").getAsString())
+                && object.has("method") && !object.has("id")
+                && !"notifications/host_shutdown_complete".equals(object.get("method").getAsString());
+        }
+        catch (RuntimeException e) { return false; }
+    }
+
+    static boolean isShutdownReceipt(String frame)
+    {
+        try
+        {
+            JsonObject object = JsonParser.parseString(frame).getAsJsonObject();
+            var params = object.getAsJsonObject("params");
+            var success = params == null ? null : params.get("success");
+            return object.has("jsonrpc") && "2.0".equals(object.get("jsonrpc").getAsString())
+                && !object.has("id") && "notifications/host_shutdown_complete".equals(object.get("method").getAsString())
+                && success != null && success.isJsonPrimitive() && success.getAsJsonPrimitive().isBoolean()
+                && success.getAsBoolean();
+        }
+        catch (RuntimeException e) { return false; }
     }
 
     /**
@@ -203,14 +256,19 @@ public final class HostShutdownClient
      */
     static boolean exited(EndpointRegistry.Endpoint endpoint, long timeoutMillis)
     {
-        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(Math.max(0, timeoutMillis));
-        while (EndpointRegistry.live(endpoint))
+        return exitedBy(endpoint, System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(Math.max(0, timeoutMillis)));
+    }
+
+    private static boolean exitedBy(EndpointRegistry.Endpoint endpoint, long deadline)
+    {
+        while (true)
         {
-            if (System.nanoTime() - deadline >= 0) { return false; }
-            try { Thread.sleep(POLL_MILLIS); }
+            long remaining = deadline - System.nanoTime();
+            if (remaining <= 0) { return false; }
+            if (!EndpointRegistry.live(endpoint)) { return true; }
+            try { TimeUnit.NANOSECONDS.sleep(Math.min(remaining, TimeUnit.MILLISECONDS.toNanos(POLL_MILLIS))); }
             catch (InterruptedException e) { Thread.currentThread().interrupt(); return false; }
         }
-        return true;
     }
 
     /** The value that follows {@code name}, or {@code null} when it is absent or has none. */

@@ -49,7 +49,7 @@ The stdio drivers share 22 windowed response pins through `tests/e2e/read_host_c
 
 An idle timeout is not a control channel: a wrapper that has to release a workspace cannot wait 30 minutes, and killing the JVM leaves the workspace lock held and the model unsaved. A client can therefore ask for the same clean close the idle timer performs, with `notifications/host_shutdown` - a plugin extension to MCP, not a protocol method.
 
-The notification runs the identical action the idle timer runs (`StdioHostApplication.stop()`), so it reaches the one shutdown path: project contexts stopped, workspace saved, instance lock released. It is a notification and gets no reply; the connection closing as the host goes down is the acknowledgement. Acceptance is idempotent: a repeat while the host is already stopping is logged and dropped, never a second closing cycle. Like every request but `ping`, it is refused until that connection has initialized.
+An initialized IPC client can send this notification without an `id`. The host stops admitting new operations and waits for active tools and tracked background jobs to finish before closing the project contexts, saving the workspace and releasing its lock. There is no JSON-RPC response. After cleanup, the host sends a separate `notifications/host_shutdown_complete` notification with `params.success` to the requesting connection and then closes the transport. Repeated requests do not start another shutdown.
 
 Only the headless application arms the channel. The windowed IDE leaves it empty, refuses the notification with a log entry, and keeps the session - a client must never be able to close the user's IDE. The channel requires a live connection, so a client that has already disconnected cannot ask for anything; a wrapper that needs a guarantee keeps a bounded kill as its reserve.
 
@@ -60,7 +60,7 @@ java -cp <private root>/bootstrap/<install hash>/<sha256>.jar \
      com.ditrix.edt.mcp.server.ipc.HostShutdownClient -data <workspace> [-timeout <seconds>]
 ```
 
-It exits `0` when the host confirmed the request and exited, `1` when nothing confirmed within the timeout (a host running a plugin older than the notification lands here too, so the caller can fall back to a kill), and `2` when no host is registered. The workspace is the only key it needs; `-install` is accepted and ignored.
+The CLI uses one timeout for the IPC exchange and process exit. Exit `0` requires both a successful cleanup notification and exit of the original process; an EOF or a vanished process alone is not success. Exit `1` means the shutdown could not be confirmed, including failed cleanup or an older host that does not recognize the notification. Exit `2` means no live host was found. `-install` is accepted and ignored.
 
 A headless host exits cleanly after 30 minutes with no connected client and no running MCP tool or tracked background job, stopping project contexts and saving the workspace. Set the host JVM property `-Dedt.mcp.headlessIdleMinutes=<minutes>` to change the interval; `0` disables it. The timer restarts when the last client and last tool finish. A disconnected client's tool retains its lease until the operation actually finishes, even if its response waiter has detached. Windowed EDT continues to stay open until the user closes it.
 

@@ -2,6 +2,8 @@
 // Copyright (C) 2025-2026 DitriX
 package com.ditrix.edt.mcp.server;
 
+import java.util.function.Consumer;
+
 import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.core.runtime.Platform;
@@ -27,7 +29,7 @@ final class StdioHostPlatform implements StdioHostApplication.Runtime
         ServiceInitialization.startInitialization();
         ServiceInitialization.join();
     }
-    @Override public void armHostShutdown(Runnable shutdown) {
+    @Override public void armHostShutdown(Consumer<Consumer<Boolean>> shutdown) {
         // The immersive host is the only one allowed to accept the request; the windowed EDT
         // leaves the channel empty and logs the refusal. A host whose plugin is not active keeps
         // running without a channel rather than failing to start over one optional request.
@@ -42,8 +44,8 @@ final class StdioHostPlatform implements StdioHostApplication.Runtime
         Activator.getDefault().startHeadlessCore(lifetime);
     }
     @Override public boolean ipcRunning() { return StdioPluginSupport.isIpcRunning(); }
+    @Override public void stopTransport() { StdioPluginSupport.stop(); }
     @Override public void stopContexts() {
-        StdioPluginSupport.stop();
         CoreServiceLifecycleUtils.stopDefaultContexts();
     }
     @Override public void waitForContexts() { CoreServiceLifecycleUtils.waitForStartingContexts(); }

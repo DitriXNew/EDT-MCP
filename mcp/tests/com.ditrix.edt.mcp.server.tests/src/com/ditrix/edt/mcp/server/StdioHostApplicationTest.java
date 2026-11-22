@@ -37,12 +37,12 @@ public class StdioHostApplicationTest
         boolean ipc = true;
         boolean stopOnCore = true;
         StdioHostApplication app;
-        Runnable shutdown;
+        java.util.function.Consumer<java.util.function.Consumer<Boolean>> shutdown;
         final java.util.concurrent.CountDownLatch coreStarted = new java.util.concurrent.CountDownLatch(1);
         private void step(String name) { calls.add(name); if (name.equals(failAt)) { throw new IllegalStateException(name); } }
         public boolean lockWorkspace() { step("lock"); return lock; }
         public void initialize() { step("initialize"); }
-        public void armHostShutdown(Runnable action) { step("arm"); shutdown = action; }
+        public void armHostShutdown(java.util.function.Consumer<java.util.function.Consumer<Boolean>> action) { step("arm"); shutdown = action; }
         public void startCore(HeadlessLifetime lifetime) { step("core"); coreStarted.countDown(); if (stopOnCore) { app.stop(); } }
         public boolean ipcRunning() { step("ipc"); return ipc; }
         public void stopContexts() { step("stop"); }
@@ -60,24 +60,31 @@ public class StdioHostApplicationTest
         assertTrue(context.running); assertNull(runtime.failure);
     }
 
-    @Test public void clientRequestRunsTheSameCleanShutdownAsTheIdleTimer() throws Exception {
-        // One action serves both triggers, so a client's notification and the idle expiry cannot
-        // drift into two different closing paths: the hook the client fires is the very one that
-        // releases stopped.await(), and the finally block then runs in full.
+    @Test public void clientRequestReportsTheWorkspaceCleanupOutcome() throws Exception {
+        assertShutdownOutcome(null, true);
+        assertShutdownOutcome("save", false);
+    }
+
+    private static void assertShutdownOutcome(String failure, boolean success) throws Exception {
         Runtime runtime = new Runtime(); runtime.app = new StdioHostApplication(runtime);
         runtime.stopOnCore = false;
-        // The action returns Object (IApplication.start), so the future is typed loosely and the
-        // assertion pins the value.
-        java.util.concurrent.Future<Object> result =
-            java.util.concurrent.Executors.newSingleThreadExecutor().submit(
-                () -> runtime.app.start(new Context()));
-        assertTrue("The host must reach its core before a client can observe it",
-            runtime.coreStarted.await(10, java.util.concurrent.TimeUnit.SECONDS));
-        assertNotNull("The headless host must expose a shutdown channel", runtime.shutdown);
-        runtime.shutdown.run();
-        assertEquals(0, ((Integer) result.get(10, java.util.concurrent.TimeUnit.SECONDS)).intValue());
-        assertEquals(List.of("lock", "initialize", "arm", "core", "ipc", "stop", "wait", "save", "release"),
-            runtime.calls);
+        runtime.failAt = failure;
+        var executor = java.util.concurrent.Executors.newSingleThreadExecutor();
+        var completion = new java.util.concurrent.CompletableFuture<Boolean>();
+        try {
+            var result = executor.submit(() -> runtime.app.start(new Context()));
+            assertTrue(runtime.coreStarted.await(10, java.util.concurrent.TimeUnit.SECONDS));
+            assertNotNull(runtime.shutdown);
+            runtime.shutdown.accept(ok -> {
+                assertEquals("release", runtime.calls.get(runtime.calls.size() - 1));
+                completion.complete(ok);
+            });
+            assertEquals(Boolean.valueOf(success), completion.get(10, java.util.concurrent.TimeUnit.SECONDS));
+            assertEquals(Integer.valueOf(success ? 0 : 1), result.get(10, java.util.concurrent.TimeUnit.SECONDS));
+        } finally {
+            runtime.app.stop();
+            executor.shutdownNow();
+        }
     }
 
     @Test public void shutdownChannelIsArmedBeforeTheCoreStarts() {

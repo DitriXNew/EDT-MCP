@@ -57,7 +57,7 @@ public class HostShutdownClientTest
         private final List<String> methods = new CopyOnWriteArrayList<>();
         private final CountDownLatch shutdown = new CountDownLatch(1);
 
-        FakeHost(EndpointRegistry registry, boolean initializes) throws Exception
+        FakeHost(EndpointRegistry registry, Boolean initializes, Boolean receipt) throws Exception
         {
             Path socket = registry.directory().resolve("s-client-test");
             registry.publish(new EndpointRegistry.Endpoint(registry.workspace().toString(), "client-test",
@@ -65,10 +65,10 @@ public class HostShutdownClientTest
                 "2.26.1", EndpointRegistry.IPC_VERSION, socket.toString(), "test-secret"));
             server = ServerSocketChannel.open(StandardProtocolFamily.UNIX);
             server.bind(UnixDomainSocketAddress.of(socket));
-            worker.execute(() -> serve(registry, initializes));
+            worker.execute(() -> serve(registry, initializes, receipt));
         }
 
-        private void serve(EndpointRegistry registry, boolean initializes)
+        private void serve(EndpointRegistry registry, Boolean initializes, Boolean receipt)
         {
             try (var channel = server.accept(); var socket = new JsonFrames.Socket(channel))
             {
@@ -80,12 +80,17 @@ public class HostShutdownClientTest
                     String method = JsonParser.parseString(frame).getAsJsonObject().get("method").getAsString();
                     methods.add(method);
                     // The client blocks on its initialize reply, so a refusing host must still answer.
-                    if ("initialize".equals(method))
+                    if ("initialize".equals(method) && initializes != null)
                     {
                         socket.write(initializes ? "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}"
                             : "{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-32600,\"message\":\"no\"}}");
                     }
-                    if (SHUTDOWN_METHOD.equals(method)) { shutdown.countDown(); }
+                    if (SHUTDOWN_METHOD.equals(method)) {
+                        shutdown.countDown();
+                        if (receipt == null) { return; }
+                        socket.write("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/tools/list_changed\"}");
+                        socket.write("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/host_shutdown_complete\",\"params\":{\"success\":" + receipt + "}}");
+                    }
                 }
             }
             catch (Exception e) { /* The client hanging up is the normal end of the exchange. */ }
@@ -109,7 +114,7 @@ public class HostShutdownClientTest
     {
         var registry = registry();
         ByteArrayOutputStream messages = new ByteArrayOutputStream();
-        try (var host = new FakeHost(registry, true))
+        try (var host = new FakeHost(registry, true, true))
         {
             // Exit code 1: this FakeHost never exits, which is exactly the "did not stop" outcome -
             // and it is what a host running a plugin older than the notification reports too.
@@ -133,7 +138,7 @@ public class HostShutdownClientTest
     {
         var registry = registry();
         ByteArrayOutputStream messages = new ByteArrayOutputStream();
-        try (var host = new FakeHost(registry, false))
+        try (var host = new FakeHost(registry, false, null))
         {
             assertEquals(HostShutdownClient.NOT_STOPPED,
                 HostShutdownClient.stop(registry.directory(), registry.workspace(), 500, sink(messages)));
@@ -197,6 +202,49 @@ public class HostShutdownClientTest
         assertEquals(HostShutdownClient.NOT_STOPPED,
             HostShutdownClient.stop(registry.directory(), registry.workspace(), 500, sink(messages)));
         assertTrue(text(messages), text(messages).contains("cannot reach"));
+    }
+
+    @Test public void receiptMustMatchMethodAndBooleanSuccess()
+    {
+        assertTrue(HostShutdownClient.isShutdownReceipt("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/host_shutdown_complete\",\"params\":{\"success\":true}}"));
+        assertFalse(HostShutdownClient.isShutdownReceipt("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/host_shutdown_complete\",\"params\":{\"success\":false}}"));
+        assertFalse(HostShutdownClient.isShutdownReceipt("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/host_shutdown_complete\",\"params\":{\"success\":\"true\"}}"));
+        assertFalse(HostShutdownClient.isShutdownReceipt("{\"jsonrpc\":\"2.0\",\"method\":\"other\",\"params\":{\"success\":true}}"));
+        assertFalse(HostShutdownClient.isShutdownReceipt("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"notifications/host_shutdown_complete\",\"params\":{\"success\":true}}"));
+        assertTrue(HostShutdownClient.isUnrelatedNotification("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/tools/list_changed\"}"));
+    }
+
+    @Test public void invalidInitializeResponseIsRefused()
+    {
+        assertFalse(HostShutdownClient.isInitializeSuccess(null));
+        assertFalse(HostShutdownClient.isInitializeSuccess("{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{}}"));
+        assertTrue(HostShutdownClient.isInitializeSuccess("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}"));
+    }
+
+    @Test(timeout = 5000) public void connectedPeerThatNeverAnswersInitializeCannotHangTheClient() throws Exception
+    {
+        var registry = registry();
+        var messages = new ByteArrayOutputStream();
+        try (var host = new FakeHost(registry, null, null)) {
+            assertEquals(HostShutdownClient.NOT_STOPPED,
+                HostShutdownClient.stop(registry.directory(), registry.workspace(), 750, sink(messages)));
+            assertTrue(host.methods.contains("initialize"));
+            assertFalse(host.methods.contains(SHUTDOWN_METHOD));
+        }
+    }
+
+    @Test(timeout = 5000) public void closedConnectionAndFailedCleanupAreNotSuccess() throws Exception
+    {
+        for (Boolean receipt : new Boolean[] {null, false}) {
+            var registry = registry();
+            var messages = new ByteArrayOutputStream();
+            try (var host = new FakeHost(registry, true, receipt)) {
+                assertEquals(HostShutdownClient.NOT_STOPPED,
+                    HostShutdownClient.stop(registry.directory(), registry.workspace(), 1000, sink(messages)));
+                assertTrue(host.methods.contains(SHUTDOWN_METHOD));
+                assertTrue(text(messages), text(messages).contains("receipt was missing or reported failure"));
+            }
+        }
     }
 
     /** The wait that grades the outcome is bounded by the requested timeout, never open-ended. */
