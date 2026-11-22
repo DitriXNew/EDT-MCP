@@ -44,6 +44,11 @@ public final class OutputSizeGuard
      */
     public static final int MAX_CONTENT_CHARS = 100_000;
 
+    private static final String DEFAULT_ADVICE =
+        "pass a smaller 'limit' (or an 'offset' to page), a more specific " //$NON-NLS-1$
+            + "'modulePath' or 'fqn', a tighter line range, or request fewer " //$NON-NLS-1$
+            + "objects/sections so the response stays under the size cap."; //$NON-NLS-1$
+
     private OutputSizeGuard()
     {
         // Utility class - no instantiation
@@ -77,6 +82,19 @@ public final class OutputSizeGuard
      */
     public static String cap(String contentText, int maxChars)
     {
+        return cap(contentText, maxChars, DEFAULT_ADVICE);
+    }
+
+    /**
+     * Caps the text using a particular tool's supported narrowing options in the notice.
+     *
+     * @param contentText the human-readable content
+     * @param maxChars size budget in characters
+     * @param narrowingAdvice advice to show after the common message
+     * @return the original or capped text
+     */
+    public static String cap(String contentText, int maxChars, String narrowingAdvice)
+    {
         if (contentText == null)
         {
             return null;
@@ -89,7 +107,7 @@ public final class OutputSizeGuard
             return contentText;
         }
 
-        String notice = buildTruncationNotice(originalLength, budget);
+        String notice = buildTruncationNotice(originalLength, budget, narrowingAdvice);
         // Reserve room for the notice so the final string stays within budget. If
         // the notice itself is longer than the budget (a pathologically small
         // budget), keep the full notice rather than corrupting it.
@@ -113,12 +131,15 @@ public final class OutputSizeGuard
      */
     public static String buildTruncationNotice(int originalLength, int budget)
     {
+        return buildTruncationNotice(originalLength, budget, DEFAULT_ADVICE);
+    }
+
+    private static String buildTruncationNotice(int originalLength, int budget, String narrowingAdvice)
+    {
         return "\n\n---\n" //$NON-NLS-1$
             + "[OUTPUT TRUNCATED] This result exceeded the maximum output size of " //$NON-NLS-1$
             + budget + " characters (full size was " + originalLength //$NON-NLS-1$
             + " characters); it was cut to fit. Narrow the result and call again: " //$NON-NLS-1$
-            + "pass a smaller 'limit' (or an 'offset' to page), a more specific " //$NON-NLS-1$
-            + "'modulePath' or 'fqn', a tighter line range, or request fewer " //$NON-NLS-1$
-            + "objects/sections so the response stays under the size cap."; //$NON-NLS-1$
+            + narrowingAdvice;
     }
 }

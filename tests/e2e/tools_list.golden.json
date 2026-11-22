@@ -5748,6 +5748,9 @@
         "metadataType": {
           "type": "string"
         },
+        "offset": {
+          "type": "integer"
+        },
         "outputMode": {
           "enum": [
             "full",
@@ -5795,6 +5798,9 @@
           "type": "boolean"
         },
         "limit": {
+          "type": "integer"
+        },
+        "offset": {
           "type": "integer"
         },
         "outputMode": {
