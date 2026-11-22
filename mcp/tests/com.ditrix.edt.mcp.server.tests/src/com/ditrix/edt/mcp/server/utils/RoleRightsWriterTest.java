@@ -1258,8 +1258,8 @@ public class RoleRightsWriterTest
     @Test
     public void testResolveRightRefusesOutOfClassRightByEnglishAndRussianName() throws Exception
     {
-        Right read = rightNamed("Read", "Чтение"); //$NON-NLS-1$ //$NON-NLS-2$
-        Right update = rightNamed("Update", "Изменение"); //$NON-NLS-1$ //$NON-NLS-2$
+        Right read = rightNamed("Read", RU_READ); //$NON-NLS-1$
+        Right update = rightNamed("Update", RU_UPDATE); //$NON-NLS-1$
         EObject object = objectOfAnyClass();
         IRightInfosService rightInfos = mock(IRightInfosService.class);
         when(rightInfos.getRights(object)).thenReturn(java.util.Set.of(read, update)); //$NON-NLS-1$
@@ -1278,7 +1278,7 @@ public class RoleRightsWriterTest
     @Test
     public void testRightNotFoundListsClassRightsAndExplainsEmptySet() throws Exception
     {
-        Right read = rightNamed("Read", "Чтение"); //$NON-NLS-1$ //$NON-NLS-2$
+        Right read = rightNamed("Read", RU_READ); //$NON-NLS-1$
         EObject object = objectOfAnyClass();
         IRightInfosService empty = mock(IRightInfosService.class);
         when(empty.getEClassRights(object, object.eClass())).thenReturn(Collections.<Right>emptySet()); //$NON-NLS-1$

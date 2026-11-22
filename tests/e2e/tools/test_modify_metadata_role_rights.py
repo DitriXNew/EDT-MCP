@@ -429,3 +429,68 @@ def test_role_rights_combined_with_properties_is_refused_and_writes_nothing():
     assert_tree_unchanged(before,
                           "a refused role rights write must leave the project byte-for-byte as the "
                           "seed left it")
+
+
+def test_role_rights_two_valid_rights_commit_in_a_single_call():
+    """Two rights on ONE object submitted in a single call must both land - the per-right plan
+    applies each entry through its own AddRightValuesTask, so a regression that drops the second
+    entry (e.g. the sorter NPE workaround family) shows up here first."""
+    name = "E2ERoleRightsMulti"
+    fqn = _seed_role(name)
+
+    before_rows = _matrix_rows(_details(fqn))
+    assert all(obj != GUARDED_OBJECT for obj, _right, _value in before_rows), (
+        "setup: the guarded object must have no pre-existing matrix row; rows were %r" % before_rows)
+    assert_not_contains(_rights_file_text(name), GUARDED_OBJECT,
+                        "setup: the rights resource must not already carry the guarded object")
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": fqn,
+        "rights": [
+            {"object": GUARDED_OBJECT, "right": "Read", "value": "set"},
+            {"object": GUARDED_OBJECT, "right": "Update", "value": "set"},
+        ],
+    })
+    assert_ok(r, "two valid rights on one object in a single call")
+    structured = r.structured or {}
+    assert (structured.get("applied") or {}).get("rights") == 2, \
+        "both rights entries must be reported applied: %r" % (structured,)
+
+    poll_disk_contains(_rights_file(name), "<name>%s</name>" % GUARDED_OBJECT,
+                       "the guarded object must land on disk")
+    text = _rights_file_text(name)
+    assert_contains(text, "<name>Read</name>", "the Read cell must be authored")
+    assert_contains(text, "<name>Update</name>", "the Update cell must be authored")
+    after_rows = _matrix_rows(_details(fqn))
+    got = sorted((obj, right) for obj, right, _value in after_rows if obj == GUARDED_OBJECT)
+    assert got == [(GUARDED_OBJECT, "Read"), (GUARDED_OBJECT, "Update")], \
+        "both rights must render in the matrix: %r" % (got,)
+
+
+def test_role_rights_out_of_class_right_is_refused_and_writes_nothing():
+    """Class-scoped resolution: a right the object's class does not carry (Use belongs to HTTP/web
+    services, not to catalogs) must be REFUSED before any write, with the refusal naming the
+    rejected right and the class's own rights; the role must stay unchanged on disk and in the
+    rendered matrix. Before the per-class fix this call committed an inapplicable right that later
+    tripped the platform's rights sorter."""
+    name = "E2ERoleRightsOutOfClass"
+    fqn = _seed_role(name)
+
+    before = tree_snapshot()
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": fqn,
+        "rights": [{"object": GUARDED_OBJECT, "right": "Use", "value": "set"}],
+    })
+    e = assert_error(r, "a Use right addressed at a catalog (Use belongs to services, not catalogs)")
+    assert_error_quality(e, names=["Use"],
+                         ctx="the refusal must name the rejected right (Use) and the object, and "
+                             "list the rights the catalog actually carries")
+
+    assert_not_contains(_rights_file_text(name), GUARDED_OBJECT,
+                        "a refused out-of-class right must not add the guarded object's cell")
+    assert_tree_unchanged(before,
+                          "a refused out-of-class write must leave the project byte-for-byte as the "
+                          "seed left it")
+    rows = _matrix_rows(_details(fqn))
+    assert all(obj != GUARDED_OBJECT for obj, _right, _value in rows), (
+        "the refused right must not render in the role's matrix; rows were %r" % rows)

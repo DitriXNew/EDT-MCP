@@ -1523,11 +1523,25 @@ public final class RoleRightsWriter
         Collections.sort(valid);
         if (valid.isEmpty())
         {
-            // Some classes (e.g. HTTP services) grant access at the URL-template method level
-            // (mdclass.Method.Use) and carry no rights of their own; say that instead of printing
-            // an empty "Valid rights" list.
+            // Classes with an empty own-rights set carry their grant at a subobject level, which
+            // differs per kind: HTTP services at URL-template methods, web services at operations,
+            // enums and common modules through the configuration as a whole. Name the kind-specific
+            // grant level instead of printing an empty "Valid rights" list.
+            String hint;
+            if ("HTTPService".equals(object.eClass().getName()))
+            {
+                hint = " Access is granted at its URL-template methods (Method.Use).";
+            }
+            else if ("WebService".equals(object.eClass().getName()))
+            {
+                hint = " Access is granted at its operations (Method.Use).";
+            }
+            else
+            {
+                hint = "";
+            }
             return ToolResult.error("Right '" + rightName + "' is not applicable to '" + objectFqn //$NON-NLS-1$ //$NON-NLS-2$
-                + "': the object's class has no rights of its own (access is granted via its URL-template methods).").toJson(); //$NON-NLS-1$
+                + "': the object's class has no rights of its own." + hint).toJson(); //$NON-NLS-1$
         }
         return ToolResult.error("Right '" + rightName + "' is not valid for '" + objectFqn //$NON-NLS-1$ //$NON-NLS-2$
             + "'. Valid rights: " + String.join(", ", valid) + ".").toJson(); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
