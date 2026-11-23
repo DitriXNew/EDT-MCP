@@ -128,6 +128,29 @@ def test_files_mode_lists_matching_file_with_count():
 
 
 @e2e_test(tool="search_in_code", kind="read")
+def test_files_mode_limit_and_alias_fetch_the_complete_tail():
+    args = {"projectName": PROJECT, "query": r"A \+ B|// TEST DEBUG",
+            "isRegex": True, "outputMode": "files"}
+    first = call("search_in_code", {**args, "limit": 1})
+    alias = call("search_in_code", {**args, "maxResults": 1})
+    tail = call("search_in_code", {**args, "limit": 2, "maxResults": 1, "offset": 1})
+    for page in (first, alias, tail):
+        assert_ok(page, "files mode page")
+        assert_contains(page.text, "**Total matches:** 3 in **3** files",
+                        "all pages keep the scan totals")
+    assert first.text == alias.text, "maxResults remains an alias for limit"
+    assert_contains(first.text, "next page: offset=1", "the first page offers an exact offset")
+    assert_contains(first.text, "| CommonModules/Calc/Module.bsl | 1 |", "first path")
+    assert_not_contains(first.text, "CommonModules/DrySignal/Module.bsl", "limit=1")
+    assert_not_contains(first.text, "Configuration/ManagedApplicationModule.bsl", "limit=1")
+    assert_not_contains(tail.text, "CommonModules/Calc/Module.bsl", "the previous path was skipped")
+    assert_contains(tail.text, "| CommonModules/DrySignal/Module.bsl | 1 |", "second path")
+    assert_contains(tail.text, "| Configuration/ManagedApplicationModule.bsl | 1 |", "last path")
+    assert_not_contains(tail.text, "next page", "the final page has no continuation")
+    assert_no_diff("paging must not touch the project on disk")
+
+
+@e2e_test(tool="search_in_code", kind="read")
 def test_metadatatype_filter_scopes_search_to_folder():
     """metadataType=commonModules restricts the walk to CommonModules/*. The literal
     "// TEST DEBUG" lives ONLY in Configuration/ManagedApplicationModule.bsl, which is

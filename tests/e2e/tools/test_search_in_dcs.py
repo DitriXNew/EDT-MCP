@@ -219,7 +219,7 @@ def test_full_mode_reports_the_display_path_and_a_template_fqn_dcs_can_open():
 @e2e_test(tool="search_in_dcs", kind="write-metadata")
 def test_modes_mask_limit_regex_and_case_over_several_templates():
     """Two reports and one common template carry MARKER_1/2/3. The modes must agree with each
-    other, fileMask must scope by the path without src/, limit must cap details but never counts."""
+    other, fileMask scopes paths without src/, and limit caps both detail and file rows, not totals."""
     p1 = _seed_report("E2EDcsSearch1", MARKER + "1")
     p2 = _seed_report("E2EDcsSearch2", MARKER + "2")
     p3 = _seed_common_template("E2EDcsSearchCommon", MARKER + "3")
@@ -234,6 +234,16 @@ def test_modes_mask_limit_regex_and_case_over_several_templates():
     assert rows[p1][0].startswith("Report.E2EDcsSearch1.Template."), rows[p1]
     total, matched_files = _count_totals(files.text)
     assert matched_files == 3 and total == sum(count for _t, count in rows.values()), files.text
+
+    page1 = _search(MARKER, outputMode="files", limit=1)
+    page2 = _search(MARKER, outputMode="files", limit=2, offset=1)
+    for page in (page1, page2):
+        assert_ok(page, "files mode page")
+        assert _count_totals(page.text) == (total, 3), page.text
+    assert _files_rows(page1.text) == {p3: rows[p3]}, page1.text
+    assert _files_rows(page2.text) == {p1: rows[p1], p2: rows[p2]}, page2.text
+    assert_contains(page1.text, "next page: offset=1", "the first page gives a usable offset")
+    assert_not_contains(page2.text, "next page", "all three files were returned")
 
     count = _search(MARKER, outputMode="count")
     assert_ok(count, "count mode")

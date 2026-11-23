@@ -83,9 +83,11 @@ public class SearchInCodeTool implements IMcpTool
             .booleanProperty("isRegex", //$NON-NLS-1$
                 "Treat query as a regular expression. Default: false") //$NON-NLS-1$
             .integerProperty("limit", //$NON-NLS-1$
-                "Max matches returned with context. Default: 100, max: 500") //$NON-NLS-1$
+                "Max matches (full/lines) or file rows (files). Default: 100, max: 500") //$NON-NLS-1$
             .integerProperty(KEY_MAX_RESULTS,
                 "Deprecated alias for 'limit'. Default: 100, max: 500") //$NON-NLS-1$
+            .integerProperty("offset", //$NON-NLS-1$
+                "Skip this many matched files in path order (files mode only, default: 0)") //$NON-NLS-1$
             .integerProperty(KEY_CONTEXT_LINES,
                 "Lines of context before/after each match. Default: 2, max: 5") //$NON-NLS-1$
             .stringProperty("fileMask", //$NON-NLS-1$
@@ -165,6 +167,7 @@ public class SearchInCodeTool implements IMcpTool
         // Clamp limits
         maxResults = Pagination.clampLimit(maxResults, ABSOLUTE_MAX_RESULTS);
         contextLines = Math.min(Math.max(0, contextLines), MAX_CONTEXT_LINES);
+        int offset = Math.max(0, JsonUtils.extractIntArgument(params, "offset", 0)); //$NON-NLS-1$
 
         // Get project
         ProjectContext ctx = ProjectContext.of(projectName);
@@ -232,7 +235,7 @@ public class SearchInCodeTool implements IMcpTool
         }
 
         // Format output
-        return SearchResultFormatter.forCode().format(outputMode, query, search);
+        return SearchResultFormatter.forCode().format(outputMode, query, search, maxResults, offset);
     }
 
     /**

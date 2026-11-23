@@ -7,6 +7,8 @@
 package com.ditrix.edt.mcp.server.tools.impl;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 
 import java.util.HashMap;
 import java.util.Locale;
@@ -94,7 +96,7 @@ public class SearchInCodeRenderingPinTest
             + ALPHA_SECTION
             + "### CommonModules/Beta/Module.bsl\n\n" //$NON-NLS-1$
             + BETA_LINE_1,
-            search("needle", "limit", "2")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            search("needle", "limit", "2", "offset", "2")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
     }
 
     @Test
@@ -156,7 +158,7 @@ public class SearchInCodeRenderingPinTest
     public void testCountModeText()
     {
         assertEquals("## Search Count for \"needle\"\n\n**Total matches:** 4 in **3** files\n", //$NON-NLS-1$
-            search("needle", "outputMode", "count")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            search("needle", "outputMode", "count", "limit", "1", "offset", "2")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$ //$NON-NLS-7$
     }
 
     @Test
@@ -168,6 +170,33 @@ public class SearchInCodeRenderingPinTest
             + MarkdownUtils.tableRow(BETA, "2") //$NON-NLS-1$
             + MarkdownUtils.tableRow(DOC, "1"), //$NON-NLS-1$
             search("needle", "outputMode", "files")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    @Test
+    public void testFilesModeUsesAliasAndLimitTakesPrecedence()
+    {
+        String alias = search("needle", "outputMode", "files", "maxResults", "1"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+        assertTrue(alias, alias.contains("**Total matches:** 4 in **3** files (showing 1-1 of 3; next page: offset=1)")); //$NON-NLS-1$
+        assertTrue(alias, alias.contains(MarkdownUtils.tableRow(ALPHA, "1"))); //$NON-NLS-1$
+        assertFalse(alias, alias.contains(BETA));
+        String limit = search("needle", "outputMode", "files", "maxResults", "1", "limit", "2", "offset", "1"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$ //$NON-NLS-7$ //$NON-NLS-8$ //$NON-NLS-9$
+        assertTrue(limit, limit.contains("**Total matches:** 4 in **3** files (showing 2-3 of 3)")); //$NON-NLS-1$
+        assertTrue(limit, limit.contains(MarkdownUtils.tableRow(BETA, "2"))); //$NON-NLS-1$
+        assertTrue(limit, limit.contains(MarkdownUtils.tableRow(DOC, "1"))); //$NON-NLS-1$
+        assertFalse(limit, limit.contains(ALPHA));
+        assertFalse(limit, limit.contains("next page")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testFilesModeClampsNegativeOffsetAndLimitAndHandlesOutOfRangeOffset()
+    {
+        String first = search("needle", "outputMode", "files", "limit", "1"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+        assertEquals(first, search("needle", "outputMode", "files", "limit", "0", "offset", "-1")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$ //$NON-NLS-7$
+        String pastEnd = search("needle", "outputMode", "files", "offset", "2147483647"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+        assertTrue(pastEnd, pastEnd.contains("**Total matches:** 4 in **3** files")); //$NON-NLS-1$
+        assertTrue(pastEnd, pastEnd.contains("No files on this page (offset=2147483647)")); //$NON-NLS-1$
+        assertFalse(pastEnd, pastEnd.contains("No matches found.")); //$NON-NLS-1$
+        assertFalse(pastEnd, pastEnd.contains("next page")); //$NON-NLS-1$
     }
 
     @Test
@@ -193,7 +222,7 @@ public class SearchInCodeRenderingPinTest
 
         assertEquals("## Search Count for \"needle\"\n\n**Total matches:** 2 in **2** files\n" //$NON-NLS-1$
             + "**Warning:** 1 file(s) could not be read\n", //$NON-NLS-1$
-            search("needle", "outputMode", "count")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            search("needle", "outputMode", "count", "limit", "1", "offset", "2")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
         assertEquals("## Search Files for \"absent\"\n\n**Total matches:** 0 in **0** files\n\n" //$NON-NLS-1$
             + "**Warning:** 1 file(s) could not be read\n\nNo matches found.\n", //$NON-NLS-1$
             search("absent", "outputMode", "files")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
