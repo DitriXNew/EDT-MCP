@@ -9,9 +9,11 @@ import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
-import java.util.stream.Collectors;
+import java.util.function.Function;
 
 import javax.xml.stream.XMLStreamException;
 import javax.xml.stream.XMLStreamReader;
@@ -19,14 +21,19 @@ import javax.xml.stream.XMLStreamReader;
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IResource;
+import org.eclipse.core.runtime.Platform;
+import org.eclipse.emf.ecore.EObject;
 
 import com._1c.g5.v8.bm.core.IBmObject;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicTemplate;
 import com._1c.g5.v8.dt.metadata.mdclass.DataProcessor;
 import com._1c.g5.v8.dt.metadata.mdclass.ExternalDataProcessor;
+import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.TemplateType;
+import com._1c.g5.v8.dt.moxel.LanguageInfo;
 import com._1c.g5.v8.dt.moxel.SpreadsheetDocument;
+import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.HostKind;
 
 /** Protects an owned spreadsheet when EDT's editor has blanked its in-memory language description. */
@@ -52,7 +59,8 @@ public final class SpreadsheetRenameGuard
      * descriptions in memory during initialization when a synonym for the editing language is
      * absent; a later rename then makes that loss permanent (#1015).
      */
-    public static String refusal(IProject project, MdObject owner, String ownerFqn)
+    public static String refusal(IProject project, MdObject owner, String ownerFqn,
+        SpreadsheetRenameOwners.Plan planned, int groups)
     {
         if (HostKind.current() != HostKind.WINDOWED || !(owner instanceof DataProcessor
             || owner instanceof ExternalDataProcessor))
@@ -60,16 +68,81 @@ public final class SpreadsheetRenameGuard
             return null;
         }
         List<Candidate> candidates = ReadToolExecution.readOnHost(project, "Read saved spreadsheet language risk", //$NON-NLS-1$
-            () -> candidates(project, owner));
+            () -> candidates(project, owner, BasicTemplate::getTemplate));
+        String baseRefusal = refusal(project, ownerFqn, candidates, false);
+        if (baseRefusal != null || groups == 1 || !(owner instanceof DataProcessor))
+        {
+            return baseRefusal;
+        }
+        if (planned == null || !planned.covers(SpreadsheetRenameOwners.capture(project, owner), groups))
+        {
+            return SpreadsheetRenameOwners.changedScope();
+        }
+        var generator = Activator.getDefault().getTopObjectFqnGenerator();
+        if (generator == null)
+        {
+            return SpreadsheetRenameOwners.changedScope();
+        }
+        for (var counterpart : planned.counterparts())
+        {
+            var model = BmModelResolver.resolve(counterpart.project());
+            if (!model.isAvailable())
+            {
+                return SpreadsheetRenameOwners.changedScope();
+            }
+            List<Candidate> extension = BmTransactions.read(model.getModel(), "Read extension spreadsheet language risk", //$NON-NLS-1$
+                (tx, monitor) -> {
+                    DataProcessor affectedOwner = counterpart.resolve(tx);
+                    if (affectedOwner == null)
+                    {
+                        return null;
+                    }
+                    // Inspect an already attached workbook by its native BM address. Do not
+                    // materialize an external property through a potentially file-backed getter.
+                    return candidates(counterpart.project(), affectedOwner, template -> {
+                        String contentFqn = generator.generateExternalPropertyFqn(template,
+                            MdClassPackage.Literals.BASIC_TEMPLATE__TEMPLATE);
+                        return contentFqn == null ? null : tx.getTopObjectByFqn(contentFqn);
+                    });
+                });
+            if (extension == null)
+            {
+                return SpreadsheetRenameOwners.changedScope();
+            }
+            String extensionRefusal = refusal(counterpart.project(), ownerFqn, extension, true);
+            if (extensionRefusal != null)
+            {
+                return extensionRefusal;
+            }
+        }
+        return null;
+    }
+
+    private static String refusal(IProject project, String ownerFqn, List<Candidate> candidates, boolean extension)
+    {
         for (Candidate candidate : candidates)
         {
-            LanguageKey lost = savedDescription(candidate);
+            var evidence = secureEvidence(candidate);
+            if (extension && !evidence.safeReaderAvailable())
+            {
+                return "EDT has a blank language description in spreadsheet template '" //$NON-NLS-1$
+                    + candidate.templateName() + "' in extension project '" + project.getName() //$NON-NLS-1$
+                    + "', and its saved description cannot be verified safely. Nothing was renamed. " //$NON-NLS-1$
+                    + "Preserve unsaved edits, close the affected editor and reload the template from " //$NON-NLS-1$
+                    + "disk or set the missing language synonym before retrying."; //$NON-NLS-1$
+            }
+            // On filesystem providers without descriptor-relative support (including Windows),
+            // keep the already-addressed owner's existing scope. Never use this fallback to read
+            // files in the additionally affected extension projects.
+            LanguageKey lost = evidence.availability() == ProjectSpreadsheetReader.Availability.UNSUPPORTED_PROVIDER
+                ? savedDescription(candidate) : evidence.loss();
             if (lost != null)
             {
                 return "Renaming '" + MetadataTypeUtils.toCanonicalEnglishFqn(ownerFqn) //$NON-NLS-1$
                     + "' would erase the saved language description for '" + lost.id() //$NON-NLS-1$
                     + "' in spreadsheet template '" + candidate.templateName() //$NON-NLS-1$
-                    + "'. Nothing was renamed. Preserve any unsaved edits, close the affected template " //$NON-NLS-1$
+                    + "' in project '" + project.getName() + "'. Nothing was renamed. Preserve any unsaved " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "edits, close the affected template " //$NON-NLS-1$
                     + "editor and reload the template from disk before retrying. EDT may otherwise keep " //$NON-NLS-1$
                     + "clearing the description unless that language has a synonym in the active editing language."; //$NON-NLS-1$
             }
@@ -78,7 +151,8 @@ public final class SpreadsheetRenameGuard
     }
 
     /** Only the addressed owner's attached spreadsheets; never extend the scan to the project. */
-    private static List<Candidate> candidates(IProject project, MdObject owner)
+    private static List<Candidate> candidates(IProject project, MdObject owner,
+        Function<BasicTemplate, EObject> content)
     {
         if (!(owner instanceof IBmObject bmOwner) || !bmOwner.bmIsTop())
         {
@@ -90,17 +164,13 @@ public final class SpreadsheetRenameGuard
         for (BasicTemplate template : templates)
         {
             if (template.getTemplateType() != TemplateType.SPREADSHEET_DOCUMENT
-                || !(template.getTemplate() instanceof SpreadsheetDocument book)
+                || !(content.apply(template) instanceof SpreadsheetDocument book)
                 || !(book instanceof IBmObject bmBook) || !bmBook.bmIsTop() || bmBook.bmGetNamespace() == null
                 || book.getLanguageSettings() == null)
             {
                 continue;
             }
-            Set<LanguageKey> blank = book.getLanguageSettings().getLanguages().stream()
-                .filter(language -> blank(language.getDescription()))
-                .filter(language -> !blank(language.getLanguageId()) && !blank(language.getLanguageCode()))
-                .map(language -> new LanguageKey(language.getLanguageId(), language.getLanguageCode()))
-                .collect(Collectors.toSet());
+            Set<LanguageKey> blank = uniquelyBlank(book.getLanguageSettings().getLanguages());
             if (!blank.isEmpty())
             {
                 try
@@ -121,9 +191,54 @@ public final class SpreadsheetRenameGuard
         return candidates;
     }
 
+    /**
+     * Count occurrences before considering their descriptions. Multiple entries with the same key
+     * are ambiguous, even when only one of them has a blank description.
+     */
+    static Set<LanguageKey> uniquelyBlank(Iterable<? extends LanguageInfo> languages)
+    {
+        Set<LanguageKey> visited = new HashSet<>();
+        Set<LanguageKey> blankKeys = new HashSet<>();
+        for (LanguageInfo language : languages)
+        {
+            var key = new LanguageKey(language.getLanguageId(), language.getLanguageCode());
+            if (blank(key.id()) || blank(key.code()))
+            {
+                continue;
+            }
+            if (!visited.add(key))
+            {
+                blankKeys.remove(key);
+            }
+            else if (blank(language.getDescription()))
+            {
+                blankKeys.add(key);
+            }
+        }
+        return blankKeys;
+    }
+
     private static boolean blank(String description)
     {
         return description == null || description.isEmpty();
+    }
+
+    private static ProjectSpreadsheetReader.Evidence secureEvidence(Candidate candidate)
+    {
+        // The stock Windows provider does not implement SecureDirectoryStream. Do not even
+        // open the volume's directory when no safe descriptor-relative read can follow.
+        if (Platform.OS_WIN32.equals(Platform.getOS()))
+        {
+            return new ProjectSpreadsheetReader.Evidence(
+                ProjectSpreadsheetReader.Availability.UNSUPPORTED_PROVIDER, null);
+        }
+        IFile file = candidate.file();
+        if (file.getLocation() == null || file.getProject().getLocation() == null)
+        {
+            return new ProjectSpreadsheetReader.Evidence(ProjectSpreadsheetReader.Availability.UNVERIFIED, null);
+        }
+        return ProjectSpreadsheetReader.read(file.getProject().getLocation().toFile().toPath(),
+            file.getLocation().toFile().toPath(), candidate.blank());
     }
 
     private static LanguageKey savedDescription(Candidate candidate)
@@ -191,7 +306,8 @@ public final class SpreadsheetRenameGuard
             {
                 return null;
             }
-            LanguageKey loss = null;
+            Set<LanguageKey> visited = new HashSet<>();
+            Set<LanguageKey> possibleLoss = new LinkedHashSet<>();
             while (xml.nextTag() == XMLStreamReader.START_ELEMENT)
             {
                 if (element(xml, "currentLanguage") || element(xml, "defaultLanguage")) //$NON-NLS-1$ //$NON-NLS-2$
@@ -226,12 +342,16 @@ public final class SpreadsheetRenameGuard
                     }
                 }
                 LanguageKey key = new LanguageKey(id, code);
-                if (!blank(description) && modelBlank.contains(key) && loss == null)
+                if (!visited.add(key))
                 {
-                    loss = key;
+                    possibleLoss.remove(key);
+                }
+                else if (modelBlank.contains(key) && !blank(description))
+                {
+                    possibleLoss.add(key);
                 }
             }
-            return loss;
+            return possibleLoss.stream().findFirst().orElse(null);
         }
         finally
         {

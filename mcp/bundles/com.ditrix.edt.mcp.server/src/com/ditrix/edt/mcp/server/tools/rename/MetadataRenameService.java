@@ -77,6 +77,7 @@ import com.ditrix.edt.mcp.server.utils.ReferencedTopObjects;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.SpreadsheetRenameGuard;
+import com.ditrix.edt.mcp.server.utils.SpreadsheetRenameOwners;
 import com.ditrix.edt.mcp.server.utils.SubsystemUtils;
 import com.ditrix.edt.mcp.server.utils.VendorSupportGuard;
 
@@ -474,6 +475,7 @@ public class MetadataRenameService
         Collection<IRefactoring> refactorings;
         // EDT's pass below takes no monitor: a preview already stopped must not start it.
         checkCanceled();
+        var spreadsheetOwners = confirm ? SpreadsheetRenameOwners.capture(project, targetObject) : null;
         try
         {
             refactorings = refactoringService.createMdObjectRenameRefactoring(targetObject, newName);
@@ -514,7 +516,8 @@ public class MetadataRenameService
                 // Execute mode - perform the rename, applying any disabled indices
                 return (java.util.function.Supplier<String>)() -> performRename(project, objectFqn, newName,
                     refactorings, disableRequest, expectedHash, progress,
-                    "metadata object", () -> SpreadsheetRenameGuard.refusal(project, targetObject, objectFqn)); //$NON-NLS-1$
+                    "metadata object", () -> SpreadsheetRenameGuard.refusal(project, targetObject, objectFqn, //$NON-NLS-1$
+                        spreadsheetOwners, refactorings.size()));
             }
         }).get();
     }

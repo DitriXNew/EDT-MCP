@@ -10,17 +10,23 @@ import static org.junit.Assert.assertTrue;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 
 import javax.xml.stream.XMLStreamException;
 
+import org.eclipse.emf.common.util.URI;
 import org.junit.Assume;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
 
+import com._1c.g5.v8.dt.moxel.MoxelFactory;
 import com.ditrix.edt.mcp.server.utils.SpreadsheetRenameGuard.LanguageKey;
 
 public class SpreadsheetRenameGuardTest
@@ -96,6 +102,72 @@ public class SpreadsheetRenameGuardTest
         ByteArrayInputStream input = bytes(source);
         assertEquals(RUSSIAN, SpreadsheetRenameGuard.lostDescription(input, Set.of(RUSSIAN)));
         assertTrue("only the bounded language header is read", input.available() >= 896 * 1024);
+    }
+
+    @Test
+    public void duplicateSavedPairNeverProvesLossButAnotherUniquePairCan() throws Exception
+    {
+        String source = saved("<description>Русский</description>").replace("</languageSettings>",
+            "<languageInfo><id>ru</id><code>Русский</code><description/></languageInfo></languageSettings>");
+        assertNull(SpreadsheetRenameGuard.lostDescription(bytes(source), Set.of(RUSSIAN)));
+        var english = new LanguageKey("en", "English");
+        assertEquals(english, SpreadsheetRenameGuard.lostDescription(bytes(source), Set.of(english, RUSSIAN)));
+    }
+
+    @Test
+    public void duplicateModelPairNeverProvesLossEvenWithOneBlankEntry()
+    {
+        var first = MoxelFactory.eINSTANCE.createLanguageInfo();
+        first.setLanguageId("ru");
+        first.setLanguageCode("Русский");
+        var second = MoxelFactory.eINSTANCE.createLanguageInfo();
+        second.setLanguageId("ru");
+        second.setLanguageCode("Русский");
+        second.setDescription("Русский");
+        assertEquals(Set.of(RUSSIAN), SpreadsheetRenameGuard.uniquelyBlank(List.of(first)));
+        assertTrue(SpreadsheetRenameGuard.uniquelyBlank(List.of(first, second)).isEmpty());
+        assertTrue(SpreadsheetRenameGuard.uniquelyBlank(List.of(second, first)).isEmpty());
+    }
+
+    @Test
+    public void aDifferentExtensionCounterpartOrNativeGroupCountInvalidatesThePlan()
+    {
+        var original = new SpreadsheetRenameOwners.Counterpart(null, URI.createURI("urn:original"),
+            UUID.randomUUID(), UUID.randomUUID());
+        var replacement = new SpreadsheetRenameOwners.Counterpart(null, original.uri(),
+            UUID.randomUUID(), original.baseUuid());
+        var plan = new SpreadsheetRenameOwners.Plan(List.of(original));
+        assertTrue(plan.covers(new SpreadsheetRenameOwners.Plan(List.of(original)), 2));
+        assertTrue(!plan.covers(new SpreadsheetRenameOwners.Plan(List.of(original)), 1));
+        assertTrue(!plan.covers(new SpreadsheetRenameOwners.Plan(List.of(replacement)), 2));
+        assertTrue(!plan.covers(new SpreadsheetRenameOwners.Plan(null), 2));
+    }
+
+    @Test
+    public void secureReaderFindsDescriptionInAnOrdinaryOwnedFileWhenSupported() throws Exception
+    {
+        Path project = temporary.newFolder("project").toPath().toRealPath();
+        Path template = project.resolve("Template.mxlx");
+        Files.writeString(template, saved("<description>Русский</description>"));
+        var read = ProjectSpreadsheetReader.read(project, template, Set.of(RUSSIAN));
+        Assume.assumeTrue(read.availability() != ProjectSpreadsheetReader.Availability.UNSUPPORTED_PROVIDER);
+        assertEquals(ProjectSpreadsheetReader.Availability.SECURE, read.availability());
+        assertEquals(RUSSIAN, read.loss());
+    }
+
+    @Test
+    public void nonSecureProviderDoesNotReadTheCandidate() throws Exception
+    {
+        Path archive = temporary.getRoot().toPath().resolve("project.zip");
+        try (var filesystem = FileSystems.newFileSystem(archive, Map.of("create", "true")))
+        {
+            Path project = Files.createDirectory(filesystem.getPath("/project"));
+            Path template = project.resolve("Template.mxlx");
+            Files.writeString(template, saved("<description>Русский</description>"));
+            var read = ProjectSpreadsheetReader.read(project, template, Set.of(RUSSIAN));
+            assertEquals(ProjectSpreadsheetReader.Availability.UNSUPPORTED_PROVIDER, read.availability());
+            assertNull(read.loss());
+        }
     }
 
     @Test
