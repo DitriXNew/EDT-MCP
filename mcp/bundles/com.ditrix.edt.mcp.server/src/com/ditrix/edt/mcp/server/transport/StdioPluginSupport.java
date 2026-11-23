@@ -100,11 +100,13 @@ public final class StdioPluginSupport
             EndpointRegistry.atomicWrite(directory.resolve("previous"), previous == null ? "" : previous + "\n");
             EndpointRegistry.atomicWrite(directory.resolve("current"), current + "\n");
             cleanupRuntimes(directory, current, previous, delete);
-            // Falling back to the previous entry is only safe when that entry is really there and
-            // really usable: an absent or refused file would be advertised as a working launcher.
+            // Falling back to the previous entry is only safe for one failure: the atomic replace
+            // of a checked, readable launcher. Every other error - a refused private-storage check,
+            // an unreadable file, a first install with no entry - must reach the caller, or an
+            // unusable path would be advertised as a working launcher.
             boolean usable = usableEntry(destination);
             try { writeEntry.write(destination, entry); }
-            catch (IOException e)
+            catch (EntryReplaceRefusedException e)
             {
                 if (!usable || !usableEntry(destination)) { throw e; }
                 Log.warning("Cannot update the stdio entry (" + e.getClass().getSimpleName()
@@ -115,14 +117,26 @@ public final class StdioPluginSupport
         }
     }
 
-    /** True when the entry is present, a regular private file and readable - a usable launcher. */
+    /**
+     * A refused atomic replace of the entry. Only this failure may fall back to the previous
+     * entry: the file was checked and readable, and the package around it is unchanged.
+     */
+    static final class EntryReplaceRefusedException extends IOException
+    {
+        private static final long serialVersionUID = 1L;
+        EntryReplaceRefusedException(String message, Throwable cause) { super(message, cause); }
+    }
+
+    /** True when the entry is present, private and fully readable - a usable launcher. */
     private static boolean usableEntry(Path entry)
     {
         try
         {
             if (!Files.exists(entry, java.nio.file.LinkOption.NOFOLLOW_LINKS)) { return false; }
             PrivatePaths.verifyFile(entry);
-            return Files.size(entry) > 0;
+            // Attributes alone do not prove the file can be read: a launcher that fails to open is
+            // not a launcher, so read it whole.
+            return Files.readAllBytes(entry).length > 0;
         }
         catch (IOException | RuntimeException e) { return false; }
     }
@@ -171,12 +185,14 @@ public final class StdioPluginSupport
             PrivatePaths.verifyFile(destination);
             if (java.util.Arrays.equals(Files.readAllBytes(destination), bytes)) { return; }
         }
+        // The check above ran first: everything that fails here failed while replacing the file,
+        // which is the one failure that leaves a usable previous entry in place.
         try
         {
             PrivatePaths.atomicWrite(destination, bytes);
         }
-        catch (java.nio.file.AccessDeniedException e)
-        { throw new IOException("Close stdio clients before updating the bootstrap entry, then reopen Window > Preferences > MCP Server > General.", e); }
+        catch (IOException e)
+        { throw new EntryReplaceRefusedException("Close stdio clients before updating the bootstrap entry, then reopen Window > Preferences > MCP Server > General.", e); }
     }
 
     /** The real path of an Eclipse location; the URL may be raw (see {@link FileUrls}). */

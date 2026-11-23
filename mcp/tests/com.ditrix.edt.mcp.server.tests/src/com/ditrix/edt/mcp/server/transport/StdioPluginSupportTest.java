@@ -166,7 +166,8 @@ public class StdioPluginSupportTest extends StdioTestSupport
             attempted.add(path);
             assertEquals("The pointer must already name the new runtime when the entry is written",
                 expectedPointer, Files.readString(directory.resolve("current")));
-            throw new AccessDeniedException(path.toString(), null, "held by a connected client");
+            throw new StdioPluginSupport.EntryReplaceRefusedException(
+                "held by a connected client", new AccessDeniedException(path.toString()));
         });
         assertEquals(List.of(directory.resolve("edt-mcp-bootstrap.jar")), attempted);
         assertEquals(directory.resolve("edt-mcp-bootstrap.jar"), result);
@@ -192,7 +193,7 @@ public class StdioPluginSupportTest extends StdioTestSupport
     @Test public void anAbsentEntryIsNotAdvertisedWhenTheWriteFails() throws Exception
     {
         Path directory = seeded();
-        var thrown = new AccessDeniedException(directory.resolve("edt-mcp-bootstrap.jar").toString());
+        var thrown = new StdioPluginSupport.EntryReplaceRefusedException("no entry to fall back to", null);
         IOException raised = assertThrows(IOException.class,
             () -> StdioPluginSupport.extractBootstrap(directory, CURRENT, ENTRY, Files::delete, (path, bytes) -> {
                 throw thrown;
@@ -203,17 +204,32 @@ public class StdioPluginSupportTest extends StdioTestSupport
         assertEquals(runtimeName(CURRENT) + "\n", Files.readString(directory.resolve("current")));
     }
 
-    /** A previous entry the private-storage checks refuse is not a launcher either. */
+    /** A path the private-storage checks refuse is not a launcher, even at the entry's name. */
     @Test public void aRefusedEntryIsNotAdvertisedWhenTheWriteFails() throws Exception
     {
         Path directory = seeded();
         Path entry = directory.resolve("edt-mcp-bootstrap.jar");
-        Files.createSymbolicLink(entry, temporary.newFile().toPath());
+        // A directory at the entry name fails verifyFile on every platform, unlike a symlink,
+        // which a Windows account may not be allowed to create at all.
+        PrivatePaths.directory(entry);
         assertThrows(IOException.class,
             () -> StdioPluginSupport.extractBootstrap(directory, CURRENT, ENTRY, Files::delete, (path, bytes) -> {
-                throw new AccessDeniedException(path.toString());
+                throw new StdioPluginSupport.EntryReplaceRefusedException("refused", null);
             }));
-        assertTrue("a refused entry must be left alone", Files.isSymbolicLink(entry));
+        assertTrue("a refused entry must be left alone", Files.isDirectory(entry));
+    }
+
+    /** Every other I/O failure must reach the caller, even when a usable entry is in place. */
+    @Test public void anOrdinaryIoFailureIsNotMistakenForAReplacedEntry() throws Exception
+    {
+        Path directory = seeded();
+        PrivatePaths.atomicWrite(directory.resolve("edt-mcp-bootstrap.jar"), ENTRY);
+        var thrown = new IOException("cannot read the staged entry");
+        IOException raised = assertThrows(IOException.class,
+            () -> StdioPluginSupport.extractBootstrap(directory, CURRENT, ENTRY, Files::delete, (path, bytes) -> {
+                throw thrown;
+            }));
+        assertSame("only a refused replace may fall back", thrown, raised);
     }
 
     @Test public void matchingDirectoryIsRefusedWithoutStoppingCleanup() throws Exception
