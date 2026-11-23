@@ -286,8 +286,9 @@ public final class HostShutdownClient
             // Strict shapes: Gson's getters coerce, so a claim that encodes pid as "1234" would
             // otherwise match a live process and stall every stop. A wrongly typed field is as
             // uninformative as a missing one and must fall through to the lock.
-            if (!isJsonNumber(process, "pid") || !isJsonString(process, "startTime")) { return false; }
-            return EndpointRegistry.sameProcess(process.get("pid").getAsLong(), process.get("startTime").getAsString());
+            Long pid = exactPid(process);
+            if (pid == null || !isJsonString(process, "startTime")) { return false; }
+            return EndpointRegistry.sameProcess(pid, process.get("startTime").getAsString());
         }
         catch (RuntimeException e)
         {
@@ -296,10 +297,25 @@ public final class HostShutdownClient
         }
     }
 
-    private static boolean isJsonNumber(JsonObject object, String member)
+    /**
+     * The claim's pid as an exact nonnegative integer, or null when the token is not one. The
+     * token is checked as written because Gson coerces on read: a fractional {@code 3491.5} would
+     * otherwise truncate to a live process and hold every stop at unknown.
+     *
+     * @param process the claim's process object
+     * @return the pid, or null when the member is missing or is not an exact integer token
+     */
+    private static Long exactPid(JsonObject process)
     {
-        return object.has(member) && object.get(member).isJsonPrimitive()
-            && object.getAsJsonPrimitive(member).isNumber();
+        if (!process.has("pid") || !process.get("pid").isJsonPrimitive()
+            || !process.getAsJsonPrimitive("pid").isNumber())
+        {
+            return null;
+        }
+        String token = process.get("pid").getAsString();
+        if (!token.matches("0|[1-9][0-9]{0,18}")) { return null; }
+        try { return Long.parseLong(token); }
+        catch (NumberFormatException e) { return null; }
     }
 
     private static boolean isJsonString(JsonObject object, String member)
