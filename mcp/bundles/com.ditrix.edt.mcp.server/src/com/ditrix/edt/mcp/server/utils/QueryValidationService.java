@@ -15,6 +15,7 @@ import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.core.resources.IProject;
+import org.eclipse.core.runtime.OperationCanceledException;
 import org.eclipse.emf.common.util.URI;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.resource.Resource;
@@ -61,6 +62,14 @@ public class QueryValidationService
     /** Native QL reads run on the calling thread inside a BM read boundary. */
     public Result validate(IProject project, String queryText, boolean dcsMode)
     {
+        return validate(project, queryText, dcsMode, CancelIndicator.NullImpl);
+    }
+
+    /** Adds the read tool's cancellation to the native validation budget. */
+    public Result validate(IProject project, String queryText, boolean dcsMode, CancelIndicator cancellation)
+    {
+        Budget budget = new Budget(cancellation);
+        if (budget.isCanceled()) return canceled(dcsMode);
         Result refusal = precheck(queryText, dcsMode);
         if (refusal != null) return refusal;
         AtomicReference<Result> result = new AtomicReference<>();
@@ -72,16 +81,29 @@ public class QueryValidationService
                 IV8Project v8Project = ExtensionOriginUtils.resolveV8Project(project);
                 IBmModel model = BmModelResolver.resolveDtProject(
                     v8Project == null ? null : v8Project.getDtProject(), manager).getModel();
-                result.set(model == null
+                if (budget.isCanceled())
+                {
+                    result.set(canceled(dcsMode));
+                    return;
+                }
+                Result validation = model == null
                     ? Result.unavailable(dcsMode, "BM model is unavailable for project '" + project.getName()
                         + "'. Check list_projects, wait for project loading and retry.")
                     : BmTransactions.read(model, "ValidateQuery", (tx, monitor) ->
-                        validateNative(project, v8Project, queryText, dcsMode)));
+                        validateNative(project, v8Project, queryText, dcsMode,
+                            () -> budget.isCanceled() || (monitor != null && monitor.isCanceled())));
+                // Includes BM unwind and resource cleanup time, not just validator.validate().
+                result.set(budget.isCanceled() ? canceled(dcsMode) : validation);
+            }
+            catch (OperationCanceledError | OperationCanceledException e)
+            {
+                result.set(canceled(dcsMode));
             }
             catch (RuntimeException e)
             {
-                result.set(Result.unavailable(dcsMode, "Native query validation failed: "
-                    + e.getMessage() + ". Wait for project loading and retry validate_query."));
+                result.set(budget.isCanceled() ? canceled(dcsMode)
+                    : Result.unavailable(dcsMode, "Native query validation failed: "
+                        + e.getMessage() + ". Wait for project loading and retry validate_query."));
             }
         };
         dispatch(work);
@@ -109,9 +131,16 @@ public class QueryValidationService
     private final class Budget implements CancelIndicator
     {
         private final long started = nanoTime();
+        private final CancelIndicator cancellation;
+
+        Budget(CancelIndicator cancellation)
+        {
+            this.cancellation = cancellation;
+        }
+
         @Override public boolean isCanceled()
         {
-            return Thread.currentThread().isInterrupted()
+            return Thread.currentThread().isInterrupted() || cancellation.isCanceled()
                 || nanoTime() - started >= java.util.concurrent.TimeUnit.SECONDS.toNanos(VALIDATION_SECONDS);
         }
     }
@@ -138,12 +167,13 @@ public class QueryValidationService
         return scope;
     }
 
-    private Result validateNative(IProject project, IV8Project v8Project, String text, boolean dcsMode)
+    private Result validateNative(IProject project, IV8Project v8Project, String text, boolean dcsMode,
+        CancelIndicator budget)
     {
         XtextResource resource = null;
-        Budget budget = new Budget();
         try
         {
+            if (budget.isCanceled()) return canceled(dcsMode);
             IResourceServiceProvider provider =
                 IResourceServiceProvider.Registry.INSTANCE.getResourceServiceProvider(LOOKUP);
             if (provider == null)
@@ -166,6 +196,7 @@ public class QueryValidationService
             ql.addOptions(QlDcsResource.DCS_VALIDATION_MODE_OPTION, dcsMode);
             ql.setPreComputeAnnounceAlias(dcsMode);
             String scope = validationScope(ql, v8Project);
+            if (budget.isCanceled()) return canceled(dcsMode);
             try (var input = new ByteArrayInputStream(text.getBytes(StandardCharsets.UTF_8)))
             {
                 resource.load(input, null);
@@ -173,7 +204,7 @@ public class QueryValidationService
             Result inspected = inspect(resource, validator, computer, dcsMode, budget);
             return inspected.available() ? new Result(inspected, scope) : inspected;
         }
-        catch (OperationCanceledError e)
+        catch (OperationCanceledError | OperationCanceledException e)
         {
             return canceled(dcsMode);
         }
@@ -237,6 +268,7 @@ public class QueryValidationService
         }
         for (Issue issue : nativeIssues)
         {
+            if (indicator.isCanceled()) return canceled(dcsMode);
             EObject object = issue.getUriToProblem() == null ? null
                 : resource.getEObject(issue.getUriToProblem().fragment());
             boolean incomplete = !issue.isSyntaxError()

@@ -125,9 +125,12 @@ public class CancelJobTool implements IMcpTool
         String message;
         if (outcome == CancellationOutcome.CANCELLED)
         {
-            message = "The job was cancelled before `" + snapshot.getOwningTool() //$NON-NLS-1$
-                + "` handed its work over. No external request from this job remains to be " //$NON-NLS-1$
-                + "recalled."; //$NON-NLS-1$
+            message = snapshot.getStatus() == BackgroundJobs.Status.RUNNING
+                ? "Cancellation was requested, but the worker has not exited. Keep polling " //$NON-NLS-1$
+                    + "get_job_status; interruption alone does not prove the work has stopped." //$NON-NLS-1$
+                : "The job was cancelled before `" + snapshot.getOwningTool() //$NON-NLS-1$
+                    + "` handed its work over. No external request from this job remains to be " //$NON-NLS-1$
+                    + "recalled."; //$NON-NLS-1$
         }
         else if (outcome == CancellationOutcome.TERMINATED)
         {

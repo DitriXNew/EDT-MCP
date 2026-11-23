@@ -142,8 +142,8 @@ public class CancelJobToolTest
         assertTrue(entered.await(2, TimeUnit.SECONDS));
 
         String result = tool.execute(Map.of("jobId", started.getId(), "confirm", "true")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-        assertContains(result, "cancellation: cancelled", "was cancelled before", //$NON-NLS-1$ //$NON-NLS-2$
-            "| status | running |", "Cancelled before the owning tool"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertContains(result, "cancellation: cancelled", "worker has not exited", //$NON-NLS-1$ //$NON-NLS-2$
+            "| status | running |", "Cancellation requested before the owning tool"); //$NON-NLS-1$ //$NON-NLS-2$
         assertEquals(Status.RUNNING, jobs.get(started.getId()).getStatus());
         release.countDown();
         assertEquals(Status.CANCELLED, jobs.await(started.getId(), 2_000L).getStatus());

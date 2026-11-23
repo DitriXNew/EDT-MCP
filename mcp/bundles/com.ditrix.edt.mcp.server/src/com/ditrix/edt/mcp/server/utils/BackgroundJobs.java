@@ -78,7 +78,7 @@ public final class BackgroundJobs implements AutoCloseable
     /** Result of an explicit cancellation request. */
     public enum CancellationOutcome
     {
-        /** The job was stopped before its work crossed the commit handshake. */
+        /** Cancellation was accepted before commit; the worker may still be unwinding. */
         CANCELLED("cancelled"), //$NON-NLS-1$
         /** The owning tool stopped committed work through its declared cancellation capability. */
         TERMINATED("terminated"), //$NON-NLS-1$
@@ -760,6 +760,24 @@ public final class BackgroundJobs implements AutoCloseable
     public JobSnapshot start(String owningTool, long timeoutMs, int maxRunning,
         String initialProgress, CancellationCapability cancellation, JobWork work)
     {
+        return start(owningTool, timeoutMs, maxRunning, initialProgress, cancellation, work, false);
+    }
+
+    /**
+     * Starts cancellable, read-only work whose lifetime must stay visible until its worker exits.
+     * At the deadline this requests cancellation instead of publishing a terminal failure; the
+     * caller should limit its own wait separately. Neither timeout nor interrupt proves that a
+     * platform callback has returned or released its transaction. Work must not call tryCommit.
+     */
+    public JobSnapshot startCooperatively(String owningTool, long timeoutMs, int maxRunning,
+        String initialProgress, JobWork work)
+    {
+        return start(owningTool, timeoutMs, maxRunning, initialProgress, null, work, true);
+    }
+
+    private JobSnapshot start(String owningTool, long timeoutMs, int maxRunning,
+        String initialProgress, CancellationCapability cancellation, JobWork work, boolean cooperativeTimeout)
+    {
         if (owningTool == null || owningTool.isBlank())
         {
             throw new IllegalArgumentException("Background job owning tool must not be blank"); //$NON-NLS-1$
@@ -831,7 +849,16 @@ public final class BackgroundJobs implements AutoCloseable
         try
         {
             ScheduledFuture<?> deadline = deadlines.schedule(
-                () -> timeOut(record, boundedTimeoutMs), boundedTimeoutMs,
+                () -> {
+                    if (cooperativeTimeout)
+                    {
+                        requestCooperativeTimeout(record, boundedTimeoutMs);
+                    }
+                    else
+                    {
+                        timeOut(record, boundedTimeoutMs);
+                    }
+                }, boundedTimeoutMs,
                 TimeUnit.MILLISECONDS);
             record.setDeadlineFuture(deadline);
             workers.execute(task);
@@ -1163,6 +1190,17 @@ public final class BackgroundJobs implements AutoCloseable
             record.fail(failureMessage(e));
             Activator.logError("Background job " + record.id + " failed with an Error", e); //$NON-NLS-1$ //$NON-NLS-2$
             throw e;
+        }
+    }
+
+    private static void requestCooperativeTimeout(JobRecord record, long timeoutMs)
+    {
+        CancellationAttempt attempt = record.cancel();
+        if (attempt.outcome == CancellationOutcome.CANCELLED)
+        {
+            record.addProgress("The " + formatSeconds(timeoutMs)
+                + " deadline expired. Waiting for platform work to exit after requesting cancellation."); //$NON-NLS-1$
+            record.cancelWork();
         }
     }
 
@@ -1502,7 +1540,7 @@ public final class BackgroundJobs implements AutoCloseable
             }
 
             progress.add(new ProgressEntry(System.currentTimeMillis(),
-                "Cancelled before the owning tool handed the work over.")); //$NON-NLS-1$
+                "Cancellation requested before the owning tool handed the work over.")); //$NON-NLS-1$
             cancellationRequested = true;
             cancellationOutcome = CancellationOutcome.CANCELLED;
             return new CancellationAttempt(CancellationOutcome.CANCELLED, null);
