@@ -1460,3 +1460,45 @@ def test_objectname_replace_creates_first_module_under_real_object_folder():
     _assert_first_module_uses_existing_object_folder({
         "objectName": "Catalog.catalog", "moduleType": "ObjectModule",
     })
+
+
+@e2e_test(tool="write_module_source", kind="write-metadata")
+def test_delete_module_rechecks_hash_and_removes_only_the_blank_owned_module():
+    obj = "Catalogs/Catalog/ObjectModule.bsl"
+    mgr = "Catalogs/Catalog/ManagerModule.bsl"
+    owner = os.path.join(PROJECT_DIR, "src", "Catalogs", "Catalog", "Catalog.mdo")
+    obj_path = os.path.join(PROJECT_DIR, "src", *obj.split("/"))
+    mgr_path = os.path.join(PROJECT_DIR, "src", *mgr.split("/"))
+    with open(owner, "rb") as saved:
+        owner_before = saved.read()
+
+    for module, text in ((obj, ""), (mgr, "// This comment must stay.\n")):
+        assert_ok(call("write_module_source", {
+            "projectName": PROJECT, "modulePath": module, "mode": "replace", "source": text,
+        }), "seed optional catalog module")
+    with open(mgr_path, "rb") as saved:
+        manager_before = saved.read()
+
+    deletion = {"projectName": PROJECT, "mode": "deleteModule"}
+    assert_error(call("write_module_source", {**deletion, "modulePath": obj,
+                                              "expectedHash": "0000000000000000"}), "stale hash")
+    assert os.path.isfile(obj_path), "stale hash must preserve the blank file"
+
+    nonblank = call("write_module_source", {**deletion, "modulePath": mgr,
+                                           "expectedHash": _read_content_hash(mgr)})
+    assert_error(nonblank, "comments are source too")
+    assert_contains(nonblank.text, "only removes a blank module", "why the sibling is unchanged")
+    assert_error(call("write_module_source", {**deletion, "modulePath": MODULE,
+                                             "expectedHash": _read_content_hash()}), "required module kind")
+
+    assert_ok(call("write_module_source", {**deletion, "objectName": "Справочник.Catalog",
+                                          "expectedHash": _read_content_hash(obj)}), "remove blank module")
+    assert not os.path.exists(obj_path), "successful response must mean immediately absent on disk"
+    with open(owner, "rb") as saved:
+        assert saved.read() == owner_before, "the owner .mdo must stay byte identical"
+    with open(mgr_path, "rb") as saved:
+        assert saved.read() == manager_before, "the manager module must stay byte identical"
+    listing = call("list_modules", {"projectName": PROJECT, "metadataType": "catalogs", "objectName": "Catalog"})
+    assert_ok(listing, "list modules immediately after deletion")
+    assert_not_contains(listing.text, obj, "EDT should already have removed the module resource")
+    assert_contains(listing.text, mgr, "other modules stay listed")

@@ -43,6 +43,28 @@ import com.google.gson.JsonParser;
  */
 public class WriteModuleSourceToolTest
 {
+    @Test
+    public void deleteModuleRequiresExpectedHashBeforeProjectLookup()
+    {
+        String result = new WriteModuleSourceTool().execute(Map.of(
+            "projectName", "Probe", "modulePath", "Catalogs/X/ObjectModule.bsl", "mode", "deleteModule"));
+        assertTrue(result, result.contains("expectedHash is required for mode=deleteModule"));
+    }
+
+    @Test
+    public void deleteModuleCannotWriteOrForceAnEdit()
+    {
+        for (Map.Entry<String, String> extra : Map.of("source", "", "overwrite", "true",
+            "methodNames", "[\"Test\"]", "skipSyntaxCheck", "true").entrySet())
+        {
+            Map<String, String> args = new HashMap<>(Map.of("projectName", "Probe", "mode", "deleteModule",
+                "modulePath", "Catalogs/X/ObjectModule.bsl", "expectedHash", ContentHash.of("")));
+            args.put(extra.getKey(), extra.getValue());
+            String result = new WriteModuleSourceTool().execute(args);
+            assertTrue(result, result.contains("takes a module address and expectedHash only"));
+        }
+    }
+
     // ==================== Tool metadata ====================
 
     @Test

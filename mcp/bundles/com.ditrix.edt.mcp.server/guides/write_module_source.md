@@ -1,4 +1,4 @@
-Edit one metadata object module (`.bsl` under `src/`) using eight modes, syntax validation and lost-update guards.
+Edit one metadata object module (`.bsl` under `src/`) using nine modes, syntax validation and lost-update guards.
 
 ## When to use
 
@@ -9,6 +9,7 @@ Edit one metadata object module (`.bsl` under `src/`) using eight modes, syntax 
 - `replace`: rewrite/create a whole module; only this mode can create a file.
 - `append`: add code at the end.
 - `deleteMethods`: delete named procedures/functions.
+- `deleteModule`: remove a blank object/manager module file, without removing its metadata owner.
 - `fromModulePath` + `methodNames`: copy named methods from another module without sending their text (see Moving methods between modules).
 
 ## Targeting the module (exclusive OR)
@@ -27,11 +28,11 @@ Passing both is rejected; passing neither is rejected. `moduleType` is meaningfu
 | `modulePath` | XOR objectName | `src/`-relative `.bsl` path; no `..`. |
 | `objectName` | XOR modulePath | `Type.Name`; see Bilingual. |
 | `moduleType` | with objectName | default `ObjectModule`. |
-| `source` | unless fromModulePath or deleteMethods | the BSL to write (max 500000 chars); exactly one complete method for a method-targeted mode. |
+| `source` | unless fromModulePath, deleteMethods or deleteModule | the BSL to write (max 500000 chars); exactly one complete method for a method-targeted mode. |
 | `fromModulePath` | to copy methods | `src/`-relative `.bsl` module of the same project; replaces `source`. |
 | `methodNames` | with fromModulePath or deleteMethods | array of up to 100 method names, each once. |
 | `oldSource` | mode=searchReplace or replaceAll | searchReplace: must match exactly once; replaceAll: every whole-word occurrence is replaced. |
-| `mode` | optional | `searchReplace` (default; `append` with fromModulePath), `replace`, `append`, `replaceMethod`, `insertBefore`, `insertAfter`, `deleteMethods`, `replaceAll`. |
+| `mode` | optional | `searchReplace` (default; `append` with fromModulePath), `replace`, `append`, `replaceMethod`, `insertBefore`, `insertAfter`, `deleteMethods`, `replaceAll`, `deleteModule`. |
 | `methodName` | method-targeted modes | existing unambiguous method anchor; REQUIRED. |
 | `formName` | moduleType=FormModule | except CommonForm. |
 | `commandName` | moduleType=CommandModule | except CommonCommand. |
@@ -39,7 +40,7 @@ Passing both is rejected; passing neither is rejected. `moduleType` is meaningfu
 | `normalizeInvalidCharacters` | optional | Normalize forbidden characters in supplied source only; default true. |
 | `expectedSource` | mode=replace | lost-update guard. |
 | `overwrite` | mode=replace | force without expectedSource. |
-| `expectedHash` | any mode | cheap lost-update guard; REQUIRED for all method-targeted modes and deleteMethods. |
+| `expectedHash` | any mode | cheap lost-update guard; REQUIRED for all method-targeted modes, deleteMethods and deleteModule. |
 
 ## moduleType to path
 
@@ -55,6 +56,8 @@ Passing both is rejected; passing neither is rejected. `moduleType` is meaningfu
 - `insertBefore`: inserts the one complete method in `source` before the anchor's documentation/annotations, never between an annotation and its declaration - a blank line between them does not detach the directive.
 - `insertAfter`: inserts the one complete method in `source` after the anchor's complete terminator.
 - `deleteMethods`: deletes every method named in `methodNames`, each with its documentation/annotations; the blank lines at each seam collapse to one. `expectedHash` is REQUIRED; regions stay, even when they become empty.
+
+- `deleteModule`: remove an existing `ObjectModule.bsl` or `ManagerModule.bsl` owned by a configuration or extension object. Pass only the module address and `expectedHash` from `read_module_source`; objectName also accepts moduleType. It accepts empty or whitespace-only files, including a UTF-8 BOM. It refuses comments, directives, code, adopted and external objects, and other module types (including forms). Close the module and its owning editor in EDT first. EDT's destructive-operation confirmation applies in the workbench. Success has `deletedFile: true`, not a new content hash.
 
 Both insert modes ensure exactly one blank line between the inserted method and each neighbour, including comments and preprocessor boundaries. Blank lines at the edges of `source` and at the insertion point are collapsed, with no padding at a module edge. Method bodies, attached documentation/annotations and preprocessor lines stay unchanged. `replaceMethod` does not normalize spacing.
 
@@ -73,12 +76,12 @@ Both calls are all-or-nothing and refuse, before writing: a name not found, decl
 ## Lost-update guards
 
 Concurrent edits between your read and write are caught by:
-- `expectedHash` (ANY mode; REQUIRED for method-targeted modes): pass the opaque `contentHash` from your last `read_module_source` / `read_method_source` / `write_module_source`. If the module changed, the write is rejected. Cheapest (a fixed-size token, not the whole file). Omit it when creating a new module, because there is no existing content to match.
+- `expectedHash` (ANY mode; REQUIRED for method-targeted modes, deleteMethods and deleteModule): pass the opaque `contentHash` from your last `read_module_source` / `read_method_source` / `write_module_source`. If the module changed, the write is rejected. Cheapest (a fixed-size token, not the whole file). Omit it when creating a new module, because there is no existing content to match.
 - `expectedSource` (mode=replace): pass the exact content you last read. Mismatch is rejected.
 - `overwrite=true` (mode=replace): force the overwrite with no content check.
 A bare `replace` over an existing module with none of these is rejected and steers you toward expectedSource / overwrite / searchReplace. A matching `expectedHash` already satisfies the replace precondition. All comparisons are `\n`-normalized, so a CRLF/LF-only difference is not a spurious mismatch.
 
-Every successful write answers `contentHash` in its frontmatter: the token of the text it just wrote, equal to what `read_module_source` reports for the module right after. Chain the next guarded edit on it (`expectedHash`) without reading the module again; it goes stale as soon as anything else changes the module. An error with `mutationCommitted:true` carries it too, since that text is written.
+Every successful write of module text answers `contentHash` in its frontmatter: the token of the text it just wrote, equal to what `read_module_source` reports for the module right after. Chain the next guarded edit on it (`expectedHash`) without reading the module again; it goes stale as soon as anything else changes the module. An error with `mutationCommitted:true` carries it too, since that text is written.
 
 ## BSL syntax check
 
