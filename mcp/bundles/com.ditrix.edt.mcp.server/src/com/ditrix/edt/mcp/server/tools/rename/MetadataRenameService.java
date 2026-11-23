@@ -76,6 +76,7 @@ import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.ReferencedTopObjects;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
+import com.ditrix.edt.mcp.server.utils.SpreadsheetRenameGuard;
 import com.ditrix.edt.mcp.server.utils.SubsystemUtils;
 import com.ditrix.edt.mcp.server.utils.VendorSupportGuard;
 
@@ -511,8 +512,9 @@ public class MetadataRenameService
             else
             {
                 // Execute mode - perform the rename, applying any disabled indices
-                return () -> performRename(project, objectFqn, newName, refactorings, disableRequest, expectedHash, progress,
-                    "metadata object"); //$NON-NLS-1$
+                return (java.util.function.Supplier<String>)() -> performRename(project, objectFqn, newName,
+                    refactorings, disableRequest, expectedHash, progress,
+                    "metadata object", () -> SpreadsheetRenameGuard.refusal(project, targetObject, objectFqn)); //$NON-NLS-1$
             }
         }).get();
     }
@@ -3148,6 +3150,14 @@ public class MetadataRenameService
         Collection<IRefactoring> refactorings, DisableRequest disableRequest, String expectedHash,
         RenameProgress progress, String subject)
     {
+        return performRename(project, objectFqn, newName, refactorings, disableRequest, expectedHash,
+            progress, subject, () -> null);
+    }
+
+    private String performRename(IProject project, String objectFqn, String newName,
+        Collection<IRefactoring> refactorings, DisableRequest disableRequest, String expectedHash,
+        RenameProgress progress, String subject, java.util.function.Supplier<String> beforeApply)
+    {
         int textOccurrencesSkipped = ReadToolExecution.readOnHost(project, "Prepare rename text policy",
             () -> applyTextOccurrencePolicy(refactorings));
         String hashError = ReadToolExecution.readOnHost(project, "Check rename preview hash",
@@ -3185,6 +3195,14 @@ public class MetadataRenameService
             return ToolResult.error(
                 DestructiveConsentGate.consentDeniedMessage(consentDecision, "rename_metadata_object")) //$NON-NLS-1$
                 .toJson();
+        }
+
+        // Check the current model and saved file after consent, on the same UI call before
+        // any native rename operation has been performed.
+        String guardRefusal = beforeApply.get();
+        if (guardRefusal != null)
+        {
+            return ToolResult.error(guardRefusal).toJson();
         }
 
         // Past the gate the rename is authorised to rewrite the model, and from here on a caller
