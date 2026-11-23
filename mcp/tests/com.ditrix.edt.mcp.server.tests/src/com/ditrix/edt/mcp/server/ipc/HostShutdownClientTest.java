@@ -275,6 +275,36 @@ public class HostShutdownClientTest
         assertTrue(text(messages), text(messages).contains("no live host"));
     }
 
+    @Test public void anAgedClaimNamingALiveProcessIsNotReportedAsNoHost() throws Exception
+    {
+        // A host slower than the age cutoff to reach lockWorkspace() is still starting. The claim
+        // records the process identity, and StartupCoordinator reads it the same way.
+        var registry = registry();
+        String start = ProcessHandle.current().info().startInstant().orElseThrow().toString();
+        EndpointRegistry.atomicWrite(registry.claimPath(),
+            "{\"requested\":\"" + java.time.Instant.now().minusSeconds(600) + "\",\"process\":{\"pid\":"
+                + ProcessHandle.current().pid() + ",\"startTime\":\"" + start + "\"}}");
+        Files.setLastModifiedTime(registry.claimPath(),
+            java.nio.file.attribute.FileTime.from(java.time.Instant.now().minusSeconds(600)));
+        var messages = new ByteArrayOutputStream();
+        assertEquals(HostShutdownClient.NOT_STOPPED,
+            HostShutdownClient.stop(registry.directory(), registry.workspace(), 500, sink(messages)));
+        assertTrue(text(messages), text(messages).contains("starting or shutting down"));
+    }
+
+    @Test public void anAgedClaimOfADeadProcessFallsThroughToNoHost() throws Exception
+    {
+        var registry = registry();
+        EndpointRegistry.atomicWrite(registry.claimPath(),
+            "{\"requested\":\"" + java.time.Instant.now().minusSeconds(600) + "\",\"process\":null}");
+        Files.setLastModifiedTime(registry.claimPath(),
+            java.nio.file.attribute.FileTime.from(java.time.Instant.now().minusSeconds(600)));
+        var messages = new ByteArrayOutputStream();
+        assertEquals(HostShutdownClient.ABSENT,
+            HostShutdownClient.stop(registry.directory(), registry.workspace(), 500, sink(messages)));
+        assertTrue(text(messages), text(messages).contains("no live host"));
+    }
+
     @Test public void aDanglingWorkspaceLeafIsNotReportedAsNoHost() throws Exception
     {
         Path root = temporary.newFolder().toPath();

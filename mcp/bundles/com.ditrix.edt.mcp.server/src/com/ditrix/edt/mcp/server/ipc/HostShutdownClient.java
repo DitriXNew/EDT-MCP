@@ -205,15 +205,24 @@ public final class HostShutdownClient
      */
     static boolean startupOrTeardownInFlight(EndpointRegistry registry)
     {
+        Path claim = registry.claimPath();
         try
         {
-            Path claim = registry.claimPath();
-            if (Files.exists(claim, LinkOption.NOFOLLOW_LINKS)
-                && Files.getLastModifiedTime(claim, LinkOption.NOFOLLOW_LINKS).toInstant()
-                    .plusSeconds(CLAIM_FRESH_SECONDS).isAfter(java.time.Instant.now()))
+            // Probe without following: Files.exists answers false both for an absent claim and for
+            // one whose state cannot be determined, and an unreadable claim must stay unknown.
+            var attributes = Files.readAttributes(claim, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+            // A live process outranks the age cutoff: a host slower than the cutoff to reach
+            // lockWorkspace() is still starting, exactly as StartupCoordinator reads it.
+            if (claimNamesALiveProcess(claim)) { return true; }
+            if (attributes.lastModifiedTime().toInstant().plusSeconds(CLAIM_FRESH_SECONDS)
+                .isAfter(java.time.Instant.now()))
             {
                 return true;
             }
+        }
+        catch (NoSuchFileException e)
+        {
+            // No claim: the workspace lock decides below.
         }
         catch (IOException | RuntimeException e)
         {
@@ -233,6 +242,27 @@ public final class HostShutdownClient
             // unsearchable parent, a denying ACL - must leave the state unknown.
             return !provablyMissing(lock);
         }
+    }
+
+    /**
+     * True when a startup claim names a process that is still alive, whatever the claim's age.
+     * An unreadable or malformed claim also answers true: it cannot clear the workspace.
+     *
+     * @param claim the startup claim written by the bootstrap before it launched a host
+     * @return whether the claimed process identity still matches a live process
+     */
+    private static boolean claimNamesALiveProcess(Path claim)
+    {
+        try
+        {
+            JsonObject parsed = JsonParser.parseString(Files.readString(claim)).getAsJsonObject();
+            if (!parsed.has("process") || !parsed.get("process").isJsonObject()) { return false; }
+            JsonObject process = parsed.getAsJsonObject("process");
+            if (!process.has("pid") || !process.has("startTime")) { return false; }
+            return EndpointRegistry.sameProcess(process.get("pid").getAsLong(), process.get("startTime").getAsString());
+        }
+        catch (NoSuchFileException e) { return false; }
+        catch (IOException | RuntimeException e) { return true; }
     }
 
     /** True only when the path is proven not to exist; an undeterminable state is not absence. */
