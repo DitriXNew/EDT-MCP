@@ -319,6 +319,23 @@ public class HostShutdownClientTest
         assertTrue(text(messages), text(messages).contains("no live host"));
     }
 
+    @Test public void aStringPidIsNotCoercedToALiveProcess() throws Exception
+    {
+        // Gson coerces "pid":"1234" to a number; a live pid must not make an aged corrupt claim
+        // look like a running host while the lock is free.
+        var registry = registry();
+        EndpointRegistry.atomicWrite(registry.claimPath(),
+            "{\"requested\":\"" + java.time.Instant.now().minusSeconds(600)
+                + "\",\"process\":{\"pid\":\"" + ProcessHandle.current().pid()
+                + "\",\"startTime\":\"" + ProcessHandle.current().info().startInstant().orElseThrow() + "\"}}");
+        Files.setLastModifiedTime(registry.claimPath(),
+            java.nio.file.attribute.FileTime.from(java.time.Instant.now().minusSeconds(600)));
+        var messages = new ByteArrayOutputStream();
+        assertEquals(HostShutdownClient.ABSENT,
+            HostShutdownClient.stop(registry.directory(), registry.workspace(), 500, sink(messages)));
+        assertTrue(text(messages), text(messages).contains("no live host"));
+    }
+
     @Test public void aDanglingAgedClaimKeepsTheStateUnknown() throws Exception
     {
         // The claim exists without following it but its target does not: it cannot be resolved and

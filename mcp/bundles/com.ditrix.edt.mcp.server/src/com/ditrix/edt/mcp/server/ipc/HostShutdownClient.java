@@ -283,7 +283,10 @@ public final class HostShutdownClient
         {
             if (!parsed.has("process") || !parsed.get("process").isJsonObject()) { return false; }
             JsonObject process = parsed.getAsJsonObject("process");
-            if (!process.has("pid") || !process.has("startTime")) { return false; }
+            // Strict shapes: Gson's getters coerce, so a claim that encodes pid as "1234" would
+            // otherwise match a live process and stall every stop. A wrongly typed field is as
+            // uninformative as a missing one and must fall through to the lock.
+            if (!isJsonNumber(process, "pid") || !isJsonString(process, "startTime")) { return false; }
             return EndpointRegistry.sameProcess(process.get("pid").getAsLong(), process.get("startTime").getAsString());
         }
         catch (RuntimeException e)
@@ -291,6 +294,18 @@ public final class HostShutdownClient
             // Field values of the wrong shape: as uninformative as a missing field.
             return false;
         }
+    }
+
+    private static boolean isJsonNumber(JsonObject object, String member)
+    {
+        return object.has(member) && object.get(member).isJsonPrimitive()
+            && object.getAsJsonPrimitive(member).isNumber();
+    }
+
+    private static boolean isJsonString(JsonObject object, String member)
+    {
+        return object.has(member) && object.get(member).isJsonPrimitive()
+            && object.getAsJsonPrimitive(member).isString();
     }
 
     /** True only when the path is proven not to exist; an undeterminable state is not absence. */
