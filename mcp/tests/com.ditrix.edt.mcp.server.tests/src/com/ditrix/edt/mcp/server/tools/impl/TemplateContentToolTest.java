@@ -6,15 +6,28 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.withSettings;
 
 import java.util.Map;
 import java.util.Set;
 
 import org.junit.Test;
 
+import com._1c.g5.v8.bm.core.IBmObject;
+import com._1c.g5.v8.bm.core.IBmTransaction;
+import com._1c.g5.v8.bm.integration.IBmModel;
+import com._1c.g5.v8.bm.integration.IBmTask;
+import com._1c.g5.v8.dt.metadata.mdclass.CommonTemplate;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 import com._1c.g5.v8.dt.metadata.mdclass.TemplateType;
+import com._1c.g5.v8.dt.moxel.MoxelFactory;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
+import com.ditrix.edt.mcp.server.utils.SpreadsheetTemplateWriter;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
@@ -94,6 +107,45 @@ public class TemplateContentToolTest
         assertTrue(tool.validateRequest(args).contains("limit"));
         assertTrue(tool.execute(Map.of("method", "modify", "projectName", "NoProject",
             "fqn", "CommonTemplate.Print", "template", "{}", "areaName", "Header")).contains("areaName"));
+    }
+
+    @Test
+    public void testLazySpreadsheetContentIsProjectedInsideRollback()
+    {
+        var doc = MoxelFactory.eINSTANCE.createSpreadsheetDocument();
+        assertFalse(SpreadsheetTemplateWriter.apply(doc, json("""
+            {"cells":[{"row":0,"col":1,"parameter":"FullName"}],
+             "areas":[{"name":"Header","fromRow":0,"fromCol":0,"toRow":0,"toCol":1}]}
+            """)).hasError());
+        IBmModel model = mock(IBmModel.class);
+        IBmTransaction tx = mock(IBmTransaction.class);
+        CommonTemplate template = mock(CommonTemplate.class, withSettings().extraInterfaces(IBmObject.class));
+        when(tx.getObjectById(17L)).thenReturn((IBmObject)template);
+        when(template.getTemplateType()).thenReturn(TemplateType.SPREADSHEET_DOCUMENT);
+        boolean[] active = {false};
+        when(template.getTemplate()).thenAnswer(inv -> {
+            assertTrue("lazy content needs the rollback transaction", active[0]);
+            return doc;
+        });
+        when(model.executeAndRollback(any())).thenAnswer(inv -> {
+            IBmTask<?> task = inv.getArgument(0);
+            active[0] = true;
+            try { return task.execute(tx, null); }
+            finally { active[0] = false; }
+        });
+
+        JsonObject response = json(TemplateContentTool.readTemplateContent(model, 17L,
+            "CommonTemplate.Print", Map.of("areaName", "header", "limit", "1")));
+        assertTrue(response.get("success").getAsBoolean());
+        JsonObject page = response.getAsJsonObject("template");
+        assertEquals("Header", page.get("areaName").getAsString());
+        assertEquals("FullName", page.getAsJsonArray("cells").get(0).getAsJsonObject().get("parameter").getAsString());
+        assertFalse(response.has("persisted"));
+        assertFalse(response.has("writtenProjects"));
+        verify(tx).getObjectById(17L);
+        verify(model).executeAndRollback(any());
+        verify(model, never()).executeReadonlyTask(any());
+        verify(model, never()).execute(any());
     }
 
     @Test

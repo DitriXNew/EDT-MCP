@@ -327,14 +327,16 @@ public class TemplateContentTool extends AbstractMetadataWriteTool
         String normFqn = MetadataTypeUtils.normalizeFqn(JsonUtils.extractStringArgument(params, KEY_FQN));
         if (READ.equals(JsonUtils.extractStringArgument(params, KEY_METHOD)))
         {
-            // No vendor write-intent check, mutation, content initialization or export on a read.
+            // Resolve only the identity in the read transaction; no vendor write-intent check.
             ProjectContext readCtx = resolveProjectAndScope(projectName);
             if (readCtx.hasError())
             {
                 return readCtx.error;
             }
-            return ReadToolExecution.read(readCtx.project, "Inspect spreadsheet template",
-                () -> readTemplate(readCtx, normFqn, params));
+            TemplateReadTarget target = ReadToolExecution.readModel(readCtx.project, "Resolve spreadsheet template",
+                model -> resolveTemplateReadTarget(readCtx, model, normFqn));
+            return target.error() != null ? target.error()
+                : readTemplateContent(target.model(), target.id(), target.fqn(), params);
         }
         JsonObject templateSpec = parseTemplateSpec(params.get(KEY_TEMPLATE));
         ProjectContext ctx = resolveProjectAndScope(projectName, normFqn);
@@ -347,22 +349,54 @@ public class TemplateContentTool extends AbstractMetadataWriteTool
         return modifyTemplateContent(ctx, plan, templateSpec);
     }
 
-    private String readTemplate(ProjectContext ctx, String normFqn, Map<String, String> params)
+    private record TemplateReadTarget(IBmModel model, long id, String fqn, String error)
+    {
+        static TemplateReadTarget failure(String error)
+        {
+            return new TemplateReadTarget(null, IBmObject.BM_NULL_ID, null, ToolResult.error(error).toJson());
+        }
+    }
+
+    private static TemplateReadTarget resolveTemplateReadTarget(ProjectContext ctx, IBmModel model, String normFqn)
     {
         var scope = preparationScope(ctx);
         String hint = scope.addressingHint(normFqn);
         if (!hint.isEmpty())
         {
-            return ToolResult.error("'" + normFqn + "' cannot be addressed in project '"
-                + ctx.project.getName() + "'." + hint).toJson();
+            return TemplateReadTarget.failure("'" + normFqn + "' cannot be addressed in project '"
+                + ctx.project.getName() + "'." + hint);
         }
         var resolved = MetadataNodeResolver.resolveExistingWithYoFallback(scope, normFqn);
         if (resolved.node == null || !(resolved.node.object instanceof BasicTemplate template))
         {
-            return ToolResult.error("'" + normFqn + "' did not resolve to a template. Use CommonTemplate.<Name> "
-                + "or <Type>.<Owner>.Template.<Name>." + MetadataNodeResolver.yoNotFoundHint(normFqn)).toJson();
+            return TemplateReadTarget.failure("'" + normFqn + "' did not resolve to a template. Use CommonTemplate.<Name> "
+                + "or <Type>.<Owner>.Template.<Name>." + MetadataNodeResolver.yoNotFoundHint(normFqn));
         }
         String fqn = MetadataTypeUtils.toCanonicalEnglishFqn(resolved.yoFallback ? resolved.fqn : normFqn);
+        if (template.eIsProxy() || !(template instanceof IBmObject bm) || bm.bmGetId() == IBmObject.BM_NULL_ID)
+        {
+            return TemplateReadTarget.failure("Template '" + fqn + "' is not loaded in EDT. "
+                + "Check that the template opens in the addressed project.");
+        }
+        return new TemplateReadTarget(model, bm.bmGetId(), fqn, null);
+    }
+
+    static String readTemplateContent(IBmModel model, long id, String fqn, Map<String, String> params)
+    {
+        // Like DcsRootReader, let EDT resolve lazy template content only in an auto-rollback task.
+        // It is not nested in the identity read. Only the projected JSON crosses this boundary.
+        return BmTransactions.executeAndRollback(model, "Inspect spreadsheet template", (tx, monitor) -> {
+            if (!(tx.getObjectById(id) instanceof BasicTemplate template) || template.eIsProxy())
+            {
+                return ToolResult.error("Template '" + fqn + "' disappeared before its content could be read. "
+                    + "Check its FQN and retry template_content.").toJson();
+            }
+            return projectTemplateContent(template, fqn, params);
+        });
+    }
+
+    private static String projectTemplateContent(BasicTemplate template, String fqn, Map<String, String> params)
+    {
         if (template.getTemplateType() != TemplateType.SPREADSHEET_DOCUMENT)
         {
             var actual = template.getTemplateType();
