@@ -149,6 +149,45 @@ public class StdioPluginSupportTest extends StdioTestSupport
             runtimeName(OLD), runtimeName(CURRENT));
     }
 
+    /**
+     * The entry keeps a fixed name while its bytes are versioned, so a connected stdio client can
+     * hold it open and the replacement fails with AccessDenied on Windows. That must not cost the
+     * new runtime: the pointer is published first, so an older entry still loads it.
+     */
+    @Test public void entryBlockedByAConnectedClientStillPublishesTheNewRuntime() throws Exception
+    {
+        Path directory = seeded();
+        // The entry from the previous extraction is what a connected client holds open.
+        byte[] held = "previous entry".getBytes(StandardCharsets.UTF_8);
+        PrivatePaths.atomicWrite(directory.resolve("edt-mcp-bootstrap.jar"), held);
+        var attempted = new ArrayList<Path>();
+        String expectedPointer = runtimeName(CURRENT) + "\n";
+        Path result = StdioPluginSupport.extractBootstrap(directory, CURRENT, ENTRY, Files::delete, (path, bytes) -> {
+            attempted.add(path);
+            assertEquals("The pointer must already name the new runtime when the entry is written",
+                expectedPointer, Files.readString(directory.resolve("current")));
+            throw new AccessDeniedException(path.toString(), null, "held by a connected client");
+        });
+        assertEquals(List.of(directory.resolve("edt-mcp-bootstrap.jar")), attempted);
+        assertEquals(directory.resolve("edt-mcp-bootstrap.jar"), result);
+        // The blocked entry keeps its previous bytes; the pointer alone already selects the new runtime.
+        assertArrayEquals(held, Files.readAllBytes(directory.resolve("edt-mcp-bootstrap.jar")));
+        // The new runtime is reachable through the published pointer, and no generation was lost.
+        assertListing(directory, "current", "previous", "extract.lock", "edt-mcp-bootstrap.jar",
+            runtimeName(PREVIOUS), runtimeName(CURRENT));
+    }
+
+    @Test public void aSuccessfulEntryWriteStillReplacesTheEntry() throws Exception
+    {
+        Path directory = seeded();
+        var written = new AtomicReference<Path>();
+        StdioPluginSupport.extractBootstrap(directory, CURRENT, ENTRY, Files::delete, (path, bytes) -> {
+            written.set(path);
+            PrivatePaths.atomicWrite(path, bytes);
+        });
+        assertEquals(directory.resolve("edt-mcp-bootstrap.jar"), written.get());
+        assertArrayEquals(ENTRY, Files.readAllBytes(written.get()));
+    }
     @Test public void matchingDirectoryIsRefusedWithoutStoppingCleanup() throws Exception
     {
         Path directory = seeded(); String name = "a".repeat(64) + ".jar";

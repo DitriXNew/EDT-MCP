@@ -68,7 +68,17 @@ public final class StdioPluginSupport
     @FunctionalInterface
     interface RuntimeDelete { void delete(Path runtime) throws IOException; }
 
+    /** Entry writer, injected so a test can prove the pointer is published before the entry. */
+    @FunctionalInterface
+    interface EntryWrite { void write(Path destination, byte[] bytes) throws IOException; }
+
     static Path extractBootstrap(Path directory, byte[] runtime, byte[] entry, RuntimeDelete delete) throws IOException
+    {
+        return extractBootstrap(directory, runtime, entry, delete, StdioPluginSupport::writeJar);
+    }
+
+    static Path extractBootstrap(Path directory, byte[] runtime, byte[] entry, RuntimeDelete delete, EntryWrite writeEntry)
+        throws IOException
     {
         Path destination = directory.resolve("edt-mcp-bootstrap.jar");
         try (var channel = PrivatePaths.lockFile(directory.resolve("extract.lock"));
@@ -81,10 +91,22 @@ public final class StdioPluginSupport
             // Re-extracting the same build must not discard the preceding generation.
             if (current.equals(previous)) { previous = runtimePointer(directory.resolve("previous")); }
             writeJar(directory.resolve(current), runtime);
-            writeJar(destination, entry);
+            // The runtime is what changes behaviour, so its pointer is published first. The entry
+            // keeps a fixed name while its bytes are versioned, so a connected stdio client holds it
+            // open on Windows and the replacement fails with AccessDenied. Publishing the pointer
+            // before writing the entry keeps the new runtime reachable in that case: an older entry
+            // still reads the pointer and loads the new runtime. Replacing the entry is therefore
+            // best effort here and is retried on a later start, once the client is gone.
             EndpointRegistry.atomicWrite(directory.resolve("previous"), previous == null ? "" : previous + "\n");
             EndpointRegistry.atomicWrite(directory.resolve("current"), current + "\n");
             cleanupRuntimes(directory, current, previous, delete);
+            try { writeEntry.write(destination, entry); }
+            catch (IOException e)
+            {
+                Log.warning("Cannot update the stdio entry (" + e.getClass().getSimpleName()
+                    + "); the current runtime is published and the existing entry still starts it."
+                    + " Close stdio clients before the next start to replace the entry.", e);
+            }
             return destination;
         }
     }
