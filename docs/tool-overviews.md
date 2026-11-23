@@ -57,7 +57,7 @@ with `python docs/generate_tool_docs.py`.
 | [`rename_metadata_object`](tools/rename_metadata_object.md) | Rename `objectFqn` to `newName` through EDT refactoring; only resolved references are rewritten, so dynamic names can remain unchanged. Preview waits up to `waitSeconds=45` before returning a jobId; confirm synchronously, supplying `expectedHash` when skipping `disableIndices`, and keep `textOccurrences` (default include) consistent. |
 | [`search_in_dcs`](tools/search_in_dcs.md) | Search saved `.dcs` files using `query`, literal and case-insensitive by default; optional `isRegex`, `fileMask` and `outputMode` (full/count/files) narrow the result. `limit` defaults to 100, maximum 500; recognized export layouts include a template FQN for `dcs`. |
 | [`sort_metadata`](tools/sort_metadata.md) | List (`mode=list`) or reorder the collection level named by `fqn`: alphabetical by default, explicit `items`, or one object moved by `positions` or `before`/`after`; `recursive=true` also orders owned descendants. Reordering register dimensions, enum values or subsystem content changes behaviour; under active V8 code style autosort, manual orders are refused and the response tells the agent to ask the user. |
-| [`template_content`](tools/template_content.md) | Use `method:help` for the guide, or `method:modify` with a project, FQN and payload to edit existing spreadsheet or text template content. Use metadata tools to create, rename or delete the template object. |
+| [`template_content`](tools/template_content.md) | Use `method:read` to inspect spreadsheet areas, cells, merges and drawings, `method:modify` to edit spreadsheet or text content, or `method:help` for the guide. Use metadata tools to create, rename or delete the template object. |
 
 ## Code
 

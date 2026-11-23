@@ -350,3 +350,53 @@ def test_help_describes_both_template_surfaces_without_a_project():
     doc = r.structured.get("help", "")
     assert "SpreadsheetDocument" in doc and "TextDocument" in doc, r.structured
     assert "renameAreas" in doc and "expectedHash" in doc, r.structured
+
+
+@e2e_test(tool="template_content", kind="read")
+def test_existing_common_spreadsheet_template_is_read_without_changes():
+    r = call("template_content", {"method": "read", "projectName": PROJECT, "fqn": FIXTURE_TEMPLATE})
+    assert_ok(r, "read existing common spreadsheet template")
+    data = r.structured["template"]
+    assert any(cell["type"] == "text" and cell["text"] == "E2E Print Template"
+               for cell in data["cells"]), data
+    assert data["merges"] == [{"type": "rectangle", "fromRow": 5, "fromCol": 1,
+                               "toRow": 8, "toCol": 6}], data
+    assert "writtenProjects" not in r.structured, r.structured
+    assert_no_diff(ctx="reading a common spreadsheet template")
+
+
+@e2e_test(tool="template_content", kind="write-metadata")
+def test_read_owned_spreadsheet_template_area_and_parameter_round_trip():
+    fqn, mxlx = _seed_owned_template("E2EMxlxRead")
+    r = call("template_content", {
+        "method": "modify", "projectName": PROJECT, "fqn": fqn,
+        "template": {
+            "cells": [{"row": 0, "col": 0, "text": "E2E Read"},
+                      {"row": 1, "col": 0, "parameter": "ДолжностьРуководителя"},
+                      {"row": 2, "col": 0, "text": "Outside"}],
+            "merges": [{"fromRow": 0, "fromCol": 0, "toRow": 0, "toCol": 1}],
+            "areas": [{"name": "Header", "fromRow": 0, "fromCol": 0, "toRow": 1, "toCol": 1}],
+        },
+    })
+    assert_ok(r, "author owned spreadsheet template")
+    poll_diff_contains("E2E Read", ctx="persist before checking read-only behavior")
+    before = read_disk(mxlx)
+    args = {"method": "read", "projectName": PROJECT,
+            "fqn": fqn.replace("Catalog.", "Справочник.", 1).replace(".Template.", ".Макет."),
+            "areaName": "header", "limit": 1}
+    r = call("template_content", args)
+    assert_ok(r, "read first named-area page with Russian structural FQN tokens")
+    first = r.structured["template"]
+    assert first["areaName"] == "Header", first
+    assert first["areas"] == [{"name": "Header", "type": "rectangle", "fromRow": 0,
+                               "fromCol": 0, "toRow": 1, "toCol": 1}], first
+    assert first["cells"][0]["text"] == "E2E Read", first
+    assert first["merges"][0]["toCol"] == 1, first
+    assert "persisted" not in r.structured and "writtenProjects" not in r.structured, r.structured
+    r = call("template_content", dict(args, offset=first["nextOffset"]))
+    assert_ok(r, "read next page")
+    next_page = r.structured["template"]
+    assert next_page["cells"] == [{"row": 1, "col": 0, "type": "parameter",
+                                   "parameter": "ДолжностьРуководителя"}], next_page
+    assert "nextOffset" not in next_page, next_page
+    assert read_disk(mxlx) == before, "read must not change the template resource"

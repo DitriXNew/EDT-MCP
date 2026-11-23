@@ -6674,20 +6674,36 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Edit an existing template's SpreadsheetDocument or TextDocument content. Use method='help' for guidance and method='modify' to write. Use metadata tools for the template object itself. Full parameters and examples: call get_tool_guide('template_content').",
+    "description": "Read a SpreadsheetDocument template's areas, cells, parameters, merges and drawings, or edit spreadsheet or text template content. Use method='read', 'modify' or 'help'. Use metadata tools for the template object itself. Full parameters and examples: call get_tool_guide('template_content').",
     "inputSchema": {
       "properties": {
-        "fqn": {
-          "description": "Required for modify: CommonTemplate.Name or Type.Owner.Template.Name.",
+        "areaName": {
+          "description": "Read only: named cell area (case-insensitive).",
           "type": "string"
         },
+        "fqn": {
+          "description": "Required for read and modify: CommonTemplate.Name or Type.Owner.Template.Name.",
+          "type": "string"
+        },
+        "limit": {
+          "description": "Read only: items per collection (default 100, max 200).",
+          "maximum": 200,
+          "minimum": 1,
+          "type": "integer"
+        },
         "method": {
-          "description": "help: show usage; modify: edit an existing template.",
+          "description": "help: show usage; modify: edit an existing template; read: inspect one spreadsheet template.",
           "enum": [
             "help",
-            "modify"
+            "modify",
+            "read"
           ],
           "type": "string"
+        },
+        "offset": {
+          "description": "Read only: per-collection offset (default 0).",
+          "minimum": 0,
+          "type": "integer"
         },
         "projectName": {
           "type": "string"
@@ -6745,7 +6761,8 @@
         "method": {
           "enum": [
             "help",
-            "modify"
+            "modify",
+            "read"
           ],
           "type": "string"
         },

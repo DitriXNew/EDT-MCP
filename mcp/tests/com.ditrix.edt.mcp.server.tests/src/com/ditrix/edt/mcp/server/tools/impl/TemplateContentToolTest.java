@@ -30,7 +30,7 @@ public class TemplateContentToolTest
         assertTrue(tool.getDescription().contains("get_tool_guide('template_content')"));
         JsonObject schema = json(tool.getInputSchema());
         JsonObject properties = schema.getAsJsonObject("properties");
-        assertEquals(Set.of("method", "fqn", "projectName", "template"), properties.keySet());
+        assertEquals(Set.of("method", "fqn", "projectName", "template", "areaName", "offset", "limit"), properties.keySet());
         assertEquals(1, schema.getAsJsonArray("required").size());
         assertEquals("method", schema.getAsJsonArray("required").get(0).getAsString());
         JsonObject payload = properties.getAsJsonObject("template");
@@ -61,8 +61,8 @@ public class TemplateContentToolTest
     @Test
     public void testInvalidMethodsAndModifyArgumentsRefusedBeforeProjectAccess()
     {
-        assertTrue(tool.execute(Map.of()).contains("method='help' or method='modify'"));
-        assertTrue(tool.execute(Map.of("method", "edit")).contains("method='help' or method='modify'"));
+        assertTrue(tool.execute(Map.of()).contains("method='help', method='read' or method='modify'"));
+        assertTrue(tool.execute(Map.of("method", "edit")).contains("method='help', method='read' or method='modify'"));
         assertTrue(tool.execute(Map.of("method", "modify")).contains("projectName"));
         for (String value : new String[] {"[]", "{broken", "null", "\"a\""})
         {
@@ -73,6 +73,27 @@ public class TemplateContentToolTest
         String mixed = tool.execute(Map.of("method", "modify", "projectName", "NoProject",
             "fqn", "CommonTemplate.Print", "template", "{}", "properties", "[]"));
         assertTrue(mixed, mixed.contains("Unknown template_content argument 'properties'"));
+    }
+
+    @Test
+    public void testReadAndModifyArgumentsCannotBeMixed()
+    {
+        assertTrue(tool.execute(Map.of("method", "read")).contains("projectName"));
+        var args = new java.util.HashMap<>(Map.of("method", "read", "projectName", "NoProject",
+            "fqn", "CommonTemplate.Print"));
+        for (var invalid : Map.of("offset", "-1", "limit", "201", "areaName", " ", "template", "{}").entrySet())
+        {
+            args.put(invalid.getKey(), invalid.getValue());
+            assertTrue(tool.execute(args).contains(invalid.getKey()));
+            args.remove(invalid.getKey());
+        }
+        args.put("offset", "1e0");
+        args.put("limit", "1.0");
+        assertNull(tool.validateRequest(args));
+        args.put("limit", "1.5");
+        assertTrue(tool.validateRequest(args).contains("limit"));
+        assertTrue(tool.execute(Map.of("method", "modify", "projectName", "NoProject",
+            "fqn", "CommonTemplate.Print", "template", "{}", "areaName", "Header")).contains("areaName"));
     }
 
     @Test

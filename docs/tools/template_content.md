@@ -1,22 +1,56 @@
 # template_content
 
-Edit an existing template's SpreadsheetDocument or TextDocument content. Use method='help' for guidance and method='modify' to write. Use metadata tools for the template object itself. Full parameters and examples: call get_tool_guide('template_content').
+Read a SpreadsheetDocument template's areas, cells, parameters, merges and drawings, or edit spreadsheet or text template content. Use method='read', 'modify' or 'help'. Use metadata tools for the template object itself. Full parameters and examples: call get_tool_guide('template_content').
 
 ## Parameters
 | Parameter | Required | Type | Description |
 | --- | --- | --- | --- |
-| method | yes | string (one of: help, modify) | help: show usage; modify: edit an existing template. |
-| projectName | — | string | Required for modify: EDT project name. |
-| fqn | — | string | Required for modify: CommonTemplate.Name or Type.Owner.Template.Name. |
+| method | yes | string (one of: help, modify, read) | help: show usage; modify: edit an existing template; read: inspect one spreadsheet template. |
+| projectName | — | string | Required for read and modify: EDT project name. |
+| fqn | — | string | Required for read and modify: CommonTemplate.Name or Type.Owner.Template.Name. |
+| areaName | — | string | Read only: named cell area (case-insensitive). |
+| offset | — | integer | Read only: per-collection offset (default 0). |
+| limit | — | integer | Read only: items per collection (default 100, max 200). |
 | template | — | object | Required for modify. TextDocument: {text, mode?, oldText?, expectedHash?, expectedSource?, overwrite?}; mode = 'searchReplace' (default, needs exactly one literal oldText match) / 'append' / 'replace' (the only mode that creates a missing file); replacing an existing file needs expectedHash or expectedSource from get_metadata_details, or overwrite=true. SpreadsheetDocument: {cells?, merges?, areas?, columnWidths?, rowHeights?, unmerges?, removeAreas?, renameAreas?}. cells [{row, col (both 0-based, required), replace?, text? \| parameter?, bold?, fontSize?, hAlign? (Left/Center/Right/Auto/Width), vAlign? (Top/Center/Bottom), wrap?, textOrientation? (TENTHS of a degree: 90 degrees = 900), autoIndent? (0..100), autoMarkIncomplete?, borders? ('Solid' or {style, width? 1..3}, or {left?, top?, right?, bottom?} of those), borderColor? / backColor? / textColor? ({red, green, blue}, 'Web.Red', 'Style.<Name>', 'auto')}]; merges [{fromRow, fromCol, toRow, toCol}]; areas [{name, fromRow, fromCol, toRow, toCol}]; columnWidths [{col, width?, autoWidthCalculation?, widthWeightFactor? (only with autoWidthCalculation:true)}]; rowHeights [{row, height}]; unmerges [{fromRow, fromCol, toRow, toCol}] drops every merge touching the range; removeAreas [name]; renameAreas [{name, newName}]; these three run first. Omitted or null cell keys keep their values; replace:true resets them. Non-empty text clears parameter and vice versa; '' clears the named one. false / 0 on a format key overrides inheritance, but wrap:false restores inherited placement. Other cells, merges and areas are kept. |
 
 ## Guide
 ## Methods
 
 - `help`: return this guide. No project, FQN or payload is needed.
+- `read`: inspect one SpreadsheetDocument without changing it. Supply `projectName` and `fqn`.
 - `modify`: edit an existing SpreadsheetDocument or TextDocument. Supply `projectName`, `fqn` and the `template` object. Use the English or Russian type/kind tokens and the programmatic object name, not its synonym.
 
 Create and delete the template object with `create_metadata` and `delete_metadata`; rename it with `rename_metadata_object`. Edit its content here. Binary, graphical and DCS content are not supported by this tool; use `dcs` for data composition schemas. Vendor locks and extension restrictions still apply.
+
+## Reading a spreadsheet template
+
+For print-form review, call
+`{method:'read', projectName:'P', fqn:'DataProcessor.Invoices.Template.Printout', areaName:'Header'}`.
+Omit `areaName` to list the whole template page by page. The area match is case-insensitive; a missing
+area or a non-cell name is refused. `get_template_screenshot` shows rendering, not these stored values.
+Read text templates instead with `get_metadata_details`.
+
+The result is `{method:'read', fqn, template:{areas, cells, merges, drawings, offset, limit, nextOffset?, areaName?}}`.
+All indexes are 0-based, and range bounds are inclusive:
+- `areas`: named cell areas with `name`, `type` (`rows`, `columns`, or `rectangle`) and the relevant
+  `fromRow`, `toRow`, `fromCol`, `toCol` bounds. A whole-axis area omits the other axis.
+- `cells`: populated text or parameter cells, with `row`, `col`, `type` (`text`, `parameter`, or
+  `template`), and `text` or `parameter`. `template` means stored mixed template text, not parsed or
+  evaluated parameters. Text carries the selected `language` where known (current, default, neutral
+  `#`, then first nonempty translation). Formatting-only and non-text typed values are not enumerated.
+- `merges`: stored rectangle/row/column merge declarations with the same bounds as areas, not a
+  computed rendering of inherited merges or unmerge overrides.
+- `drawings`: top-level `id`, model `type`, `name` where defined, and bounding cell `anchor` where
+  both positions exist. Image bytes, object contents, and anchor offsets are not returned.
+
+A filter narrows cells to the area and returns intersecting merges/drawings with their original bounds.
+Use `limit` (default 100, maximum 200) and `offset` (default 0) applied to **each** collection after
+filtering. Use the returned `nextOffset` unchanged until it is absent; a shorter collection may
+already be empty. A page can contain fewer items than requested to keep both JSON and text-only
+clients below the response size limit. Pages are in model order; read them while the template is unchanged.
+The tool remains disabled in read-only presets because it also has a write method.
+A string longer than 2048 UTF-16 units is marked with its sibling `<key>Truncated:true`. The read never
+creates a missing content resource or exports a write.
 
 ## Authoring a spreadsheet template
 First create a **SpreadsheetDocument** (the default template type) with `create_metadata`: `CommonTemplate.<Name>` (shared) or `<Type>.<Owner>.Template.<Name>` (owned). Writes use a BM transaction and force-export `.mxlx` before a persisted success; no `clean_project` is needed. Visually verify with `get_template_screenshot`.

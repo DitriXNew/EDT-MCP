@@ -1,9 +1,40 @@
 ## Methods
 
 - `help`: return this guide. No project, FQN or payload is needed.
+- `read`: inspect one SpreadsheetDocument without changing it. Supply `projectName` and `fqn`.
 - `modify`: edit an existing SpreadsheetDocument or TextDocument. Supply `projectName`, `fqn` and the `template` object. Use the English or Russian type/kind tokens and the programmatic object name, not its synonym.
 
 Create and delete the template object with `create_metadata` and `delete_metadata`; rename it with `rename_metadata_object`. Edit its content here. Binary, graphical and DCS content are not supported by this tool; use `dcs` for data composition schemas. Vendor locks and extension restrictions still apply.
+
+## Reading a spreadsheet template
+
+For print-form review, call
+`{method:'read', projectName:'P', fqn:'DataProcessor.Invoices.Template.Printout', areaName:'Header'}`.
+Omit `areaName` to list the whole template page by page. The area match is case-insensitive; a missing
+area or a non-cell name is refused. `get_template_screenshot` shows rendering, not these stored values.
+Read text templates instead with `get_metadata_details`.
+
+The result is `{method:'read', fqn, template:{areas, cells, merges, drawings, offset, limit, nextOffset?, areaName?}}`.
+All indexes are 0-based, and range bounds are inclusive:
+- `areas`: named cell areas with `name`, `type` (`rows`, `columns`, or `rectangle`) and the relevant
+  `fromRow`, `toRow`, `fromCol`, `toCol` bounds. A whole-axis area omits the other axis.
+- `cells`: populated text or parameter cells, with `row`, `col`, `type` (`text`, `parameter`, or
+  `template`), and `text` or `parameter`. `template` means stored mixed template text, not parsed or
+  evaluated parameters. Text carries the selected `language` where known (current, default, neutral
+  `#`, then first nonempty translation). Formatting-only and non-text typed values are not enumerated.
+- `merges`: stored rectangle/row/column merge declarations with the same bounds as areas, not a
+  computed rendering of inherited merges or unmerge overrides.
+- `drawings`: top-level `id`, model `type`, `name` where defined, and bounding cell `anchor` where
+  both positions exist. Image bytes, object contents, and anchor offsets are not returned.
+
+A filter narrows cells to the area and returns intersecting merges/drawings with their original bounds.
+Use `limit` (default 100, maximum 200) and `offset` (default 0) applied to **each** collection after
+filtering. Use the returned `nextOffset` unchanged until it is absent; a shorter collection may
+already be empty. A page can contain fewer items than requested to keep both JSON and text-only
+clients below the response size limit. Pages are in model order; read them while the template is unchanged.
+The tool remains disabled in read-only presets because it also has a write method.
+A string longer than 2048 UTF-16 units is marked with its sibling `<key>Truncated:true`. The read never
+creates a missing content resource or exports a write.
 
 ## Authoring a spreadsheet template
 First create a **SpreadsheetDocument** (the default template type) with `create_metadata`: `CommonTemplate.<Name>` (shared) or `<Type>.<Owner>.Template.<Name>` (owned). Writes use a BM transaction and force-export `.mxlx` before a persisted success; no `clean_project` is needed. Visually verify with `get_template_screenshot`.

@@ -3,7 +3,7 @@ Captures a **PNG screenshot** of a 1C **template** (макет) - a `Spreadsheet
 ## When to use
 - See what a print-form template looks like rendered, or read the text/cells laid out in it.
 - Review a макет visually before/after editing it.
-- For the declarative content as DATA, read the `Template.mxlx` model instead; this tool is only the rendered bitmap.
+- For declarative content, use `template_content(method="read")` on the same FQN; this tool returns only the rendered bitmap.
 
 ## How it renders (no JVM flag, no editor)
 A `SpreadsheetDocument` is the "moxel" model in EDT. This tool resolves the template object by FQN, reads its content `SpreadsheetDocument` from the model, and paints the **whole used cell range as one continuous image** - the way the editor canvas shows it - into an off-screen image on the UI thread via a standalone moxel control (`MoxelControl.paintViewPort`). **No editor is opened**, so the render does not depend on the EDT template editor's page structure (which varies across builds / headless runs). It is **not** split into print pages, so a wide template's right-hand columns stay beside the header instead of spilling onto a separate page. Unlike `get_form_screenshot` there is **no `-DnativeFormBufferedLayoutRender` dependency** - a blank result is not expected from a missing flag.
