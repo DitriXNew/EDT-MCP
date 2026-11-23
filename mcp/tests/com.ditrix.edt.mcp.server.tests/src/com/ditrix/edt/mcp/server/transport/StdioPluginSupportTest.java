@@ -188,6 +188,34 @@ public class StdioPluginSupportTest extends StdioTestSupport
         assertEquals(directory.resolve("edt-mcp-bootstrap.jar"), written.get());
         assertArrayEquals(ENTRY, Files.readAllBytes(written.get()));
     }
+    /** A refused write with no previous entry must fail: there is nothing to fall back to. */
+    @Test public void anAbsentEntryIsNotAdvertisedWhenTheWriteFails() throws Exception
+    {
+        Path directory = seeded();
+        var thrown = new AccessDeniedException(directory.resolve("edt-mcp-bootstrap.jar").toString());
+        IOException raised = assertThrows(IOException.class,
+            () -> StdioPluginSupport.extractBootstrap(directory, CURRENT, ENTRY, Files::delete, (path, bytes) -> {
+                throw thrown;
+            }));
+        assertSame(thrown, raised);
+        assertFalse(Files.exists(directory.resolve("edt-mcp-bootstrap.jar")));
+        // The runtime is still published, so the next extraction only has to place the entry.
+        assertEquals(runtimeName(CURRENT) + "\n", Files.readString(directory.resolve("current")));
+    }
+
+    /** A previous entry the private-storage checks refuse is not a launcher either. */
+    @Test public void aRefusedEntryIsNotAdvertisedWhenTheWriteFails() throws Exception
+    {
+        Path directory = seeded();
+        Path entry = directory.resolve("edt-mcp-bootstrap.jar");
+        Files.createSymbolicLink(entry, temporary.newFile().toPath());
+        assertThrows(IOException.class,
+            () -> StdioPluginSupport.extractBootstrap(directory, CURRENT, ENTRY, Files::delete, (path, bytes) -> {
+                throw new AccessDeniedException(path.toString());
+            }));
+        assertTrue("a refused entry must be left alone", Files.isSymbolicLink(entry));
+    }
+
     @Test public void matchingDirectoryIsRefusedWithoutStoppingCleanup() throws Exception
     {
         Path directory = seeded(); String name = "a".repeat(64) + ".jar";

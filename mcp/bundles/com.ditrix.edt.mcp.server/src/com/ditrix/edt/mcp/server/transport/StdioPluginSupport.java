@@ -100,15 +100,31 @@ public final class StdioPluginSupport
             EndpointRegistry.atomicWrite(directory.resolve("previous"), previous == null ? "" : previous + "\n");
             EndpointRegistry.atomicWrite(directory.resolve("current"), current + "\n");
             cleanupRuntimes(directory, current, previous, delete);
+            // Falling back to the previous entry is only safe when that entry is really there and
+            // really usable: an absent or refused file would be advertised as a working launcher.
+            boolean usable = usableEntry(destination);
             try { writeEntry.write(destination, entry); }
             catch (IOException e)
             {
+                if (!usable || !usableEntry(destination)) { throw e; }
                 Log.warning("Cannot update the stdio entry (" + e.getClass().getSimpleName()
                     + "); the current runtime is published and the existing entry still starts it."
                     + " Close stdio clients before the next start to replace the entry.", e);
             }
             return destination;
         }
+    }
+
+    /** True when the entry is present, a regular private file and readable - a usable launcher. */
+    private static boolean usableEntry(Path entry)
+    {
+        try
+        {
+            if (!Files.exists(entry, java.nio.file.LinkOption.NOFOLLOW_LINKS)) { return false; }
+            PrivatePaths.verifyFile(entry);
+            return Files.size(entry) > 0;
+        }
+        catch (IOException | RuntimeException e) { return false; }
     }
 
     private static String runtimePointer(Path pointer) throws IOException
