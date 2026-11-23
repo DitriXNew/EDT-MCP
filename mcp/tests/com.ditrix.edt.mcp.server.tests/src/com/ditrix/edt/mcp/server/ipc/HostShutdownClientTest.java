@@ -292,6 +292,19 @@ public class HostShutdownClientTest
         assertTrue(text(messages), text(messages).contains("starting or shutting down"));
     }
 
+    @Test public void aDanglingAgedClaimKeepsTheStateUnknown() throws Exception
+    {
+        // The claim exists without following it but its target does not: it cannot be resolved and
+        // must not be read as absent while the lock is free.
+        var registry = registry();
+        try { Files.createSymbolicLink(registry.claimPath(), registry.directory().resolve("missing-claim")); }
+        catch (IOException | UnsupportedOperationException e) { Assume.assumeNoException(e); }
+        var messages = new ByteArrayOutputStream();
+        assertEquals(HostShutdownClient.NOT_STOPPED,
+            HostShutdownClient.stop(registry.directory(), registry.workspace(), 500, sink(messages)));
+        assertTrue(text(messages), text(messages).contains("starting or shutting down"));
+    }
+
     @Test public void anAgedClaimOfADeadProcessFallsThroughToNoHost() throws Exception
     {
         var registry = registry();

@@ -261,8 +261,13 @@ public final class HostShutdownClient
             if (!process.has("pid") || !process.has("startTime")) { return false; }
             return EndpointRegistry.sameProcess(process.get("pid").getAsLong(), process.get("startTime").getAsString());
         }
-        catch (NoSuchFileException e) { return false; }
-        catch (IOException | RuntimeException e) { return true; }
+        catch (IOException | RuntimeException e)
+        {
+            // The caller only reaches this method once the claim was found without following it,
+            // so a read that still fails - a dangling link, a denied read - means the claim exists
+            // but cannot be resolved. That is unknown, never absent.
+            return true;
+        }
     }
 
     /** True only when the path is proven not to exist; an undeterminable state is not absence. */
