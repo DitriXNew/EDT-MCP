@@ -310,7 +310,8 @@ public class DestructiveConsentGateTest
             Set.of("clone_metadata_object", "delete_metadata", "rename_metadata_object", "delete_project", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                 "delete_infobase", "update_database", "infobase_sessions", "infobase_extensions", "standalone_server", "modify_metadata", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
                 "dcs", "git", "business_process_route_map", "project_checks", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-                "merge_rules", "evaluate_expression", "manage_profiling_results", "manage_tech_log"), //$NON-NLS-1$ //$NON-NLS-2$
+                "merge_rules", "evaluate_expression", "manage_profiling_results", "manage_tech_log", //$NON-NLS-1$ //$NON-NLS-2$
+                "write_module_source"), //$NON-NLS-1$
             DestructiveConsentGate.GATED_TOOLS);
     }
 
@@ -323,17 +324,18 @@ public class DestructiveConsentGateTest
         // evaluate_expression (arbitrary BSL: usually a read, occasionally a mutation, and nothing
         // in the call says which - which is exactly why the GATE asks every time while the HINT,
         // one per tool, keeps describing the typical read), plus project_checks (only effective
-        // set/switch writes and profile create/copy/delete). Those five carry their own annotations
-        // and are deliberately NOT in the always-destructive classifier list.
+        // set/switch writes and profile create/copy/delete) and write_module_source (deleteModule only).
+        // These tools are deliberately NOT in the always-destructive classifier list.
         //
         // merge_rules is gated conditionally too - only the same-path rewrite asks - and yet it IS
         // classified destructive, so it belongs on the other side of this branch. There is no
         // contradiction: the classifier answers per TOOL and has to describe what the tool CAN do,
-        // while the gate is called per CALL and can see which one this is. The five above are
+        // while the gate is called per CALL and can see which one this is. The exceptions are
         // absent from ToolAnnotationClassifier.DESTRUCTIVE_TOOLS, so classify() answers "an
         // ordinary write"; merge_rules is IN that list, and its entry there says why.
         Set<String> conditionallyDestructive =
-            Set.of("modify_metadata", "dcs", "git", "evaluate_expression", "project_checks", "manage_profiling_results", "manage_tech_log"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            Set.of("modify_metadata", "dcs", "git", "evaluate_expression", "project_checks", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+                "manage_profiling_results", "manage_tech_log", "write_module_source"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         for (String tool : DestructiveConsentGate.GATED_TOOLS)
         {
             boolean classifiedDestructive =

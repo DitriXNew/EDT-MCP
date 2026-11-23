@@ -9,10 +9,16 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IResource;
 import org.eclipse.core.resources.IWorkspace;
+import org.eclipse.core.runtime.Adapters;
 import org.eclipse.core.runtime.ICoreRunnable;
 import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.core.runtime.jobs.MultiRule;
 import org.eclipse.emf.ecore.EReference;
+import org.eclipse.ui.IEditorInput;
+import org.eclipse.ui.IEditorReference;
+import org.eclipse.ui.IFileEditorInput;
+import org.eclipse.ui.PartInitException;
+import org.eclipse.ui.PlatformUI;
 
 import com._1c.g5.v8.bm.core.IBmObject;
 import com._1c.g5.v8.dt.bsl.model.BslPackage;
@@ -175,26 +181,48 @@ public final class EmptyModuleRemoval
         }
     }
 
-    private static final class Windowed
+    static final class Windowed
     {
-        private static void requireClosed(IFile file, IFile owner) throws org.eclipse.ui.PartInitException
+        private static void requireClosed(IFile file, IFile owner) throws PartInitException
         {
-            for (var window : org.eclipse.ui.PlatformUI.getWorkbench().getWorkbenchWindows())
+            for (var window : PlatformUI.getWorkbench().getWorkbenchWindows())
             {
                 for (var page : window.getPages())
                 {
                     for (var ref : page.getEditorReferences())
                     {
-                        var input = ref.getEditorInput();
-                        IResource resource = input == null ? null : input.getAdapter(IResource.class);
-                        if (file.equals(resource) || owner.equals(resource) || (resource == null && ref.isDirty()))
-                        {
-                            throw Refusals.state("Close the module and its owning object's editors in EDT before "
-                                + "removing the module. Nothing was deleted.");
-                        }
+                        requireEditorDoesNotBlock(ref, file, owner);
                     }
                 }
             }
+        }
+
+        static void requireEditorDoesNotBlock(IEditorReference ref, IFile file, IFile owner)
+            throws PartInitException
+        {
+            IResource resource = editorResource(ref.getEditorInput());
+            if (file.equals(resource) || owner.equals(resource) || (resource == null && ref.isDirty()))
+            {
+                throw Refusals.state("Close the module and its owning object's editors in EDT before " //$NON-NLS-1$
+                    + "removing the module. Nothing was deleted."); //$NON-NLS-1$
+            }
+        }
+
+        private static IResource editorResource(IEditorInput input)
+        {
+            if (input instanceof IFileEditorInput)
+            {
+                // getFile is the typed contract; an implementation need not delegate getAdapter.
+                IFile file = ((IFileEditorInput)input).getFile();
+                if (file != null)
+                {
+                    return file;
+                }
+            }
+            // Eclipse's adapter manager also consults EDT's native model-to-resource factory for
+            // granular owner editors. Do not instantiate the editor or activate an unrelated plug-in.
+            IFile file = Adapters.adapt(input, IFile.class, false);
+            return file != null ? file : Adapters.adapt(input, IResource.class, false);
         }
     }
 }
