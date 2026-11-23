@@ -247,9 +247,8 @@ public class TemplateContentTool extends AbstractMetadataWriteTool
             }
             try
             {
-                readPageArgument(params, KEY_OFFSET, 0, 0, Integer.MAX_VALUE);
-                readPageArgument(params, KEY_LIMIT, SpreadsheetTemplateReader.DEFAULT_LIMIT,
-                    1, SpreadsheetTemplateReader.MAX_LIMIT);
+                readOffset(params);
+                readLimit(params);
                 return null;
             }
             catch (IllegalArgumentException e)
@@ -274,9 +273,20 @@ public class TemplateContentTool extends AbstractMetadataWriteTool
             ? malformedTemplateError() : null;
     }
 
-    private static int readPageArgument(Map<String, String> params, String key, int defaultValue, int min, int max)
+    private static int readOffset(Map<String, String> params)
     {
-        String value = JsonUtils.extractStringArgument(params, key);
+        return parsePageArgument(JsonUtils.extractStringArgument(params, KEY_OFFSET),
+            KEY_OFFSET, 0, 0, Integer.MAX_VALUE);
+    }
+
+    private static int readLimit(Map<String, String> params)
+    {
+        return parsePageArgument(JsonUtils.extractStringArgument(params, KEY_LIMIT),
+            KEY_LIMIT, SpreadsheetTemplateReader.DEFAULT_LIMIT, 1, SpreadsheetTemplateReader.MAX_LIMIT);
+    }
+
+    private static int parsePageArgument(String value, String key, int defaultValue, int min, int max)
+    {
         if (value == null)
         {
             return defaultValue;
@@ -372,9 +382,8 @@ public class TemplateContentTool extends AbstractMetadataWriteTool
             JsonObject data = SpreadsheetTemplateReader.read(
                 content instanceof SpreadsheetDocument document ? document : null,
                 JsonUtils.extractStringArgument(params, KEY_AREA_NAME),
-                readPageArgument(params, KEY_OFFSET, 0, 0, Integer.MAX_VALUE),
-                readPageArgument(params, KEY_LIMIT, SpreadsheetTemplateReader.DEFAULT_LIMIT,
-                    1, SpreadsheetTemplateReader.MAX_LIMIT));
+                readOffset(params),
+                readLimit(params));
             return ToolResult.success().put(KEY_METHOD, READ).put(KEY_FQN, fqn).put(KEY_TEMPLATE, data).toJson();
         }
         catch (IllegalArgumentException e)
