@@ -12,8 +12,10 @@ import java.net.UnixDomainSocketAddress;
 import java.nio.channels.SocketChannel;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
+import java.nio.file.LinkOption;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -94,11 +96,8 @@ public final class HostShutdownClient
         Path directory;
         try { directory = Path.of(workspace); }
         catch (InvalidPathException e) { usage(err, "-data is not a usable path: " + workspace); return NOT_STOPPED; }
-        if (!Files.isDirectory(directory))
-        {
-            err.println("edt-mcp-shutdown: the workspace directory does not exist: " + directory);
-            return ABSENT;
-        }
+        int workspaceState = checkDirectory(directory, "workspace directory", err);
+        if (workspaceState != STOPPED) { return workspaceState; }
 
         long timeout;
         String requested = option(args, "-timeout");
@@ -135,29 +134,51 @@ public final class HostShutdownClient
         return EndpointRegistry.userDirectory().resolve("ipc");
     }
 
-    /**
-     * True only when the path is provably absent: its nearest existing ancestor is a directory, so
-     * there is nothing below it. A broken chain (a file standing where a directory is needed) or
-     * an unreadable ancestor leaves the state unknown and is reported as {@code false}.
-     *
-     * @param path the path whose absence is in question
-     * @return whether the path is definitely not there
-     */
-    private static boolean provablyAbsent(Path path)
+    private static int checkDirectory(Path path, String label, PrintStream err, LinkOption... options)
     {
-        for (Path current = path; current != null; current = current.getParent())
+        try
+        {
+            if (Files.readAttributes(path, BasicFileAttributes.class, options).isDirectory()) { return STOPPED; }
+            err.println("edt-mcp-shutdown: the " + label + " is not a directory: " + path);
+            return NOT_STOPPED;
+        }
+        catch (NoSuchFileException e)
+        {
+            if (provablyAbsent(path, options))
+            {
+                err.println("edt-mcp-shutdown: the " + label + " does not exist: " + path);
+                return ABSENT;
+            }
+            return unknownDirectory(path, label, e, err);
+        }
+        catch (IOException | SecurityException e) { return unknownDirectory(path, label, e, err); }
+    }
+
+    private static int unknownDirectory(Path path, String label, Exception error, PrintStream err)
+    {
+        err.println("edt-mcp-shutdown: cannot read the " + label + " at " + path
+            + ": " + message(error) + "; the host state is unknown");
+        return NOT_STOPPED;
+    }
+
+    private static boolean provablyAbsent(Path path, LinkOption... options)
+    {
+        // Windows also reports NoSuchFileException when a regular file obstructs the path.
+        // Walk up to distinguish a missing subtree from an invalid or unreadable one. A
+        // dangling link or a path that reappeared after the first lookup is not absence.
+        for (Path current = path.toAbsolutePath(); current != null; current = current.getParent())
         {
             try
             {
-                var attributes = Files.readAttributes(current,
-                    java.nio.file.attribute.BasicFileAttributes.class, java.nio.file.LinkOption.NOFOLLOW_LINKS);
-                // The path itself already reported "missing", so this is an ancestor: it decides.
-                return attributes.isDirectory();
+                var attributes = Files.readAttributes(current, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+                return !current.equals(path.toAbsolutePath())
+                    && (!attributes.isSymbolicLink() || options.length == 0)
+                    && Files.readAttributes(current, BasicFileAttributes.class, options).isDirectory();
             }
             catch (NoSuchFileException e) { /* keep walking up */ }
-            catch (IOException e) { return false; }
+            catch (IOException | SecurityException e) { return false; }
         }
-        return true;
+        return false;
     }
 
     /**
@@ -171,38 +192,8 @@ public final class HostShutdownClient
      */
     static int stop(Path ipc, Path workspace, long timeoutMillis, PrintStream err)
     {
-        // Only an absent registry means nothing is running: a path the process cannot read
-        // leaves the host state unknown, so it must not be reported as absence.
-        java.nio.file.attribute.BasicFileAttributes registryAttributes;
-        try
-        {
-            registryAttributes = Files.readAttributes(ipc,
-                java.nio.file.attribute.BasicFileAttributes.class, java.nio.file.LinkOption.NOFOLLOW_LINKS);
-        }
-        catch (NoSuchFileException e)
-        {
-            // Windows reports the same exception when a parent of the path is not a directory, so
-            // "missing" alone does not prove the registry is absent: only a resolvable chain does.
-            if (!provablyAbsent(ipc))
-            {
-                err.println("edt-mcp-shutdown: cannot read the MCP endpoint registry under " + ipc
-                    + ": " + message(e) + "; the host state is unknown");
-                return NOT_STOPPED;
-            }
-            err.println("edt-mcp-shutdown: no MCP endpoint registry under " + ipc + "; no host is running.");
-            return ABSENT;
-        }
-        catch (IOException e)
-        {
-            err.println("edt-mcp-shutdown: cannot read the MCP endpoint registry under " + ipc
-                + ": " + message(e) + "; the host state is unknown");
-            return NOT_STOPPED;
-        }
-        if (!registryAttributes.isDirectory())
-        {
-            err.println("edt-mcp-shutdown: no MCP endpoint registry under " + ipc + "; no host is running.");
-            return ABSENT;
-        }
+        int registryState = checkDirectory(ipc, "MCP endpoint registry", err, LinkOption.NOFOLLOW_LINKS);
+        if (registryState != STOPPED) { return registryState; }
         EndpointRegistry registry;
         try { registry = new EndpointRegistry(EndpointRegistry.privateDirectory(ipc), workspace); }
         catch (IOException | RuntimeException e)

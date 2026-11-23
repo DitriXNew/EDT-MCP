@@ -181,7 +181,7 @@ public class HostShutdownClientTest
         Path missing = temporary.getRoot().toPath().resolve("no-ipc");
         assertEquals(HostShutdownClient.ABSENT,
             HostShutdownClient.stop(missing, temporary.getRoot().toPath(), 500, sink(messages)));
-        assertTrue(text(messages), text(messages).contains("no MCP endpoint registry"));
+        assertTrue(text(messages), text(messages).contains("MCP endpoint registry does not exist"));
     }
 
     @Test public void anUnreadableEndpointRecordIsNotReportedAsNoHost() throws Exception
@@ -197,14 +197,25 @@ public class HostShutdownClientTest
         assertTrue(text(messages), text(messages).contains("unknown"));
     }
 
-    @Test public void aRegistryPathThatIsNotADirectoryIsStillNoHost() throws Exception
+    @Test public void aRegistryPathOfTheWrongTypeDoesNotConfirmAbsence() throws Exception
     {
-        // A regular file at the registry path cannot hold an endpoint record: nothing is running.
         Path file = temporary.newFile().toPath();
         ByteArrayOutputStream messages = new ByteArrayOutputStream();
-        assertEquals(HostShutdownClient.ABSENT,
+        assertEquals(HostShutdownClient.NOT_STOPPED,
             HostShutdownClient.stop(file, temporary.getRoot().toPath(), 500, sink(messages)));
-        assertTrue(text(messages), text(messages).contains("no MCP endpoint registry"));
+        assertTrue(text(messages), text(messages).contains("not a directory"));
+    }
+
+    @Test public void anInvalidWorkspacePathDoesNotConfirmAbsence() throws Exception
+    {
+        Path file = temporary.newFile().toPath();
+        for (Path path : List.of(file, file.resolve("workspace")))
+        {
+            ByteArrayOutputStream messages = new ByteArrayOutputStream();
+            assertEquals(path.toString(), HostShutdownClient.NOT_STOPPED,
+                HostShutdownClient.run(new String[]{"-data", path.toString()}, sink(messages)));
+            assertTrue(text(messages), text(messages).contains("workspace directory"));
+        }
     }
 
     @Test public void anUnreadableRegistryIsNotReportedAsNoHost() throws Exception
