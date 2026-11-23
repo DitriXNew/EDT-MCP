@@ -3,9 +3,20 @@
 package com.ditrix.edt.mcp.server;
 
 import static org.junit.Assert.*;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+
+import org.eclipse.core.resources.IWorkspace;
+import org.eclipse.core.runtime.CoreException;
+import org.eclipse.core.runtime.IProgressMonitor;
+import org.eclipse.core.runtime.IStatus;
+import org.eclipse.core.runtime.Status;
 import org.eclipse.equinox.app.IApplicationContext;
 import org.junit.Test;
 
@@ -47,7 +58,7 @@ public class StdioHostApplicationTest
         public boolean ipcRunning() { step("ipc"); return ipc; }
         public void stopContexts() { step("stop"); }
         public void waitForContexts() { step("wait"); }
-        public void save() { step("save"); }
+        public void save() throws CoreException { step("save"); }
         public void release() { step("release"); }
         public void failure(String message, Throwable error) { failure = error; calls.add("failure"); }
     }
@@ -81,6 +92,65 @@ public class StdioHostApplicationTest
             });
             assertEquals(Boolean.valueOf(success), completion.get(10, java.util.concurrent.TimeUnit.SECONDS));
             assertEquals(Integer.valueOf(success ? 0 : 1), result.get(10, java.util.concurrent.TimeUnit.SECONDS));
+        } finally {
+            runtime.app.stop();
+            executor.shutdownNow();
+        }
+    }
+
+    @Test public void workspaceSaveWarningCannotBeConfirmed() throws Exception {
+        var workspace = mock(IWorkspace.class);
+        var warning = new Status(IStatus.WARNING, "test.save", "Participant could not save");
+        when(workspace.save(eq(true), any(IProgressMonitor.class))).thenReturn(warning);
+        assertWorkspaceShutdown(workspace, false, warning, null);
+    }
+
+    @Test public void workspaceSaveOkCanBeConfirmed() throws Exception {
+        var workspace = mock(IWorkspace.class);
+        when(workspace.save(eq(true), any(IProgressMonitor.class))).thenReturn(Status.OK_STATUS);
+        assertWorkspaceShutdown(workspace, true, null, null);
+    }
+
+    @Test public void workspaceSaveErrorStatusCannotBeConfirmed() throws Exception {
+        var workspace = mock(IWorkspace.class);
+        var error = new Status(IStatus.ERROR, "test.save", "Workspace could not save");
+        when(workspace.save(eq(true), any(IProgressMonitor.class))).thenReturn(error);
+        assertWorkspaceShutdown(workspace, false, error, null);
+    }
+
+    @Test public void workspaceSaveExceptionIsPreserved() throws Exception {
+        var workspace = mock(IWorkspace.class);
+        var thrown = new CoreException(new Status(IStatus.ERROR, "test.save", "Workspace save threw"));
+        when(workspace.save(eq(true), any(IProgressMonitor.class))).thenThrow(thrown);
+        assertWorkspaceShutdown(workspace, false, null, thrown);
+    }
+
+    private static void assertWorkspaceShutdown(IWorkspace workspace, boolean success, IStatus status,
+        CoreException thrown) throws Exception {
+        Runtime runtime = new Runtime() {
+            @Override public void save() throws CoreException {
+                super.save();
+                StdioHostPlatform.saveWorkspace(workspace);
+            }
+            @Override public void stopTransport() { calls.add("transport"); }
+        };
+        runtime.app = new StdioHostApplication(runtime);
+        runtime.stopOnCore = false;
+        var executor = java.util.concurrent.Executors.newSingleThreadExecutor();
+        var completion = new java.util.concurrent.atomic.AtomicReference<Boolean>();
+        try {
+            var result = executor.submit(() -> runtime.app.start(new Context()));
+            assertTrue(runtime.coreStarted.await(10, java.util.concurrent.TimeUnit.SECONDS));
+            runtime.shutdown.accept(ok -> { completion.set(ok); runtime.calls.add("receipt"); });
+            Object exit = result.get(10, java.util.concurrent.TimeUnit.SECONDS);
+            assertEquals("Workspace shutdown receipt", Boolean.valueOf(success), completion.get());
+            assertEquals(Integer.valueOf(success ? 0 : 1), exit);
+            assertEquals(success ? List.of("save", "release", "receipt", "transport")
+                : List.of("save", "failure", "release", "receipt", "transport"),
+                runtime.calls.subList(runtime.calls.indexOf("save"), runtime.calls.size()));
+            if (success) { assertNull(runtime.failure); }
+            else if (thrown != null) { assertSame(thrown, runtime.failure); }
+            else { assertSame(status, ((CoreException)runtime.failure).getStatus()); }
         } finally {
             runtime.app.stop();
             executor.shutdownNow();

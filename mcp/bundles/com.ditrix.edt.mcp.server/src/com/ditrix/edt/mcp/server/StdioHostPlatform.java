@@ -4,7 +4,9 @@ package com.ditrix.edt.mcp.server;
 
 import java.util.function.Consumer;
 
+import org.eclipse.core.resources.IWorkspace;
 import org.eclipse.core.resources.ResourcesPlugin;
+import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.core.runtime.Platform;
 import org.eclipse.osgi.service.datalocation.Location;
@@ -50,8 +52,13 @@ final class StdioHostPlatform implements StdioHostApplication.Runtime
     }
     @Override public void waitForContexts() { CoreServiceLifecycleUtils.waitForStartingContexts(); }
     @Override public void save() throws Exception {
-        ResourcesPlugin.getWorkspace().save(true, new NullProgressMonitor());
+        saveWorkspace(ResourcesPlugin.getWorkspace());
         Activator.logInfo("EDT MCP headless workspace saved");
+    }
+    static void saveWorkspace(IWorkspace workspace) throws CoreException {
+        var status = workspace.save(true, new NullProgressMonitor());
+        // Eclipse can report a failed save participant as a warning without throwing.
+        if (!status.isOK()) { throw new CoreException(status); }
     }
     @Override public void release() {
         try { if (questions != null) { questions.unregister(); } }
