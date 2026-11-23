@@ -8,11 +8,13 @@ import java.io.IOException;
 import java.io.PrintStream;
 import java.net.StandardProtocolFamily;
 import java.net.UnixDomainSocketAddress;
+import java.nio.channels.FileChannel;
 import java.nio.channels.ServerSocketChannel;
 import java.nio.channels.SocketChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
@@ -231,6 +233,45 @@ public class HostShutdownClientTest
         assertEquals(HostShutdownClient.NOT_STOPPED,
             HostShutdownClient.stop(file.resolve("child"), registry.workspace(), 500, sink(messages)));
         assertTrue(text(messages), text(messages).contains("unknown"));
+    }
+
+    @Test public void aWorkspaceLockedByAHostWithoutAnEndpointIsNotReportedAsNoHost() throws Exception
+    {
+        // A host owns the workspace between locking it and publishing its listener, and an idle
+        // teardown removes the record before releasing the lock. Both must stay unknown.
+        var registry = registry();
+        Path metadata = registry.workspace().resolve(".metadata");
+        Files.createDirectories(metadata);
+        Path lock = metadata.resolve(".lock");
+        Files.writeString(lock, "");
+        ByteArrayOutputStream messages = new ByteArrayOutputStream();
+        try (var channel = FileChannel.open(lock, StandardOpenOption.WRITE);
+             var held = channel.lock())
+        {
+            assertEquals(HostShutdownClient.NOT_STOPPED,
+                HostShutdownClient.stop(registry.directory(), registry.workspace(), 500, sink(messages)));
+            assertTrue(text(messages), text(messages).contains("starting or shutting down"));
+        }
+    }
+
+    @Test public void aFreshStartupClaimWithoutAnEndpointIsNotReportedAsNoHost() throws Exception
+    {
+        var registry = registry();
+        EndpointRegistry.atomicWrite(registry.claimPath(),
+            "{\"requested\":\"" + java.time.Instant.now() + "\",\"process\":null}");
+        ByteArrayOutputStream messages = new ByteArrayOutputStream();
+        assertEquals(HostShutdownClient.NOT_STOPPED,
+            HostShutdownClient.stop(registry.directory(), registry.workspace(), 500, sink(messages)));
+        assertTrue(text(messages), text(messages).contains("starting or shutting down"));
+    }
+
+    @Test public void aWorkspaceWithoutClaimsOrLockIsStillNoHost() throws Exception
+    {
+        var registry = registry();
+        ByteArrayOutputStream messages = new ByteArrayOutputStream();
+        assertEquals(HostShutdownClient.ABSENT,
+            HostShutdownClient.stop(registry.directory(), registry.workspace(), 500, sink(messages)));
+        assertTrue(text(messages), text(messages).contains("no live host"));
     }
 
     @Test public void anUnreachableSocketIsReportedWithoutThrowing() throws Exception

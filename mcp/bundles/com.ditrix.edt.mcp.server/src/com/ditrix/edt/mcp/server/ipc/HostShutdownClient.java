@@ -9,12 +9,15 @@ import java.io.IOException;
 import java.io.PrintStream;
 import java.net.StandardProtocolFamily;
 import java.net.UnixDomainSocketAddress;
+import java.nio.channels.FileChannel;
+import java.nio.channels.FileLock;
 import java.nio.channels.SocketChannel;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
 import java.nio.file.LinkOption;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.Executors;
@@ -66,6 +69,9 @@ public final class HostShutdownClient
 
     /** Seconds to wait for the process to go away unless {@code -timeout} overrides it. */
     static final int DEFAULT_TIMEOUT_SECONDS = 20;
+
+    /** A startup claim older than this cannot describe a start still in flight. */
+    private static final long CLAIM_FRESH_SECONDS = 180;
 
     /** How often the exit is re-checked; the wait is short because the host is already dying. */
     private static final long POLL_MILLIS = 50;
@@ -164,21 +170,63 @@ public final class HostShutdownClient
     private static boolean provablyAbsent(Path path, LinkOption... options)
     {
         // Windows also reports NoSuchFileException when a regular file obstructs the path.
-        // Walk up to distinguish a missing subtree from an invalid or unreadable one. A
-        // dangling link or a path that reappeared after the first lookup is not absence.
-        for (Path current = path.toAbsolutePath(); current != null; current = current.getParent())
+        // Walk up to find the nearest component that exists: absence is proven only when that
+        // component is an ordinary directory. A component that exists but is a link we cannot
+        // follow, or whose followed chain does not resolve, leaves the state unknown - walking
+        // past it would report a workspace behind a dangling link as merely missing.
+        Path absolute = path.toAbsolutePath();
+        for (Path current = absolute; current != null; current = current.getParent())
         {
-            try
-            {
-                var attributes = Files.readAttributes(current, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
-                return !current.equals(path.toAbsolutePath())
-                    && (!attributes.isSymbolicLink() || options.length == 0)
-                    && Files.readAttributes(current, BasicFileAttributes.class, options).isDirectory();
-            }
-            catch (NoSuchFileException e) { /* keep walking up */ }
+            BasicFileAttributes attributes;
+            try { attributes = Files.readAttributes(current, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS); }
+            catch (NoSuchFileException e) { continue; }
+            catch (IOException | SecurityException e) { return false; }
+            if (current.equals(absolute)) { continue; }
+            if (attributes.isSymbolicLink() && options.length > 0) { return false; }
+            try { return Files.readAttributes(current, BasicFileAttributes.class, options).isDirectory(); }
+            catch (NoSuchFileException e) { return false; }
             catch (IOException | SecurityException e) { return false; }
         }
         return false;
+    }
+
+    /**
+     * True while a start or a teardown may still be in flight for this workspace even though no
+     * live endpoint record exists: a recent startup claim, or a workspace lock that cannot be
+     * taken because a process still owns it. A claim left behind by a dead process ages out; the
+     * lock is the authoritative signal, and a lock we can take means nothing owns the workspace.
+     *
+     * @param registry the private per-workspace registry
+     * @return whether the workspace may still belong to a running host
+     */
+    static boolean startupOrTeardownInFlight(EndpointRegistry registry)
+    {
+        try
+        {
+            Path claim = registry.claimPath();
+            if (Files.exists(claim, LinkOption.NOFOLLOW_LINKS)
+                && Files.getLastModifiedTime(claim, LinkOption.NOFOLLOW_LINKS).toInstant()
+                    .plusSeconds(CLAIM_FRESH_SECONDS).isAfter(java.time.Instant.now()))
+            {
+                return true;
+            }
+        }
+        catch (IOException | RuntimeException e)
+        {
+            // An unreadable claim is as good a reason to stay uncertain as a fresh one.
+            return true;
+        }
+        Path lock = registry.workspace().resolve(".metadata/.lock");
+        try (FileChannel channel = FileChannel.open(lock, StandardOpenOption.WRITE))
+        {
+            try (FileLock held = channel.tryLock()) { return held == null; }
+        }
+        catch (java.nio.channels.OverlappingFileLockException e) { return true; }
+        catch (IOException e)
+        {
+            // An absent lock file has nothing to hold; anything else leaves the state unknown.
+            return Files.exists(lock, LinkOption.NOFOLLOW_LINKS);
+        }
     }
 
     /**
@@ -215,6 +263,16 @@ public final class HostShutdownClient
         }
         if (endpoint == null || !EndpointRegistry.live(endpoint))
         {
+            // A missing record is not proof that nothing is running: a host holds the workspace
+            // between locking it and publishing its listener, and an idle teardown removes the
+            // record before releasing the lock. Both states must stay unknown, or a caller would
+            // start a second EDT against a workspace that is still owned.
+            if (startupOrTeardownInFlight(registry))
+            {
+                err.println("edt-mcp-shutdown: an EDT host for " + workspace
+                    + " is starting or shutting down; the host state is unknown");
+                return NOT_STOPPED;
+            }
             err.println("edt-mcp-shutdown: no live host is registered for " + workspace + ".");
             return ABSENT;
         }
