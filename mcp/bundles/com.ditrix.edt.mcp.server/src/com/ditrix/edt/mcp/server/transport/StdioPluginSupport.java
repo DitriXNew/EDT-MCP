@@ -92,29 +92,52 @@ public final class StdioPluginSupport
             // Re-extracting the same build must not discard the preceding generation.
             if (current.equals(previous)) { previous = runtimePointer(directory.resolve("previous")); }
             writeJar(directory.resolve(current), runtime);
-            // The runtime is what changes behaviour, so its pointer is published first. The entry
-            // keeps a fixed name while its bytes are versioned, so a connected stdio client holds it
-            // open on Windows and the replacement fails with AccessDenied. Publishing the pointer
-            // before writing the entry lets a known compatible launcher load the new runtime.
-            // Extraction retries the replacement on a later start, once the client is gone.
-            EndpointRegistry.atomicWrite(directory.resolve("previous"), previous == null ? "" : previous + "\n");
-            EndpointRegistry.atomicWrite(directory.resolve("current"), current + "\n");
-            cleanupRuntimes(directory, current, previous, delete);
             byte[] existing = existingJar(destination);
-            if (Arrays.equals(existing, entry)) { return destination; }
+            boolean identical = Arrays.equals(existing, entry);
+            boolean compatible = !identical && existing != null && COMPATIBLE_ENTRY_HASHES.contains(sha256(existing));
+            // The runtime is what changes behaviour, so its pointer moves first - but only when the
+            // entry that will stay behind can actually load it. The entry keeps a fixed name while
+            // its bytes are versioned, so a connected stdio client holds it open on Windows and the
+            // replacement fails with AccessDenied. A launcher outside the compatibility allowlist is
+            // replaced BEFORE the pointer moves: publishing first would let it read a runtime it
+            // cannot load, and the throw would no longer fail closed.
+            if (identical || compatible)
+            {
+                publishRuntimePointer(directory, previous, current, delete);
+                if (identical) { return destination; }
+                var refusal = PrivatePaths.atomicWriteReportingMoveDenial(destination, entry);
+                if (refusal != null)
+                {
+                    if (!Arrays.equals(existing, existingJar(destination)))
+                    {
+                        throw new IOException("The stdio entry changed while it was being replaced; close the stdio clients and retry.", refusal);
+                    }
+                    Log.warning("Cannot replace the stdio entry; the current runtime is published and the existing entry still starts it."
+                        + " Close stdio clients before the next start to replace the entry.", refusal);
+                }
+                return destination;
+            }
             var refusal = PrivatePaths.atomicWriteReportingMoveDenial(destination, entry);
             if (refusal != null)
             {
-                if (existing == null || !COMPATIBLE_ENTRY_HASHES.contains(sha256(existing))
-                    || !Arrays.equals(existing, existingJar(destination)))
-                {
-                    throw new IOException("Close stdio clients before updating the bootstrap entry, then reopen Window > Preferences > MCP Server > General.", refusal);
-                }
-                Log.warning("Cannot replace the stdio entry; the current runtime is published and the existing entry still starts it."
-                    + " Close stdio clients before the next start to replace the entry.", refusal);
+                // Nothing was published: the pointer still selects the previous runtime, which is
+                // exactly what the retained entry can load. Obsolete generations are still dropped,
+                // so a refused swap does not accumulate runtimes. The caller must clear the holder.
+                cleanupRuntimes(directory, current, previous, delete);
+                throw new IOException("Close stdio clients before updating the bootstrap entry, then reopen Window > Preferences > MCP Server > General.", refusal);
             }
+            publishRuntimePointer(directory, previous, current, delete);
             return destination;
         }
+    }
+
+    /** Publishes the new runtime, then drops generations no retained entry can still open. */
+    private static void publishRuntimePointer(Path directory, String previous, String current, RuntimeDelete delete)
+        throws IOException
+    {
+        EndpointRegistry.atomicWrite(directory.resolve("previous"), previous == null ? "" : previous + "\n");
+        EndpointRegistry.atomicWrite(directory.resolve("current"), current + "\n");
+        cleanupRuntimes(directory, current, previous, delete);
     }
 
     private static String sha256(byte[] bytes)

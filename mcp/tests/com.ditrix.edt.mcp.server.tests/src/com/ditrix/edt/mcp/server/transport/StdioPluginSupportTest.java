@@ -183,7 +183,8 @@ public class StdioPluginSupportTest extends StdioTestSupport
         Path entry = PrivatePaths.directory(directory.resolve("edt-mcp-bootstrap.jar"));
         assertThrows(IOException.class, () -> extract(directory, CURRENT));
         assertTrue(Files.isDirectory(entry));
-        assertEquals(runtimeName(CURRENT) + "\n", Files.readString(directory.resolve("current")));
+        // Fail closed: the pointer must not name a runtime the unusable entry cannot load.
+        assertEquals(runtimeName(PREVIOUS) + "\n", Files.readString(directory.resolve("current")));
     }
 
     private byte[] releasedEntry() throws IOException
@@ -264,9 +265,13 @@ public class StdioPluginSupportTest extends StdioTestSupport
             IOException refusal = assertThrows(IOException.class,
                 () -> StdioPluginSupport.extractBootstrap(directory, CURRENT, replacement, Files::delete));
             assertTrue("Must reach the atomic move", refusal.getCause() instanceof AccessDeniedException);
-            assertEquals(runtimeName(CURRENT) + "\n", Files.readString(directory.resolve("current")));
+            // An incompatible launcher cannot load the new runtime, so the pointer stays put and
+            // no "previous" record is written: the retained entry keeps reading the old runtime.
+            assertEquals(runtimeName(PREVIOUS) + "\n", Files.readString(directory.resolve("current")));
             assertArrayEquals(held, Files.readAllBytes(entry));
-            assertListing(directory, "current", "previous", "extract.lock", "edt-mcp-bootstrap.jar",
+            assertFalse("A refused swap must not publish a new pointer record",
+                Files.exists(directory.resolve("previous"), LinkOption.NOFOLLOW_LINKS));
+            assertListing(directory, "current", "extract.lock", "edt-mcp-bootstrap.jar",
                 runtimeName(PREVIOUS), runtimeName(CURRENT));
         }
     }
