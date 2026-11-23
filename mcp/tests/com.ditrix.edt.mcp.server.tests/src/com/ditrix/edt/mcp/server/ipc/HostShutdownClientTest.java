@@ -21,6 +21,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import org.junit.Assume;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -272,6 +273,40 @@ public class HostShutdownClientTest
         assertEquals(HostShutdownClient.ABSENT,
             HostShutdownClient.stop(registry.directory(), registry.workspace(), 500, sink(messages)));
         assertTrue(text(messages), text(messages).contains("no live host"));
+    }
+
+    @Test public void aDanglingWorkspaceLeafIsNotReportedAsNoHost() throws Exception
+    {
+        Path root = temporary.newFolder().toPath();
+        Path link = root.resolve("workspace");
+        try { Files.createSymbolicLink(link, root.resolve("missing-target")); }
+        catch (IOException | UnsupportedOperationException e) { Assume.assumeNoException(e); }
+        var messages = new ByteArrayOutputStream();
+        assertEquals(HostShutdownClient.NOT_STOPPED, HostShutdownClient.run(
+            new String[] { "-data", link.toString(), "-timeout", "0" }, sink(messages)));
+        assertTrue(text(messages), text(messages).contains("unknown"));
+    }
+
+    @Test public void anUnreadableWorkspaceLockKeepsTheStateUnknown() throws Exception
+    {
+        // The lock exists but cannot be reached: the parent directory is not searchable for the
+        // bring-up. Only a proven absence may clear the workspace.
+        Assume.assumeFalse(System.getProperty("os.name").startsWith("Windows"));
+        var registry = registry();
+        Path metadata = registry.workspace().resolve(".metadata");
+        Files.createDirectories(metadata);
+        Path lock = metadata.resolve(".lock");
+        Files.writeString(lock, "");
+        var permissions = java.nio.file.attribute.PosixFilePermissions.fromString("---------");
+        try
+        {
+            Files.setPosixFilePermissions(metadata, permissions);
+            var messages = new ByteArrayOutputStream();
+            assertEquals(HostShutdownClient.NOT_STOPPED,
+                HostShutdownClient.stop(registry.directory(), registry.workspace(), 500, sink(messages)));
+            assertTrue(text(messages), text(messages).contains("starting or shutting down"));
+        }
+        finally { Files.setPosixFilePermissions(metadata, java.nio.file.attribute.PosixFilePermissions.fromString("rwx------")); }
     }
 
     @Test public void anUnreachableSocketIsReportedWithoutThrowing() throws Exception

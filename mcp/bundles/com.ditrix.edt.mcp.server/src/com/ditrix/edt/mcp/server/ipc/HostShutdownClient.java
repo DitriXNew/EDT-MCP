@@ -181,7 +181,11 @@ public final class HostShutdownClient
             try { attributes = Files.readAttributes(current, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS); }
             catch (NoSuchFileException e) { continue; }
             catch (IOException | SecurityException e) { return false; }
-            if (current.equals(absolute)) { continue; }
+            // The path itself exists without following it - a link whose chain did not resolve -
+            // so it is not absent, and its parent must not stand in for it.
+            if (current.equals(absolute)) { return false; }
+            // A component we cannot follow proves nothing either: the chain never resolved
+            // through it, so the state stays unknown rather than reading as absent.
             if (attributes.isSymbolicLink() && options.length > 0) { return false; }
             try { return Files.readAttributes(current, BasicFileAttributes.class, options).isDirectory(); }
             catch (NoSuchFileException e) { return false; }
@@ -224,9 +228,23 @@ public final class HostShutdownClient
         catch (java.nio.channels.OverlappingFileLockException e) { return true; }
         catch (IOException e)
         {
-            // An absent lock file has nothing to hold; anything else leaves the state unknown.
-            return Files.exists(lock, LinkOption.NOFOLLOW_LINKS);
+            // Only a proven absence clears the workspace. Files.exists returns false both for an
+            // absent file and for one whose state cannot be determined, so an unreadable lock - an
+            // unsearchable parent, a denying ACL - must leave the state unknown.
+            return !provablyMissing(lock);
         }
+    }
+
+    /** True only when the path is proven not to exist; an undeterminable state is not absence. */
+    private static boolean provablyMissing(Path path)
+    {
+        try
+        {
+            Files.readAttributes(path, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+            return false;
+        }
+        catch (NoSuchFileException e) { return provablyAbsent(path, LinkOption.NOFOLLOW_LINKS); }
+        catch (IOException | SecurityException e) { return false; }
     }
 
     /**
