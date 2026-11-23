@@ -14,9 +14,9 @@ stops resolving an extension project fails here.
 It is a deliberately cross-tool file (the one-file-per-tool rule's documented
 exception, like test_live_roundtrip.py): the value is "do these tools work on an
 EXTENSION at all", not per-tool depth (that lives in the per-tool files against the
-base config). All tests are READ-only; the extension fixture lives under tests/tests
-(outside the base PROJECT_REL), so they never mutate the git-tracked base project and
-each ends with assert_no_diff().
+base config). The existing extension fixture lives under tests/tests (outside the base PROJECT_REL).
+One test also creates and cleans up a temporary extension; the tests never mutate
+the git-tracked base project and each ends with assert_no_diff().
 
 Extension fixture ground truth (tests/tests, English module names):
   CommonModules tests_SampleTests / tests_MathHelper / tests_FailureDemo;
@@ -24,10 +24,13 @@ Extension fixture ground truth (tests/tests, English module names):
   tests_SampleTests.MathHelperSubtracts (an intra-extension cross-module reference).
 """
 
+from uuid import uuid4
+
 from harness import (
     rename_call,
     call, assert_ok, assert_error, assert_error_quality,
-    assert_contains, assert_not_contains, assert_no_diff, e2e_test, PROJECT, TESTS_PROJECT,
+    assert_contains, assert_not_contains, assert_no_diff, settle_or_fail,
+    e2e_test, PROJECT, TESTS_PROJECT,
 )
 
 
@@ -229,6 +232,65 @@ def test_extension_module_source_shows_interception():
     assert_contains(r.text, "intercepts core method",
                     "the section must state what the extension method intercepts")
     assert_no_diff("a read tool must not touch the base project on disk")
+
+
+@e2e_test(tool="get_module_structure", kind="action")
+def test_base_module_footers_include_an_extension_created_after_first_read():
+    """Issue #1012: the base module is unchanged and the workspace is not restarted.
+
+    The old, wizard-made extension remains visible. An extension just created and
+    adopted through MCP must appear in both module footers as it does in the
+    individual method footer. The per-method read establishes actual eligibility.
+    """
+    path = "CommonModules/Calc/Module.bsl"
+    base_args = {"projectName": PROJECT, "modulePath": path}
+    method_args = dict(base_args, methodName="Test")
+    tools = ("get_module_structure", "read_module_source")
+    name = "InterceptionE2E_" + uuid4().hex[:10]
+    extension = PROJECT + "." + name
+    existing = "`" + TESTS_PROJECT + "`: `tests_Test` via `&ChangeAndValidate`"
+    fresh = "`" + extension + "`: `e2e_AfterTest` via `&После`"
+
+    for tool in tools:
+        initial = call(tool, base_args)
+        assert_ok(initial, tool + " with the existing extension")
+        assert_contains(initial.text, existing, "existing interceptor in " + tool)
+        assert_not_contains(initial.text, fresh, "new extension not yet created")
+
+    created = call("create_project", {
+        "projectKind": "extension", "name": name, "baseProjectName": PROJECT, "prefix": "e2e_",
+    })
+    assert_ok(created, "create the extension after the initial base reads")
+    try:
+        assert created.structured["project"] == extension, created.text
+        settle_or_fail("the dynamically created interception extension")
+        adopted = call("adopt_metadata_object", {
+            "projectName": PROJECT, "extensionProjectName": extension, "fqn": "CommonModule.Calc",
+        })
+        assert_ok(adopted, "adopt the same base common module into the new extension")
+        assert adopted.structured.get("action") == "adopted", adopted.text
+        written = call("write_module_source", {
+            "projectName": extension, "modulePath": path, "mode": "replace", "overwrite": True,
+            "source": '&После("Test")\nПроцедура e2e_AfterTest()\nКонецПроцедуры\n',
+        })
+        assert_ok(written, "write the interceptor into the new extension")
+        settle_or_fail("the new interception module after its source was written")
+
+        method = call("read_method_source", method_args)
+        assert_ok(method, "resolve the individual base method's interceptors")
+        for link in (existing, fresh):
+            assert_contains(method.text, link, "eligibility established by the method footer")
+        for tool in tools:
+            updated = call(tool, base_args)
+            assert_ok(updated, tool + " with both extensions")
+            for link in (existing, fresh):
+                assert_contains(updated.text, "`Test` <- intercepted by extension " + link, tool + " base footer")
+        assert_no_diff("the fixture's base module and metadata must stay unchanged")
+    finally:
+        removed = call("delete_project", {
+            "projectName": extension, "deleteContent": True, "confirm": True,
+        })
+        assert_ok(removed, "remove only the dynamically created extension")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
