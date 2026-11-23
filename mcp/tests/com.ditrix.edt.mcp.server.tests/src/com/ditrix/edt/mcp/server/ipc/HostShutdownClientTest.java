@@ -292,6 +292,33 @@ public class HostShutdownClientTest
         assertTrue(text(messages), text(messages).contains("starting or shutting down"));
     }
 
+    @Test public void aCorruptAgedClaimStillFallsThroughToNoHost() throws Exception
+    {
+        // A readable but corrupt claim must not block every stop forever: with a free lock the
+        // workspace is free, so the answer stays exit 2.
+        var registry = registry();
+        EndpointRegistry.atomicWrite(registry.claimPath(), "{not json at all");
+        Files.setLastModifiedTime(registry.claimPath(),
+            java.nio.file.attribute.FileTime.from(java.time.Instant.now().minusSeconds(600)));
+        var messages = new ByteArrayOutputStream();
+        assertEquals(HostShutdownClient.ABSENT,
+            HostShutdownClient.stop(registry.directory(), registry.workspace(), 500, sink(messages)));
+        assertTrue(text(messages), text(messages).contains("no live host"));
+    }
+
+    @Test public void aClaimWithWrongFieldTypesStillFallsThroughToNoHost() throws Exception
+    {
+        var registry = registry();
+        EndpointRegistry.atomicWrite(registry.claimPath(),
+            "{\"requested\":\"not-a-time\",\"process\":{\"pid\":\"not-a-number\",\"startTime\":42}}");
+        Files.setLastModifiedTime(registry.claimPath(),
+            java.nio.file.attribute.FileTime.from(java.time.Instant.now().minusSeconds(600)));
+        var messages = new ByteArrayOutputStream();
+        assertEquals(HostShutdownClient.ABSENT,
+            HostShutdownClient.stop(registry.directory(), registry.workspace(), 500, sink(messages)));
+        assertTrue(text(messages), text(messages).contains("no live host"));
+    }
+
     @Test public void aDanglingAgedClaimKeepsTheStateUnknown() throws Exception
     {
         // The claim exists without following it but its target does not: it cannot be resolved and

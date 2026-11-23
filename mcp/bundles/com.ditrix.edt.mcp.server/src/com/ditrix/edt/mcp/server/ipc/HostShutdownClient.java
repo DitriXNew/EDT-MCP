@@ -206,28 +206,42 @@ public final class HostShutdownClient
     static boolean startupOrTeardownInFlight(EndpointRegistry registry)
     {
         Path claim = registry.claimPath();
+        BasicFileAttributes attributes;
         try
         {
             // Probe without following: Files.exists answers false both for an absent claim and for
             // one whose state cannot be determined, and an unreadable claim must stay unknown.
-            var attributes = Files.readAttributes(claim, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
-            // A live process outranks the age cutoff: a host slower than the cutoff to reach
-            // lockWorkspace() is still starting, exactly as StartupCoordinator reads it.
-            if (claimNamesALiveProcess(claim)) { return true; }
+            attributes = Files.readAttributes(claim, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+        }
+        catch (NoSuchFileException e)
+        {
+            // No claim: the workspace lock decides below.
+            attributes = null;
+        }
+        catch (IOException | RuntimeException e)
+        {
+            // A claim whose state cannot be probed is not a missing claim.
+            return true;
+        }
+        if (attributes != null)
+        {
+            try
+            {
+                // A live process outranks the age cutoff: a host slower than the cutoff to reach
+                // lockWorkspace() is still starting, exactly as StartupCoordinator reads it.
+                if (claimNamesALiveProcess(claim)) { return true; }
+            }
+            catch (IOException e)
+            {
+                // The claim was found without following it, so a read that still fails - a dangling
+                // link, a denied read - means it exists but cannot be resolved. That is unknown.
+                return true;
+            }
             if (attributes.lastModifiedTime().toInstant().plusSeconds(CLAIM_FRESH_SECONDS)
                 .isAfter(java.time.Instant.now()))
             {
                 return true;
             }
-        }
-        catch (NoSuchFileException e)
-        {
-            // No claim: the workspace lock decides below.
-        }
-        catch (IOException | RuntimeException e)
-        {
-            // An unreadable claim is as good a reason to stay uncertain as a fresh one.
-            return true;
         }
         Path lock = registry.workspace().resolve(".metadata/.lock");
         try (FileChannel channel = FileChannel.open(lock, StandardOpenOption.WRITE))
@@ -246,27 +260,36 @@ public final class HostShutdownClient
 
     /**
      * True when a startup claim names a process that is still alive, whatever the claim's age.
-     * An unreadable or malformed claim also answers true: it cannot clear the workspace.
+     * A claim that exists and cannot be read is reported as unknown by the caller, which is why a
+     * read failure is rethrown rather than answered here.
      *
      * @param claim the startup claim written by the bootstrap before it launched a host
      * @return whether the claimed process identity still matches a live process
+     * @throws IOException when the claim exists but cannot be read; the state is then unknown
      */
-    private static boolean claimNamesALiveProcess(Path claim)
+    private static boolean claimNamesALiveProcess(Path claim) throws IOException
     {
+        String body = Files.readString(claim);
+        JsonObject parsed;
+        try { parsed = JsonParser.parseString(body).getAsJsonObject(); }
+        catch (RuntimeException e)
+        {
+            // A readable claim that is not a JSON object is corrupt, not evidence of a host: it
+            // must fall through to the age and lock checks, or one bad file would block every
+            // stop forever.
+            return false;
+        }
         try
         {
-            JsonObject parsed = JsonParser.parseString(Files.readString(claim)).getAsJsonObject();
             if (!parsed.has("process") || !parsed.get("process").isJsonObject()) { return false; }
             JsonObject process = parsed.getAsJsonObject("process");
             if (!process.has("pid") || !process.has("startTime")) { return false; }
             return EndpointRegistry.sameProcess(process.get("pid").getAsLong(), process.get("startTime").getAsString());
         }
-        catch (IOException | RuntimeException e)
+        catch (RuntimeException e)
         {
-            // The caller only reaches this method once the claim was found without following it,
-            // so a read that still fails - a dangling link, a denied read - means the claim exists
-            // but cannot be resolved. That is unknown, never absent.
-            return true;
+            // Field values of the wrong shape: as uninformative as a missing field.
+            return false;
         }
     }
 
