@@ -276,6 +276,28 @@ public class StdioPluginSupportTest extends StdioTestSupport
         }
     }
 
+    @Test public void aRefusedIncompatibleSwapKeepsTheRecordedPredecessor() throws Exception
+    {
+        Assume.assumeTrue(System.getProperty("os.name").startsWith("Windows"));
+        // current names PREVIOUS and previous records OLD. A launcher that read OLD just before
+        // PREVIOUS was published is still within the documented one-update race, so a refused swap
+        // for the staged runtime must not delete OLD.
+        Path directory = seeded();
+        PrivatePaths.atomicWrite(directory.resolve("previous"),
+            (runtimeName(OLD) + "\n").getBytes(StandardCharsets.UTF_8));
+        Path entry = directory.resolve("edt-mcp-bootstrap.jar");
+        PrivatePaths.atomicWrite(entry, ENTRY);
+        try (var handle = Files.newByteChannel(entry, Set.of(StandardOpenOption.READ, noShareDelete())))
+        {
+            assertThrows(IOException.class,
+                () -> StdioPluginSupport.extractBootstrap(directory, CURRENT, packagedEntry(), Files::delete));
+            assertEquals(runtimeName(PREVIOUS) + "\n", Files.readString(directory.resolve("current")));
+            assertEquals(runtimeName(OLD) + "\n", Files.readString(directory.resolve("previous")));
+            assertListing(directory, "current", "previous", "extract.lock", "edt-mcp-bootstrap.jar",
+                runtimeName(OLD), runtimeName(PREVIOUS), runtimeName(CURRENT));
+        }
+    }
+
     @Test public void matchingDirectoryIsRefusedWithoutStoppingCleanup() throws Exception
     {
         Path directory = seeded(); String name = "a".repeat(64) + ".jar";

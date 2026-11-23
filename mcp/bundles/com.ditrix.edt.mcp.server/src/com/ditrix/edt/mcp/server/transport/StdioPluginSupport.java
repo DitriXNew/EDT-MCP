@@ -17,6 +17,7 @@ import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Set;
@@ -120,10 +121,11 @@ public final class StdioPluginSupport
             var refusal = PrivatePaths.atomicWriteReportingMoveDenial(destination, entry);
             if (refusal != null)
             {
-                // Nothing was published: the pointer still selects the previous runtime, which is
-                // exactly what the retained entry can load. Obsolete generations are still dropped,
-                // so a refused swap does not accumulate runtimes. The caller must clear the holder.
-                cleanupRuntimes(directory, current, previous, delete);
+                // Nothing was published, so three generations must survive: the staged runtime for
+                // a later retry, the runtime `current` still names, and the predecessor recorded in
+                // `previous` - a launcher that read it just before `current` was published is still
+                // within the documented one-update race. Everything else is dropped as usual.
+                cleanupRuntimes(directory, keep(current, previous, runtimePointer(directory.resolve("previous"))), delete);
                 throw new IOException("Close stdio clients before updating the bootstrap entry, then reopen Window > Preferences > MCP Server > General.", refusal);
             }
             publishRuntimePointer(directory, previous, current, delete);
@@ -137,7 +139,15 @@ public final class StdioPluginSupport
     {
         EndpointRegistry.atomicWrite(directory.resolve("previous"), previous == null ? "" : previous + "\n");
         EndpointRegistry.atomicWrite(directory.resolve("current"), current + "\n");
-        cleanupRuntimes(directory, current, previous, delete);
+        cleanupRuntimes(directory, keep(current, previous), delete);
+    }
+
+    /** The runtime names cleanup must not delete; a null name is simply not kept. */
+    private static Set<String> keep(String... names)
+    {
+        Set<String> kept = new HashSet<>();
+        for (String name : names) { if (name != null) { kept.add(name); } }
+        return kept;
     }
 
     private static String sha256(byte[] bytes)
@@ -154,7 +164,7 @@ public final class StdioPluginSupport
         return name.matches("[a-f0-9]{64}\\.jar") ? name : null;
     }
 
-    private static void cleanupRuntimes(Path directory, String current, String previous, RuntimeDelete delete)
+    private static void cleanupRuntimes(Path directory, Set<String> keep, RuntimeDelete delete)
     {
         try
         {
@@ -164,7 +174,7 @@ public final class StdioPluginSupport
                 for (Path file : files)
                 {
                     String name = file.getFileName().toString();
-                    if (!name.matches("[a-f0-9]{64}\\.jar") || name.equals(current) || name.equals(previous)) { continue; }
+                    if (!name.matches("[a-f0-9]{64}\\.jar") || keep.contains(name)) { continue; }
                     try { PrivatePaths.verifyFile(file); delete.delete(file); }
                     catch (IOException e)
                     { Log.debug("Cannot remove obsolete stdio runtime " + name + " (" + e.getClass().getSimpleName() + ")"); }
