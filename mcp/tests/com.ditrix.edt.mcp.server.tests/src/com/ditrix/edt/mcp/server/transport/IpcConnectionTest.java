@@ -192,14 +192,19 @@ public class IpcConnectionTest extends StdioTestSupport
                 var shutdownThread = new Thread(() -> receipt.get().accept(true));
                 shutdownThread.setDaemon(true);
                 shutdownThread.start();
-                assertTrue("the receipt must reach the blocked sink", held.await(5, TimeUnit.SECONDS));
-                long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(15);
-                while (detach.get() == 0 && System.nanoTime() < deadline) { Thread.sleep(10); }
-                assertEquals("a blocked receipt must detach the peer", 1, detach.get());
-                assertTrue("the shutdown must not wait for the stuck client",
-                    shutdownThread.isAlive() == false || detach.get() == 1);
-                release.countDown();
-                shutdownThread.join(5000);
+                try
+                {
+                    assertTrue("the receipt must reach the blocked sink", held.await(5, TimeUnit.SECONDS));
+                    // The sink stays blocked for the whole wait: the shutdown path must give up
+                    // on its own, not because the client was released.
+                    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(15);
+                    while (detach.get() == 0 && System.nanoTime() < deadline) { Thread.sleep(10); }
+                    assertEquals("a blocked receipt must detach the peer", 1, detach.get());
+                    shutdownThread.join(5000);
+                    assertFalse("the shutdown must return while the client is still stuck",
+                        shutdownThread.isAlive());
+                }
+                finally { release.countDown(); shutdownThread.join(5000); }
             }
         }
         finally { registry.replaceAll(saved); }

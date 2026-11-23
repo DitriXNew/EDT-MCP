@@ -197,6 +197,31 @@ public class HostShutdownClientTest
         assertTrue(text(messages), text(messages).contains("unknown"));
     }
 
+    @Test public void aRegistryPathThatIsNotADirectoryIsStillNoHost() throws Exception
+    {
+        // A regular file at the registry path cannot hold an endpoint record: nothing is running.
+        Path file = temporary.newFile().toPath();
+        ByteArrayOutputStream messages = new ByteArrayOutputStream();
+        assertEquals(HostShutdownClient.ABSENT,
+            HostShutdownClient.stop(file, temporary.getRoot().toPath(), 500, sink(messages)));
+        assertTrue(text(messages), text(messages).contains("no MCP endpoint registry"));
+    }
+
+    @Test public void anUnreadableRegistryIsNotReportedAsNoHost() throws Exception
+    {
+        // A parent that cannot be traversed makes the registry state undeterminable. The result
+        // must be "unknown", never "absent", because a live host may still hold the workspace.
+        var registry = registry();
+        // The parent of the registry path is a regular file, so the state of the path below it
+        // cannot be determined: that is not the same as an absent registry.
+        Path file = registry.directory().resolve("blocked");
+        Files.writeString(file, "not a directory");
+        ByteArrayOutputStream messages = new ByteArrayOutputStream();
+        assertEquals(HostShutdownClient.NOT_STOPPED,
+            HostShutdownClient.stop(file.resolve("child"), registry.workspace(), 500, sink(messages)));
+        assertTrue(text(messages), text(messages).contains("unknown"));
+    }
+
     @Test public void anUnreachableSocketIsReportedWithoutThrowing() throws Exception
     {
         var registry = registry();

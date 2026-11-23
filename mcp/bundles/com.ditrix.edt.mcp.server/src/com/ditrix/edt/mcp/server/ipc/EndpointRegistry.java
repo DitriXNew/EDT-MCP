@@ -10,6 +10,7 @@ import java.nio.channels.FileChannel;
 import java.nio.channels.FileLock;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.time.Instant;
@@ -84,7 +85,10 @@ public final class EndpointRegistry
     public Endpoint read() throws IOException
     {
         PrivatePaths.verifyDirectory(directory);
-        if (!Files.exists(recordPath(), LinkOption.NOFOLLOW_LINKS)) { return null; }
+        // Files.exists is false both for an absent record and for one whose state cannot be
+        // determined; only the first means no host is registered. Anything else is an error the
+        // caller must not read as "absent".
+        if (!present(recordPath())) { return null; }
         PrivatePaths.verifyFile(recordPath());
         try
         {
@@ -102,6 +106,17 @@ public final class EndpointRegistry
             return record;
         }
         catch (RuntimeException e) { throw new IOException("Invalid endpoint record"); }
+    }
+
+    /** True when the path exists; an absent file is false, an undeterminable state throws. */
+    private static boolean present(Path path) throws IOException
+    {
+        try
+        {
+            Files.readAttributes(path, java.nio.file.attribute.BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+            return true;
+        }
+        catch (NoSuchFileException e) { return false; }
     }
 
     public void publish(Endpoint endpoint) throws IOException
