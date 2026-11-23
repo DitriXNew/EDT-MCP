@@ -11,8 +11,15 @@ import com.ditrix.edt.mcp.server.utils.Log;
 import java.io.IOException;
 import java.net.URL;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.Arrays;
+import java.util.HexFormat;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 import org.eclipse.core.runtime.Platform;
 import org.eclipse.osgi.service.datalocation.Location;
@@ -26,6 +33,13 @@ public final class StdioPluginSupport
 {
     /** The running listener; replaced only under the class lock, read lock-free by {@link #isIpcRunning}. */
     private static final AtomicReference<IpcListener> LISTENER = new AtomicReference<>();
+    // Whole-JAR fingerprints of inspected launchers: both read the sibling current pointer,
+    // verify the hash-named runtime, and call StdioBootstrap.main(String[]). Trusting a manifest
+    // or a class name alone would not prove this contract. Keep this list scoped to this ABI.
+    private static final Set<String> COMPATIBLE_ENTRY_HASHES = Set.of(
+        "26b2d4c1384cee32e8c5c56cf78b988b9b18a5ae79612d6558e8dbd4f92f3e6b", // v2.26.1
+        "958937f8d1b548ce21698317ca0c17ef4a475e40a797de1dfeef72c6d19686f8"  // PR #4 base (a274801c)
+    );
     private StdioPluginSupport() { }
 
     public static synchronized void start()
@@ -68,82 +82,50 @@ public final class StdioPluginSupport
     @FunctionalInterface
     interface RuntimeDelete { void delete(Path runtime) throws IOException; }
 
-    /** Entry writer, injected so a test can prove the pointer is published before the entry. */
-    @FunctionalInterface
-    interface EntryWrite { void write(Path destination, byte[] bytes) throws IOException; }
-
     static Path extractBootstrap(Path directory, byte[] runtime, byte[] entry, RuntimeDelete delete) throws IOException
-    {
-        return extractBootstrap(directory, runtime, entry, delete, StdioPluginSupport::writeJar);
-    }
-
-    static Path extractBootstrap(Path directory, byte[] runtime, byte[] entry, RuntimeDelete delete, EntryWrite writeEntry)
-        throws IOException
     {
         Path destination = directory.resolve("edt-mcp-bootstrap.jar");
         try (var channel = PrivatePaths.lockFile(directory.resolve("extract.lock"));
              var lock = channel.lock())
         {
-            String hash;
-            try { hash = java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(runtime)); }
-            catch (java.security.NoSuchAlgorithmException e) { throw new IllegalStateException(e); }
-            String current = hash + ".jar", previous = runtimePointer(directory.resolve("current"));
+            String current = sha256(runtime) + ".jar", previous = runtimePointer(directory.resolve("current"));
             // Re-extracting the same build must not discard the preceding generation.
             if (current.equals(previous)) { previous = runtimePointer(directory.resolve("previous")); }
             writeJar(directory.resolve(current), runtime);
             // The runtime is what changes behaviour, so its pointer is published first. The entry
             // keeps a fixed name while its bytes are versioned, so a connected stdio client holds it
             // open on Windows and the replacement fails with AccessDenied. Publishing the pointer
-            // before writing the entry keeps the new runtime reachable in that case: an older entry
-            // still reads the pointer and loads the new runtime. Replacing the entry is therefore
-            // best effort here and is retried on a later start, once the client is gone.
+            // before writing the entry lets a known compatible launcher load the new runtime.
+            // Extraction retries the replacement on a later start, once the client is gone.
             EndpointRegistry.atomicWrite(directory.resolve("previous"), previous == null ? "" : previous + "\n");
             EndpointRegistry.atomicWrite(directory.resolve("current"), current + "\n");
             cleanupRuntimes(directory, current, previous, delete);
-            // Falling back to the previous entry is only safe for one failure: the atomic replace
-            // of a checked, readable launcher. Every other error - a refused private-storage check,
-            // an unreadable file, a first install with no entry - must reach the caller, or an
-            // unusable path would be advertised as a working launcher.
-            boolean usable = usableEntry(destination);
-            try { writeEntry.write(destination, entry); }
-            catch (EntryReplaceRefusedException e)
+            byte[] existing = existingJar(destination);
+            if (Arrays.equals(existing, entry)) { return destination; }
+            var refusal = PrivatePaths.atomicWriteReportingMoveDenial(destination, entry);
+            if (refusal != null)
             {
-                if (!usable || !usableEntry(destination)) { throw e; }
-                Log.warning("Cannot update the stdio entry (" + e.getClass().getSimpleName()
-                    + "); the current runtime is published and the existing entry still starts it."
-                    + " Close stdio clients before the next start to replace the entry.", e);
+                if (existing == null || !COMPATIBLE_ENTRY_HASHES.contains(sha256(existing))
+                    || !Arrays.equals(existing, existingJar(destination)))
+                {
+                    throw new IOException("Close stdio clients before updating the bootstrap entry, then reopen Window > Preferences > MCP Server > General.", refusal);
+                }
+                Log.warning("Cannot replace the stdio entry; the current runtime is published and the existing entry still starts it."
+                    + " Close stdio clients before the next start to replace the entry.", refusal);
             }
             return destination;
         }
     }
 
-    /**
-     * A refused atomic replace of the entry. Only this failure may fall back to the previous
-     * entry: the file was checked and readable, and the package around it is unchanged.
-     */
-    static final class EntryReplaceRefusedException extends IOException
+    private static String sha256(byte[] bytes)
     {
-        private static final long serialVersionUID = 1L;
-        EntryReplaceRefusedException(String message, Throwable cause) { super(message, cause); }
-    }
-
-    /** True when the entry is present, private and fully readable - a usable launcher. */
-    private static boolean usableEntry(Path entry)
-    {
-        try
-        {
-            if (!Files.exists(entry, java.nio.file.LinkOption.NOFOLLOW_LINKS)) { return false; }
-            PrivatePaths.verifyFile(entry);
-            // Attributes alone do not prove the file can be read: a launcher that fails to open is
-            // not a launcher, so read it whole.
-            return Files.readAllBytes(entry).length > 0;
-        }
-        catch (IOException | RuntimeException e) { return false; }
+        try { return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes)); }
+        catch (NoSuchAlgorithmException e) { throw new IllegalStateException(e); }
     }
 
     private static String runtimePointer(Path pointer) throws IOException
     {
-        if (!Files.exists(pointer, java.nio.file.LinkOption.NOFOLLOW_LINKS)) { return null; }
+        if (!Files.exists(pointer, LinkOption.NOFOLLOW_LINKS)) { return null; }
         PrivatePaths.verifyFile(pointer);
         String name = Files.readString(pointer).trim();
         return name.matches("[a-f0-9]{64}\\.jar") ? name : null;
@@ -177,22 +159,17 @@ public final class StdioPluginSupport
         try (var input = entry.openStream()) { return input.readAllBytes(); }
     }
 
-    private static void writeJar(Path destination, byte[] bytes) throws IOException
+    private static byte[] existingJar(Path destination) throws IOException
     {
         PrivatePaths.noLinks(destination);
-        if (Files.exists(destination))
-        {
-            PrivatePaths.verifyFile(destination);
-            if (java.util.Arrays.equals(Files.readAllBytes(destination), bytes)) { return; }
-        }
-        // The check above ran first: everything that fails here failed while replacing the file,
-        // which is the one failure that leaves a usable previous entry in place.
-        try
-        {
-            PrivatePaths.atomicWrite(destination, bytes);
-        }
-        catch (IOException e)
-        { throw new EntryReplaceRefusedException("Close stdio clients before updating the bootstrap entry, then reopen Window > Preferences > MCP Server > General.", e); }
+        try { PrivatePaths.verifyFile(destination); }
+        catch (NoSuchFileException e) { return null; }
+        return Files.readAllBytes(destination);
+    }
+
+    private static void writeJar(Path destination, byte[] bytes) throws IOException
+    {
+        if (!Arrays.equals(existingJar(destination), bytes)) { PrivatePaths.atomicWrite(destination, bytes); }
     }
 
     /** The real path of an Eclipse location; the URL may be raw (see {@link FileUrls}). */
