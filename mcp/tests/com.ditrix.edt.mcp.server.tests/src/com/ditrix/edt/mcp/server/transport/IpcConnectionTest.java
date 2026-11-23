@@ -157,6 +157,54 @@ public class IpcConnectionTest extends StdioTestSupport
         finally { registry.replaceAll(saved); }
     }
 
+    /**
+     * A client that stopped reading must not hold the shutdown open: the receipt goes through a
+     * bounded path, and a sink that cannot take it detaches the peer instead of blocking the close.
+     */
+    @Test public void aBlockedSinkDetachesThePeerInsteadOfBlockingTheShutdown() throws Exception
+    {
+        var registry = McpToolRegistry.getInstance(); var saved = registry.getAllTools();
+        try
+        {
+            registry.replaceAll(List.of(sentinel("test_shutdown", "{\"value\":\"alive\"}")));
+            var server = new com.ditrix.edt.mcp.server.McpServer();
+            var receipt = new java.util.concurrent.atomic.AtomicReference<java.util.function.Consumer<Boolean>>();
+            server.setHostShutdown(completion -> receipt.set(completion));
+            var detach = new java.util.concurrent.atomic.AtomicInteger();
+            var sends = new java.util.concurrent.atomic.AtomicInteger();
+            var held = new java.util.concurrent.CountDownLatch(1);
+            var release = new java.util.concurrent.CountDownLatch(1);
+            // The first frame (the initialize reply) passes; everything after it is stuck, which
+            // is what a client that stopped reading looks like from the host side.
+            java.util.function.Consumer<String> sink = json -> {
+                if (sends.incrementAndGet() > 1)
+                {
+                    held.countDown();
+                    try { release.await(); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+                }
+            };
+            try (var connection = new IpcConnection(server, new McpProtocolHandler(), sink, false,
+                detach::incrementAndGet))
+            {
+                connection.accept(init(1, false));
+                connection.accept(initialized());
+                connection.accept(SHUTDOWN);
+                var shutdownThread = new Thread(() -> receipt.get().accept(true));
+                shutdownThread.setDaemon(true);
+                shutdownThread.start();
+                assertTrue("the receipt must reach the blocked sink", held.await(5, TimeUnit.SECONDS));
+                long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(15);
+                while (detach.get() == 0 && System.nanoTime() < deadline) { Thread.sleep(10); }
+                assertEquals("a blocked receipt must detach the peer", 1, detach.get());
+                assertTrue("the shutdown must not wait for the stuck client",
+                    shutdownThread.isAlive() == false || detach.get() == 1);
+                release.countDown();
+                shutdownThread.join(5000);
+            }
+        }
+        finally { registry.replaceAll(saved); }
+    }
+
     @Test public void hostShutdownNotificationIsRefusedByAHostWithoutTheChannel() throws Exception
     {
         var registry = McpToolRegistry.getInstance(); var saved = registry.getAllTools();

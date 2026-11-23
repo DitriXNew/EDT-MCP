@@ -8,7 +8,12 @@ package com.ditrix.edt.mcp.server.transport;
 import java.io.IOException;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.function.Consumer;
+import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.McpServer;
 import com.ditrix.edt.mcp.server.ipc.StdioBootstrap;
 import com.ditrix.edt.mcp.server.protocol.ClientCapabilities;
@@ -26,8 +31,12 @@ public final class IpcConnection implements AutoCloseable
     private final McpServer server;
     private final McpProtocolHandler dispatcher;
     private final Consumer<String> sink;
+    /** Closes the peer; used when a bounded send cannot make room. */
+    private final Runnable detach;
     private final InterruptibleToolExecutor executor;
     private final Boolean plainTextMode;
+    /** How long a client gets to take the shutdown receipt before its socket is closed. */
+    private static final long RECEIPT_TIMEOUT_MILLIS = 5000;
     private final Set<Thread> requests = new HashSet<>();
     private volatile boolean closed;
     private ClientCapabilities capabilities = ClientCapabilities.ABSENT;
@@ -38,9 +47,18 @@ public final class IpcConnection implements AutoCloseable
     { this(server, dispatcher, sink, null); }
 
     public IpcConnection(McpServer server, McpProtocolHandler dispatcher, Consumer<String> sink, Boolean plainTextMode)
+    { this(server, dispatcher, sink, plainTextMode, () -> { }); }
+
+    /**
+     * @param detach closes the peer, so a send that cannot make room releases the socket instead
+     *            of waiting for a client that stopped reading
+     */
+    public IpcConnection(McpServer server, McpProtocolHandler dispatcher, Consumer<String> sink,
+        Boolean plainTextMode, Runnable detach)
     {
         this.server = server;
-        this.dispatcher = dispatcher; this.sink = sink; this.executor = new InterruptibleToolExecutor(server, dispatcher);
+        this.dispatcher = dispatcher; this.sink = sink; this.detach = detach;
+        this.executor = new InterruptibleToolExecutor(server, dispatcher);
         this.plainTextMode = plainTextMode;
     }
 
@@ -76,7 +94,7 @@ public final class IpcConnection implements AutoCloseable
             // gate are the whole authorization. A host with no shutdown channel logs the refusal
             // and keeps running.
             if (!tree.has("id")) {
-                server.requestHostShutdown(success -> send("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/host_shutdown_complete\",\"params\":{\"success\":"
+                server.requestHostShutdown(success -> sendBounded("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/host_shutdown_complete\",\"params\":{\"success\":"
                     + success + "}}"));
             }
             return;
@@ -111,6 +129,43 @@ public final class IpcConnection implements AutoCloseable
 
     private void send(String response)
     { synchronized (sink) { if (!closed) { sink.accept(response); } } }
+
+    /**
+     * Sends the shutdown receipt without letting a client that stopped reading hold the shutdown
+     * open. The receipt is written off the shutdown thread and the wait is bounded; when the
+     * socket cannot take it in time, the peer is closed so the write cannot block the close
+     * sequence that follows.
+     *
+     * @param response the receipt frame
+     */
+    private void sendBounded(String response)
+    {
+        var writer = Executors.newSingleThreadExecutor(task -> {
+            Thread thread = new Thread(task, "edt-mcp-shutdown-receipt");
+            thread.setDaemon(true);
+            return thread;
+        });
+        try
+        {
+            writer.submit(() -> send(response)).get(RECEIPT_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS);
+        }
+        catch (TimeoutException e)
+        {
+            // Nobody is reading: drop the peer so the socket write cannot pin the shutdown.
+            try { detach.run(); } catch (RuntimeException ignored) { /* the peer is going away anyway */ }
+            Activator.logInfo("The client did not take the shutdown receipt within "
+                + RECEIPT_TIMEOUT_MILLIS + " ms; its connection was closed and the shutdown continues.");
+        }
+        catch (ExecutionException e)
+        {
+            Activator.logError("Cannot deliver the shutdown receipt", e.getCause());
+        }
+        catch (InterruptedException e)
+        {
+            Thread.currentThread().interrupt();
+        }
+        finally { writer.shutdownNow(); }
+    }
 
     public void toolsChanged()
     {

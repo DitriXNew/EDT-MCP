@@ -184,6 +184,19 @@ public class HostShutdownClientTest
         assertTrue(text(messages), text(messages).contains("no MCP endpoint registry"));
     }
 
+    @Test public void anUnreadableEndpointRecordIsNotReportedAsNoHost() throws Exception
+    {
+        // The record exists and cannot be read: the registry is broken, which proves nothing
+        // about the process - a live host may still hold the workspace.
+        var registry = registry();
+        Files.writeString(registry.recordPath(), "not a valid endpoint record");
+        ByteArrayOutputStream messages = new ByteArrayOutputStream();
+        assertEquals(HostShutdownClient.NOT_STOPPED,
+            HostShutdownClient.stop(registry.directory(), registry.workspace(), 500, sink(messages)));
+        assertTrue(text(messages), text(messages).contains("unreadable"));
+        assertTrue(text(messages), text(messages).contains("unknown"));
+    }
+
     @Test public void anUnreachableSocketIsReportedWithoutThrowing() throws Exception
     {
         var registry = registry();

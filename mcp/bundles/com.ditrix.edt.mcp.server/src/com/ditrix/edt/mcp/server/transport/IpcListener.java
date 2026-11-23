@@ -118,7 +118,7 @@ public final class IpcListener implements AutoCloseable
             timeout.cancel(false);
             try (IpcConnection connection = new IpcConnection(mcpServer, new McpProtocolHandler(), json -> {
                 try { peer.write(json); } catch (IOException e) { closePeer(peer); throw new UncheckedIOException(e); }
-            }, plainTextMode))
+            }, plainTextMode, () -> closePeer(peer)))
             {
                 notification = connection::toolsChanged;
                 ToolsChangedListeners.add(notification);

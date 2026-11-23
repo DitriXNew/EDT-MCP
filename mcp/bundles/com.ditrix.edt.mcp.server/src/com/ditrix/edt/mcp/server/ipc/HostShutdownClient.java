@@ -53,9 +53,12 @@ public final class HostShutdownClient
 {
     /** The host confirmed the request and exited. */
     public static final int STOPPED = 0;
-    /** Nothing confirmed the stop within the timeout; the caller may force-kill. */
+    /**
+     * The stop was not confirmed: no receipt, the host did not exit, or the registry could not be
+     * read so the host state is unknown. The caller may force-kill.
+     */
     public static final int NOT_STOPPED = 1;
-    /** No host is registered for this workspace. */
+    /** No host is registered for this workspace: the registry and its record do not exist. */
     public static final int ABSENT = 2;
 
     /** Seconds to wait for the process to go away unless {@code -timeout} overrides it. */
@@ -117,8 +120,10 @@ public final class HostShutdownClient
         try { ipc = registryDirectory(); }
         catch (IOException e)
         {
+            // The storage is unknown, not absent: a live host may still hold the workspace, so
+            // the caller must be told the outcome is unconfirmed rather than nothing.
             err.println("edt-mcp-shutdown: cannot locate the per-user MCP storage: " + message(e));
-            return ABSENT;
+            return NOT_STOPPED;
         }
         return stop(ipc, directory, timeout, err);
     }
@@ -149,16 +154,20 @@ public final class HostShutdownClient
         try { registry = new EndpointRegistry(EndpointRegistry.privateDirectory(ipc), workspace); }
         catch (IOException | RuntimeException e)
         {
-            err.println("edt-mcp-shutdown: cannot read the MCP endpoint registry for " + workspace + ": " + message(e));
-            return ABSENT;
+            // An unreadable registry proves nothing about the process: the host may be running.
+            err.println("edt-mcp-shutdown: cannot read the MCP endpoint registry for " + workspace
+                + ": " + message(e) + "; the host state is unknown");
+            return NOT_STOPPED;
         }
 
         EndpointRegistry.Endpoint endpoint;
         try { endpoint = registry.read(); }
         catch (IOException e)
         {
-            err.println("edt-mcp-shutdown: the endpoint record for " + workspace + " is unreadable: " + message(e));
-            return ABSENT;
+            // A record that exists and cannot be read is a broken registry, not a stopped host.
+            err.println("edt-mcp-shutdown: the endpoint record for " + workspace
+                + " is unreadable: " + message(e) + "; the host state is unknown");
+            return NOT_STOPPED;
         }
         if (endpoint == null || !EndpointRegistry.live(endpoint))
         {
