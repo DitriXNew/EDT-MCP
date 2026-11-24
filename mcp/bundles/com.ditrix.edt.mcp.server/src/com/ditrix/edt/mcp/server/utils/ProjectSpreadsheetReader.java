@@ -25,10 +25,6 @@ final class ProjectSpreadsheetReader
 
     record Evidence(Availability availability, LanguageKey loss)
     {
-        boolean safeReaderAvailable()
-        {
-            return availability == Availability.SECURE;
-        }
     }
 
     private ProjectSpreadsheetReader()
@@ -56,8 +52,8 @@ final class ProjectSpreadsheetReader
         }
         catch (XMLStreamException e)
         {
-            // A securely opened but unsupported header does not establish a description loss.
-            return new Evidence(Availability.SECURE, null);
+            // A safe open is not evidence if the language header itself could not be read.
+            return new Evidence(Availability.UNVERIFIED, null);
         }
         catch (UnsupportedOperationException e)
         {
@@ -86,7 +82,7 @@ final class ProjectSpreadsheetReader
             directory.getFileAttributeView(component, BasicFileAttributeView.class, LinkOption.NOFOLLOW_LINKS);
         if (attrs == null || !attrs.readAttributes().isRegularFile())
         {
-            return null;
+            throw new IOException("Saved spreadsheet is not a verified regular file"); //$NON-NLS-1$
         }
         try (var channel = directory.newByteChannel(component, Set.of(StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS)))
         {

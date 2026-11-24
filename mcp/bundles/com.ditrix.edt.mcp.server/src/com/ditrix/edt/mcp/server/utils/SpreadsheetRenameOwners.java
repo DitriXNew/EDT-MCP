@@ -9,6 +9,7 @@ import java.util.UUID;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.emf.common.util.URI;
+import org.eclipse.emf.ecore.EClass;
 
 import com._1c.g5.v8.bm.core.BmUriUtil;
 import com._1c.g5.v8.bm.core.IBmObject;
@@ -16,7 +17,6 @@ import com._1c.g5.v8.bm.core.IBmTransaction;
 import com._1c.g5.v8.dt.core.platform.IDependentProject;
 import com._1c.g5.v8.dt.core.platform.IDtProject;
 import com._1c.g5.v8.dt.core.platform.IExtensionProject;
-import com._1c.g5.v8.dt.metadata.mdclass.DataProcessor;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.HostKind;
@@ -32,16 +32,21 @@ public final class SpreadsheetRenameOwners
     {
     }
 
-    private record BaseIdentity(String fqn, UUID uuid)
+    record BaseIdentity(String fqn, String containment, UUID uuid, EClass type)
     {
+        URI extensionUri(String projectId)
+        {
+            return containment == null ? BmUriUtil.createTopBmObjectUri(projectId, fqn)
+                : BmUriUtil.createContainedBmObjectUri(projectId, fqn, containment);
+        }
     }
 
     record Counterpart(IProject project, URI uri, UUID uuid, UUID baseUuid)
     {
-        DataProcessor resolve(IBmTransaction transaction)
+        MdObject resolve(IBmTransaction transaction, EClass type)
         {
             var object = transaction.getObjectByUri(uri);
-            if (object instanceof DataProcessor owner && uuid.equals(owner.getUuid())
+            if (object instanceof MdObject owner && type == owner.eClass() && uuid.equals(owner.getUuid())
                 && baseUuid.equals(owner.getExtendedConfigurationObject()))
             {
                 return owner;
@@ -75,7 +80,7 @@ public final class SpreadsheetRenameOwners
     /** Preview and non-spreadsheet owners never need an extension-guard snapshot. */
     public static Plan capture(IProject project, MdObject owner)
     {
-        if (HostKind.current() != HostKind.WINDOWED || !(owner instanceof DataProcessor)
+        if (HostKind.current() != HostKind.WINDOWED || !SpreadsheetRenameGuard.mayOwnSpreadsheets(owner)
             || !(owner instanceof IBmObject bmOwner))
         {
             return null;
@@ -83,8 +88,7 @@ public final class SpreadsheetRenameOwners
         try
         {
             BaseIdentity base = ReadToolExecution.readOnHost(project, "Resolve spreadsheet rename base owner", //$NON-NLS-1$
-                () -> bmOwner.bmIsTop() && owner.getUuid() != null
-                    ? new BaseIdentity(bmOwner.bmGetFqn(), owner.getUuid()) : null);
+                () -> baseIdentity(owner, bmOwner));
             var activator = Activator.getDefault();
             if (base == null || activator == null || activator.getDtProjectManager() == null
                 || activator.getV8ProjectManager() == null)
@@ -105,14 +109,14 @@ public final class SpreadsheetRenameOwners
                 {
                     return new Plan(null);
                 }
-                URI uri = BmUriUtil.createTopBmObjectUri(extension.getId(), base.fqn());
+                URI uri = base.extensionUri(extension.getId());
                 var model = BmModelResolver.resolve(extensionProject);
                 if (!model.isAvailable())
                 {
                     return new Plan(null);
                 }
                 Counterpart target = BmTransactions.read(model.getModel(), "Resolve spreadsheet rename extension owner", //$NON-NLS-1$
-                    (tx, monitor) -> counterpart(extensionProject, uri, base.uuid(), tx.getObjectByUri(uri)));
+                    (tx, monitor) -> counterpart(extensionProject, uri, base.uuid(), base.type(), tx.getObjectByUri(uri)));
                 if (target != null)
                 {
                     counterparts.add(target);
@@ -129,14 +133,48 @@ public final class SpreadsheetRenameOwners
         }
     }
 
-    static Counterpart counterpart(IProject project, URI exactUri, UUID baseUuid, IBmObject resolved)
+    static BaseIdentity baseIdentity(MdObject owner, IBmObject object)
     {
-        if (resolved instanceof DataProcessor owner && owner.getUuid() != null
-            && baseUuid.equals(owner.getExtendedConfigurationObject()))
+        UUID id = owner.getUuid();
+        if (id == null)
         {
-            return new Counterpart(project, exactUri, owner.getUuid(), baseUuid);
+            return null;
         }
-        return null;
+        EClass type = owner.eClass();
+        if (object.bmIsTop())
+        {
+            return new BaseIdentity(object.bmGetFqn(), null, id, type);
+        }
+        URI uri = object.bmGetUri();
+        if (uri == null || !BmUriUtil.isBmUri(uri))
+        {
+            return null;
+        }
+        String containment = BmUriUtil.extractContainmentPath(uri);
+        return containment == null ? null : new BaseIdentity(BmUriUtil.extractTopObjectFqn(uri), containment, id, type);
+    }
+
+    static Counterpart counterpart(IProject project, URI exactUri, UUID baseUuid, EClass type, IBmObject resolved)
+    {
+        if (resolved == null)
+        {
+            return null;
+        }
+        if (!(resolved instanceof MdObject owner))
+        {
+            throw new IllegalStateException("EDT resolved a non-metadata rename owner."); //$NON-NLS-1$
+        }
+        if (!baseUuid.equals(owner.getExtendedConfigurationObject()))
+        {
+            return null;
+        }
+        if (owner.eClass() != type || owner.getUuid() == null)
+        {
+            // The native pass uses the adoption UUID. A matching link with a different type or
+            // no stable UUID is an unknown cascade, not evidence that this owner can be skipped.
+            throw new IllegalStateException("EDT rename counterpart identity cannot be verified."); //$NON-NLS-1$
+        }
+        return new Counterpart(project, exactUri, owner.getUuid(), baseUuid);
     }
 
     static String changedScope()

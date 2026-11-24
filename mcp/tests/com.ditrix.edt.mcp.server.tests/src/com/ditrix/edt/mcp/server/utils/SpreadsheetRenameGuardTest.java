@@ -33,12 +33,19 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
 
+import com._1c.g5.v8.bm.core.BmUriUtil;
 import com._1c.g5.v8.bm.core.IBmNamespace;
 import com._1c.g5.v8.bm.core.IBmObject;
 import com._1c.g5.v8.bm.core.IBmTransaction;
 import com._1c.g5.v8.dt.core.naming.ITopObjectFqnGenerator;
 import com._1c.g5.v8.dt.metadata.mdclass.Catalog;
+import com._1c.g5.v8.dt.metadata.mdclass.CommonModule;
+import com._1c.g5.v8.dt.metadata.mdclass.CommonTemplate;
+import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
+import com._1c.g5.v8.dt.metadata.mdclass.Cube;
 import com._1c.g5.v8.dt.metadata.mdclass.DataProcessor;
+import com._1c.g5.v8.dt.metadata.mdclass.DimensionTable;
+import com._1c.g5.v8.dt.metadata.mdclass.ExternalDataSource;
 import com._1c.g5.v8.dt.metadata.mdclass.ExternalDataProcessor;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.Template;
@@ -91,9 +98,10 @@ public class SpreadsheetRenameGuardTest
     public void sameNamesInUnrelatedXmlAreNotLanguageSettings() throws Exception
     {
         String source = saved("<description>Русский</description>");
-        assertNull(SpreadsheetRenameGuard.lostDescription(bytes(source.replace(NS, "urn:other")), Set.of(RUSSIAN)));
-        assertNull(SpreadsheetRenameGuard.lostDescription(bytes(source.replace("languageSettings", "rows")),
-            Set.of(RUSSIAN)));
+        assertThrows(XMLStreamException.class,
+            () -> SpreadsheetRenameGuard.lostDescription(bytes(source.replace(NS, "urn:other")), Set.of(RUSSIAN)));
+        assertThrows(XMLStreamException.class, () ->
+            SpreadsheetRenameGuard.lostDescription(bytes(source.replace("languageSettings", "rows")), Set.of(RUSSIAN)));
     }
 
     @Test
@@ -182,29 +190,39 @@ public class SpreadsheetRenameGuardTest
     }
 
     @Test
-    public void missingOrMalformedSavedEvidenceDoesNotInventLossForTheAddressedOwner() throws Exception
+    public void unverifiedEvidenceRefusesOnlyAnIdentifiedCandidateInEitherProject()
+    {
+        var candidate = new Candidate("Invoice", null, Set.of(RUSSIAN));
+        for (boolean extension : List.of(false, true))
+        {
+            String refusal = SpreadsheetRenameGuard.refusal("Example", "Catalog.Products", List.of(candidate),
+                extension, item -> new ProjectSpreadsheetReader.Evidence(
+                    ProjectSpreadsheetReader.Availability.UNVERIFIED, null));
+            assertTrue(refusal, refusal.contains("cannot be verified safely"));
+            assertTrue(refusal, refusal.contains("Nothing was renamed"));
+            assertTrue(refusal, !refusal.contains("would erase"));
+            assertNull(SpreadsheetRenameGuard.refusal("Example", "Catalog.Products", List.of(), extension,
+                item -> { throw new AssertionError("No blank candidate: no file read"); }));
+        }
+    }
+
+    @Test
+    public void missingOrMalformedSavedEvidenceIsUnverified() throws Exception
     {
         Path project = temporary.newFolder("project").toPath().toRealPath();
         Path template = project.resolve("Template.mxlx");
         Path control = Files.createFile(project.resolve("Control.mxlx"));
         Assume.assumeTrue(ProjectSpreadsheetReader.read(project, control, Set.of(RUSSIAN)).availability()
             != ProjectSpreadsheetReader.Availability.UNSUPPORTED_PROVIDER);
-        var candidate = new Candidate("Invoice", null, Set.of(RUSSIAN));
 
-        var missing = ProjectSpreadsheetReader.read(project, template, candidate.blank());
-        assertEquals(ProjectSpreadsheetReader.Availability.UNVERIFIED, missing.availability());
-        assertNull(SpreadsheetRenameGuard.refusal("Base", "DataProcessor.Processor", List.of(candidate),
-            false, item -> missing));
-        String extensionRefusal = SpreadsheetRenameGuard.refusal("Extension", "DataProcessor.Processor",
-            List.of(candidate), true, item -> missing);
-        assertTrue(extensionRefusal, extensionRefusal.contains("cannot be verified safely"));
-
+        assertEquals(ProjectSpreadsheetReader.Availability.UNVERIFIED,
+            ProjectSpreadsheetReader.read(project, template, Set.of(RUSSIAN)).availability());
         Files.writeString(template, "<document xmlns='" + NS + "'><languageSettings><languageInfo>");
-        var malformed = ProjectSpreadsheetReader.read(project, template, candidate.blank());
-        assertEquals(ProjectSpreadsheetReader.Availability.SECURE, malformed.availability());
-        assertNull(malformed.loss());
-        assertNull(SpreadsheetRenameGuard.refusal("Base", "DataProcessor.Processor", List.of(candidate),
-            false, item -> malformed));
+        assertEquals(ProjectSpreadsheetReader.Availability.UNVERIFIED,
+            ProjectSpreadsheetReader.read(project, template, Set.of(RUSSIAN)).availability());
+        assertEquals(ProjectSpreadsheetReader.Availability.UNVERIFIED,
+            ProjectSpreadsheetReader.read(project, Files.createDirectory(project.resolve("directory.mxlx")),
+                Set.of(RUSSIAN)).availability());
     }
 
     @Test
@@ -258,8 +276,11 @@ public class SpreadsheetRenameGuardTest
         var external = mock(ExternalDataProcessor.class);
         var template = mock(Template.class);
         when(template.getTemplateType()).thenReturn(TemplateType.SPREADSHEET_DOCUMENT);
-        when(processor.getTemplates()).thenReturn(new BasicEList<>(List.of(template)));
-        when(external.getTemplates()).thenReturn(new BasicEList<>(List.of(template)));
+        when(processor.eClass()).thenReturn(MdClassPackage.Literals.DATA_PROCESSOR);
+        when(processor.eGet(MdClassPackage.Literals.DATA_PROCESSOR__TEMPLATES, false)).thenReturn(List.of(template));
+        when(external.eClass()).thenReturn(MdClassPackage.Literals.EXTERNAL_DATA_PROCESSOR);
+        when(external.eGet(MdClassPackage.Literals.EXTERNAL_DATA_PROCESSOR__TEMPLATES, false))
+            .thenReturn(List.of(template));
 
         for (var owner : List.of(processor, external))
         {
@@ -281,13 +302,100 @@ public class SpreadsheetRenameGuardTest
         var processor = mock(DataProcessor.class);
         var template = mock(Template.class);
         when(template.getTemplateType()).thenReturn(TemplateType.TEXT_DOCUMENT);
-        when(processor.getTemplates()).thenReturn(new BasicEList<>(List.of(template)));
-        for (var owner : List.of(processor, mock(Catalog.class)))
+        when(processor.eClass()).thenReturn(MdClassPackage.Literals.DATA_PROCESSOR);
+        when(processor.eGet(MdClassPackage.Literals.DATA_PROCESSOR__TEMPLATES, false)).thenReturn(List.of(template));
+        var unrelated = mock(CommonModule.class);
+        when(unrelated.eClass()).thenReturn(MdClassPackage.Literals.COMMON_MODULE);
+        assertTrue(!SpreadsheetRenameGuard.mayOwnSpreadsheets(unrelated));
+        for (var owner : List.of(processor, unrelated))
         {
             assertNull(SpreadsheetRenameGuard.scanOwner(null, owner, null, null)
                 .refusal("Example", "DataProcessor.Processor", false));
         }
         verify(template, never()).getTemplate();
+    }
+
+    @Test
+    public void catalogAndNestedExternalDataOwnersAreInScope()
+    {
+        var template = mock(Template.class);
+        when(template.getTemplateType()).thenReturn(TemplateType.SPREADSHEET_DOCUMENT);
+        var catalog = mock(Catalog.class);
+        when(catalog.eClass()).thenReturn(MdClassPackage.Literals.CATALOG);
+        when(catalog.eGet(MdClassPackage.Literals.CATALOG__TEMPLATES, false)).thenReturn(List.of(template));
+        assertTrue(SpreadsheetRenameGuard.mayOwnSpreadsheets(catalog));
+        assertTrue(SpreadsheetRenameGuard.scanOwner(null, catalog, null, null).generatorMissing());
+
+        var table = mock(DimensionTable.class);
+        when(table.eClass()).thenReturn(MdClassPackage.Literals.DIMENSION_TABLE);
+        when(table.eGet(MdClassPackage.Literals.DIMENSION_TABLE__TEMPLATES, false)).thenReturn(List.of(template));
+        var cube = mock(Cube.class);
+        when(cube.eClass()).thenReturn(MdClassPackage.Literals.CUBE);
+        when(cube.getDimensionTables()).thenReturn(new BasicEList<>(List.of(table)));
+        var source = mock(ExternalDataSource.class);
+        when(source.eClass()).thenReturn(MdClassPackage.Literals.EXTERNAL_DATA_SOURCE);
+        when(source.getTables()).thenReturn(new BasicEList<>());
+        when(source.getCubes()).thenReturn(new BasicEList<>(List.of(cube)));
+        assertTrue(SpreadsheetRenameGuard.mayOwnSpreadsheets(source));
+        assertTrue(SpreadsheetRenameGuard.scanOwner(null, source, null, null).generatorMissing());
+        verify(template, never()).getTemplate();
+    }
+
+    @Test
+    public void directOwnedAndCommonTemplateRenamesCheckTheirOwnContent()
+    {
+        var owned = mock(Template.class);
+        var common = mock(CommonTemplate.class);
+        when(owned.getTemplateType()).thenReturn(TemplateType.SPREADSHEET_DOCUMENT);
+        when(common.getTemplateType()).thenReturn(TemplateType.SPREADSHEET_DOCUMENT);
+        for (var template : List.of(owned, common))
+        {
+            assertTrue(SpreadsheetRenameGuard.mayOwnSpreadsheets(template));
+            assertTrue(SpreadsheetRenameGuard.scanOwner(null, template, null, null).generatorMissing());
+            verify(template, never()).getTemplate();
+        }
+        assertTrue(!SpreadsheetRenameGuard.mayOwnSpreadsheets(mock(Configuration.class)));
+    }
+
+    @Test
+    public void containedTemplateOwnerUsesTheNativeUriInTheDependentProject()
+    {
+        var owner = mock(DimensionTable.class, withSettings().extraInterfaces(IBmObject.class));
+        var bmOwner = (IBmObject)owner;
+        String root = "ExternalDataSource.Reporting";
+        String containment = "cubes.Cube.dimensionTables.Dimension";
+        when(owner.getUuid()).thenReturn(UUID.randomUUID());
+        when(owner.eClass()).thenReturn(MdClassPackage.Literals.DIMENSION_TABLE);
+        when(bmOwner.bmGetUri()).thenReturn(BmUriUtil.createContainedBmObjectUri("base", root, containment));
+
+        assertEquals(BmUriUtil.createContainedBmObjectUri("extension", root, containment),
+            SpreadsheetRenameOwners.baseIdentity(owner, bmOwner).extensionUri("extension"));
+    }
+
+    @Test
+    public void counterpartRequiresExactAdoptionLinkAndStableCompatibleIdentity()
+    {
+        var original = UUID.randomUUID();
+        var expected = UUID.randomUUID();
+        var catalog = mock(Catalog.class, withSettings().extraInterfaces(IBmObject.class));
+        var uri = BmUriUtil.createTopBmObjectUri("extension", "Catalog.Products");
+        var project = mock(IProject.class);
+        var tx = mock(IBmTransaction.class);
+        when(catalog.eClass()).thenReturn(MdClassPackage.Literals.CATALOG);
+        when(catalog.getUuid()).thenReturn(expected);
+        when(tx.getObjectByUri(uri)).thenReturn((IBmObject)catalog);
+
+        assertNull(SpreadsheetRenameOwners.counterpart(project, uri, original, MdClassPackage.Literals.CATALOG,
+            (IBmObject)catalog));
+        when(catalog.getExtendedConfigurationObject()).thenReturn(original);
+        assertThrows(IllegalStateException.class, () -> SpreadsheetRenameOwners.counterpart(project, uri, original,
+            MdClassPackage.Literals.DATA_PROCESSOR, (IBmObject)catalog));
+        var target = SpreadsheetRenameOwners.counterpart(project, uri, original, MdClassPackage.Literals.CATALOG,
+            (IBmObject)catalog);
+        assertEquals(expected, target.uuid());
+        assertEquals(catalog, target.resolve(tx, MdClassPackage.Literals.CATALOG));
+        when(catalog.getUuid()).thenReturn(UUID.randomUUID());
+        assertNull(target.resolve(tx, MdClassPackage.Literals.CATALOG));
     }
 
     @Test
@@ -308,7 +416,8 @@ public class SpreadsheetRenameGuardTest
 
         String fqn = "DataProcessor.Processor.Template.Invoice.Template";
         when(((IBmObject)owner).bmIsTop()).thenReturn(true);
-        when(owner.getTemplates()).thenReturn(new BasicEList<>(List.of(template)));
+        when(owner.eClass()).thenReturn(MdClassPackage.Literals.DATA_PROCESSOR);
+        when(owner.eGet(MdClassPackage.Literals.DATA_PROCESSOR__TEMPLATES, false)).thenReturn(List.of(template));
         when(template.getTemplateType()).thenReturn(TemplateType.SPREADSHEET_DOCUMENT);
         when(generator.generateExternalPropertyFqn(template, MdClassPackage.Literals.BASIC_TEMPLATE__TEMPLATE))
             .thenReturn(fqn);

@@ -19,14 +19,17 @@ import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IResource;
 import org.eclipse.core.runtime.Platform;
+import org.eclipse.emf.ecore.EClass;
 import org.eclipse.emf.ecore.EObject;
+import org.eclipse.emf.ecore.EReference;
 
 import com._1c.g5.v8.bm.core.IBmObject;
 import com._1c.g5.v8.bm.core.IBmTransaction;
 import com._1c.g5.v8.dt.core.naming.ITopObjectFqnGenerator;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicTemplate;
-import com._1c.g5.v8.dt.metadata.mdclass.DataProcessor;
-import com._1c.g5.v8.dt.metadata.mdclass.ExternalDataProcessor;
+import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
+import com._1c.g5.v8.dt.metadata.mdclass.Cube;
+import com._1c.g5.v8.dt.metadata.mdclass.ExternalDataSource;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.TemplateType;
@@ -71,8 +74,7 @@ public final class SpreadsheetRenameGuard
     public static String refusal(IProject project, MdObject owner, String ownerFqn,
         SpreadsheetRenameOwners.Plan planned, int groups)
     {
-        if (HostKind.current() != HostKind.WINDOWED || !(owner instanceof DataProcessor
-            || owner instanceof ExternalDataProcessor))
+        if (HostKind.current() != HostKind.WINDOWED || !mayOwnSpreadsheets(owner))
         {
             return null;
         }
@@ -86,7 +88,7 @@ public final class SpreadsheetRenameGuard
         OwnerScan base = ReadToolExecution.readModel(project, task, model -> BmTransactions.read(model, task,
             (tx, monitor) -> scanOwner(project, owner, tx, generator)));
         String baseRefusal = base.refusal(project.getName(), ownerFqn, false);
-        if (baseRefusal != null || groups == 1 || !(owner instanceof DataProcessor))
+        if (baseRefusal != null || groups == 1)
         {
             return baseRefusal;
         }
@@ -94,6 +96,7 @@ public final class SpreadsheetRenameGuard
         {
             return SpreadsheetRenameOwners.changedScope();
         }
+        EClass ownerType = owner.eClass();
         for (var counterpart : planned.counterparts())
         {
             var model = BmModelResolver.resolve(counterpart.project());
@@ -103,7 +106,7 @@ public final class SpreadsheetRenameGuard
             }
             OwnerScan extension = BmTransactions.read(model.getModel(), "Read extension spreadsheet language risk", //$NON-NLS-1$
                 (tx, monitor) -> {
-                    DataProcessor affectedOwner = counterpart.resolve(tx);
+                    MdObject affectedOwner = counterpart.resolve(tx, ownerType);
                     if (affectedOwner == null)
                     {
                         return null;
@@ -145,17 +148,72 @@ public final class SpreadsheetRenameGuard
         return new OwnerScan(List.of(), hasSpreadsheet);
     }
 
-    private static List<? extends BasicTemplate> ownedTemplates(MdObject owner)
+    static boolean mayOwnSpreadsheets(MdObject owner)
     {
-        if (owner instanceof DataProcessor processor)
+        // Common templates are separate top-level models, not resources owned by the
+        // configuration root (which is not a target of rename_metadata_object).
+        return owner != null && !(owner instanceof Configuration)
+            && (owner instanceof BasicTemplate || owner instanceof ExternalDataSource
+                || templateContainments(owner.eClass()).findAny().isPresent());
+    }
+
+    private static java.util.stream.Stream<EReference> templateContainments(EClass type)
+    {
+        return type.getEAllContainments().stream()
+            .filter(feature -> MdClassPackage.Literals.BASIC_TEMPLATE.isSuperTypeOf(feature.getEReferenceType()));
+    }
+
+    private static List<BasicTemplate> ownedTemplates(MdObject owner)
+    {
+        if (owner instanceof BasicTemplate template)
         {
-            return processor.getTemplates();
+            // A direct Template/CommonTemplate rename moves its own external content.
+            return List.of(template);
         }
-        if (owner instanceof ExternalDataProcessor processor)
+        List<BasicTemplate> result = new ArrayList<>();
+        addDirectTemplates(owner, result);
+        // Only these SDK model relationships nest one template-owning metadata object under
+        // another target here. Exporting an external data source or cube can export those
+        // descendants. Never climb to siblings or enumerate the configuration collection.
+        if (owner instanceof ExternalDataSource source)
         {
-            return processor.getTemplates();
+            source.getTables().forEach(table -> addDirectTemplates(table, result));
+            source.getCubes().forEach(cube -> {
+                addDirectTemplates(cube, result);
+                addDimensionTableTemplates(cube, result);
+            });
         }
-        return List.of();
+        else if (owner instanceof Cube cube)
+        {
+            addDimensionTableTemplates(cube, result);
+        }
+        return result;
+    }
+
+    private static void addDimensionTableTemplates(Cube cube, List<BasicTemplate> result)
+    {
+        cube.getDimensionTables().forEach(table -> addDirectTemplates(table, result));
+    }
+
+    private static void addDirectTemplates(MdObject owner, List<BasicTemplate> result)
+    {
+        templateContainments(owner.eClass()).forEach(feature -> {
+            Object value = owner.eGet(feature, false);
+            if (value instanceof Iterable<?> list)
+            {
+                for (Object item : list)
+                {
+                    if (item instanceof BasicTemplate template)
+                    {
+                        result.add(template);
+                    }
+                }
+            }
+            else if (value instanceof BasicTemplate template)
+            {
+                result.add(template);
+            }
+        });
     }
 
     static String refusal(String projectName, String ownerFqn, List<Candidate> candidates, boolean extension,
@@ -164,8 +222,7 @@ public final class SpreadsheetRenameGuard
         for (Candidate candidate : candidates)
         {
             var evidence = reader.apply(candidate);
-            if (evidence.availability() == ProjectSpreadsheetReader.Availability.UNSUPPORTED_PROVIDER
-                || (extension && !evidence.safeReaderAvailable()))
+            if (evidence.availability() != ProjectSpreadsheetReader.Availability.SECURE)
             {
                 return "EDT has a blank language description in spreadsheet template '" //$NON-NLS-1$
                     + candidate.templateName() + (extension ? "' in extension project '" : "' in project '") //$NON-NLS-1$ //$NON-NLS-2$
@@ -194,7 +251,7 @@ public final class SpreadsheetRenameGuard
     static List<Candidate> candidates(IProject project, MdObject owner, IBmTransaction tx,
         ITopObjectFqnGenerator generator)
     {
-        if (!(owner instanceof IBmObject bmOwner) || !bmOwner.bmIsTop())
+        if (!(owner instanceof IBmObject))
         {
             return List.of();
         }
@@ -211,22 +268,25 @@ public final class SpreadsheetRenameGuard
             Set<LanguageKey> blank = uniquelyBlank(book.getLanguageSettings().getLanguages());
             if (!blank.isEmpty())
             {
-                try
-                {
-                    IFile file = TemplateContentSupport.contentFile(project, template);
-                    if (project.equals(file.getProject()) && "mxlx".equals(file.getFileExtension()) //$NON-NLS-1$
-                        && !file.isLinked(IResource.CHECK_ANCESTORS))
-                    {
-                        candidates.add(new Candidate(template.getName(), file, blank));
-                    }
-                }
-                catch (IllegalStateException e)
-                {
-                    // No trustworthy source path: never claim a loss from a model value alone.
-                }
+                candidates.add(new Candidate(template.getName(), verifiedWorkspaceFile(project, template), blank));
             }
         }
         return candidates;
+    }
+
+    private static IFile verifiedWorkspaceFile(IProject project, BasicTemplate template)
+    {
+        try
+        {
+            IFile file = TemplateContentSupport.contentFile(project, template);
+            return project.equals(file.getProject()) && "mxlx".equals(file.getFileExtension()) //$NON-NLS-1$
+                && !file.isLinked(IResource.CHECK_ANCESTORS) ? file : null;
+        }
+        catch (IllegalStateException e)
+        {
+            // An identified candidate with no verifiable path still needs a refusal, not a guess.
+            return null;
+        }
     }
 
     /** Look up registered BM data only; the external property's getter can resolve its source. */
@@ -279,7 +339,7 @@ public final class SpreadsheetRenameGuard
                 ProjectSpreadsheetReader.Availability.UNSUPPORTED_PROVIDER, null);
         }
         IFile file = candidate.file();
-        if (file.getLocation() == null || file.getProject().getLocation() == null)
+        if (file == null || file.getLocation() == null || file.getProject().getLocation() == null)
         {
             return new ProjectSpreadsheetReader.Evidence(ProjectSpreadsheetReader.Availability.UNVERIFIED, null);
         }
@@ -298,7 +358,7 @@ public final class SpreadsheetRenameGuard
             if (xml.nextTag() != XMLStreamReader.START_ELEMENT || !element(xml, "document") //$NON-NLS-1$
                 || xml.nextTag() != XMLStreamReader.START_ELEMENT || !element(xml, "languageSettings")) //$NON-NLS-1$
             {
-                return null;
+                throw new XMLStreamException("Unrecognized spreadsheet language header"); //$NON-NLS-1$
             }
             Set<LanguageKey> visited = new HashSet<>();
             Set<LanguageKey> possibleLoss = new LinkedHashSet<>();
@@ -311,7 +371,7 @@ public final class SpreadsheetRenameGuard
                 }
                 if (!element(xml, "languageInfo")) //$NON-NLS-1$
                 {
-                    return null;
+                    throw new XMLStreamException("Unrecognized spreadsheet language entry"); //$NON-NLS-1$
                 }
                 String id = null;
                 String code = null;
@@ -332,8 +392,12 @@ public final class SpreadsheetRenameGuard
                     }
                     else
                     {
-                        return null;
+                        throw new XMLStreamException("Unrecognized spreadsheet language field"); //$NON-NLS-1$
                     }
+                }
+                if (blank(id) || blank(code))
+                {
+                    throw new XMLStreamException("Spreadsheet language key is incomplete"); //$NON-NLS-1$
                 }
                 LanguageKey key = new LanguageKey(id, code);
                 if (!visited.add(key))
