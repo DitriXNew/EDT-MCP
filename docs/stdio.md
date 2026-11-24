@@ -64,7 +64,7 @@ java -cp <private root>/bootstrap/<install hash>/<sha256>.jar \
 
 The CLI treats the answer and the exit as two separate budgets: the decision arrives immediately, and the wait for the process exit then has the full `-timeout`. The exit codes are distinct on purpose:
 
-- **`0`** - the host accepted and its process exited. Only this says the workspace was closed cleanly.
+- **`0`** - workspace cleanup was confirmed successful and the host process exited. On Linux, an exited process awaiting collection by its parent is also considered exited.
 - **`1`** - accepted, but the process did not exit within the budget, or the state could not be determined. A failed full save also leaves the cleanup unconfirmed. A bounded force-kill is the caller's reserve.
 - **`2`** - nothing to stop: no live host is registered for the workspace.
 - **`3`** - the host answered `refused`. It is still running deliberately, so a wrapper must **not** kill it.

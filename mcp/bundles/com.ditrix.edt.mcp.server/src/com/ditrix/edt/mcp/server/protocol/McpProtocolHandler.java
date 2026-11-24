@@ -152,7 +152,7 @@ public class McpProtocolHandler
      * <p>
      * The request is parsed ONCE here and the parsed form is reused for both dispatch
      * and the recorder, so a large tool-call payload is never parsed twice on this hot
-     * path — {@link #dispatch(JsonRpcRequest, ClientCapabilities)} takes the already-parsed request and the
+     * path — {@link #dispatch} takes the already-parsed request and the
      * {@code finally} reads method/toolName from it instead of re-parsing.
      *
      * @param requestBody the JSON request body
@@ -217,6 +217,14 @@ public class McpProtocolHandler
     public String processRequest(String requestBody, JsonRpcRequest request, long startNanos,
         ClientCapabilities sessionCapabilities, java.util.function.Consumer<String> completion)
     {
+        return processRequest(requestBody, request, startNanos, sessionCapabilities, completion, null);
+    }
+
+    /** Dispatches with an already acquired execution lease, held by the caller until this returns. */
+    public String processRequest(String requestBody, JsonRpcRequest request, long startNanos,
+        ClientCapabilities sessionCapabilities, java.util.function.Consumer<String> completion,
+        HeadlessLifetime.Lease execution)
+    {
         String response = null;
         try
         {
@@ -226,7 +234,7 @@ public class McpProtocolHandler
                 EdtDialogs.getInstance().ensureInstalled();
             }
             response = dispatch(request,
-                sessionCapabilities != null ? sessionCapabilities : clientCapabilities.get());
+                sessionCapabilities != null ? sessionCapabilities : clientCapabilities.get(), execution);
             if (reportDialogs)
             {
                 response = appendDialogNotice(response, dialogNotice());
@@ -338,7 +346,7 @@ public class McpProtocolHandler
      * @return JSON response with correct id from request ({@code null} for a
      *         notification answered with 202 Accepted)
      */
-    private String dispatch(JsonRpcRequest request, ClientCapabilities capabilities)
+    private String dispatch(JsonRpcRequest request, ClientCapabilities capabilities, HeadlessLifetime.Lease execution)
     {
         // Per JSON-RPC 2.0: when the id cannot be determined (parse error /
         // invalid request) the error response id MUST be null. A real id from
@@ -391,7 +399,7 @@ public class McpProtocolHandler
             // Check for tools/call method
             if (McpConstants.METHOD_TOOLS_CALL.equals(method))
             {
-                return handleToolCall(request, requestId, capabilities);
+                return handleToolCall(request, requestId, capabilities, execution);
             }
 
             if ("resources/templates/list".equals(method) && guidedWorkflows == null) //$NON-NLS-1$
@@ -490,7 +498,8 @@ public class McpProtocolHandler
     /**
      * Handles a tools/call request.
      */
-    private String handleToolCall(JsonRpcRequest request, Object requestId, ClientCapabilities capabilities)
+    private String handleToolCall(JsonRpcRequest request, Object requestId, ClientCapabilities capabilities,
+        HeadlessLifetime.Lease execution)
     {
         String toolName = request != null ? request.getToolName() : null;
         if (toolName == null || toolName.isBlank())
@@ -544,7 +553,7 @@ public class McpProtocolHandler
         com.ditrix.edt.mcp.server.ActiveToolCall call = server != null ? server.getExecutingToolCall() : null;
 
         // Execute the tool (timed + logged + status-bar cleared in one place).
-        String result = executeToolTimed(tool, params, server, call, projectNameArgument(request));
+        String result = executeToolTimed(tool, params, server, call, projectNameArgument(request), execution);
 
         // PII redaction (#242): the single wire-serialization choke point.
         // A no-op unless redaction is enabled AND the tool is flagged returnsInfobaseData -
@@ -591,11 +600,12 @@ public class McpProtocolHandler
      * @param call the transport invocation bound to this thread, or {@code null}
      * @param projectName the call's string {@code projectName} argument for the in-flight listing, or
      *            {@code null}
+     * @param execution the transport-owned lease, or {@code null} to admit here
      * @return the raw tool result payload (may be {@code null} only if {@code execute} returned
      *         {@code null})
      */
     private String executeToolTimed(IMcpTool tool, Map<String, String> params, McpServer server,
-        com.ditrix.edt.mcp.server.ActiveToolCall call, String projectName)
+        com.ditrix.edt.mcp.server.ActiveToolCall call, String projectName, HeadlessLifetime.Lease execution)
     {
         String result = null;
         long startNanos = System.nanoTime();
@@ -623,8 +633,10 @@ public class McpProtocolHandler
         {
             InfobaseAuthDialogSuppressor.markActivityStart();
         }
-        HeadlessLifetime lifetime = Activator.getDefault() == null
-            ? null : Activator.getDefault().getHeadlessLifetime();
+        // IPC already admitted this particular request before the worker was started. Other
+        // callers still need top-level admission here, even while an IPC call holds a lease.
+        Activator activator = execution == null ? Activator.getDefault() : null;
+        HeadlessLifetime lifetime = activator == null ? null : activator.getHeadlessLifetime();
         // Listed by get_server_status while the tool runs (#993). Registered only once the headless
         // lease is granted - a call refused here never ran - and removed first in the finally, so
         // every exit after it - a result, a throw, an interruption - removes it; begin() cannot

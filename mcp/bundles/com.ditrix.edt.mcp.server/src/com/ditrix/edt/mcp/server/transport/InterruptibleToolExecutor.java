@@ -7,6 +7,7 @@
 package com.ditrix.edt.mcp.server.transport;
 
 import com.ditrix.edt.mcp.server.ActiveToolCall;
+import com.ditrix.edt.mcp.server.HeadlessLifetime;
 import com.ditrix.edt.mcp.server.McpServer;
 import com.ditrix.edt.mcp.server.history.McpCallHistory;
 import com.ditrix.edt.mcp.server.history.McpCallHistory.CallCapture;
@@ -79,48 +80,60 @@ public class InterruptibleToolExecutor
     public String execute(ToolCallResponder responder, String requestBody, JsonRpcRequest request, long startNanos,
         ClientCapabilities sessionCapabilities) throws Exception // NOSONAR shares the HTTP exception boundary
     {
-        Object requestId = request != null ? McpProtocolHandler.normalizeId(request.getId()) : null;
-        String toolName = request != null && request.getToolName() != null ? request.getToolName() : "unknown"; //$NON-NLS-1$
+        return execute(responder, requestBody, request, startNanos, sessionCapabilities, null);
+    }
 
-        // Create and register active tool call
-        CallCapture capture = McpCallHistory.getInstance().beginCall(
-            request != null ? request.getMethod() : null, toolName, requestBody, startNanos);
-        ActiveToolCall activeCall = new ActiveToolCall(responder, toolName, requestId, capture);
-        server.setActiveToolCall(activeCall);
-
-        // Use a container to hold the result from the background thread
+    /** Takes ownership of an IPC execution lease; the waiter has a separate delivery lease. */
+    String execute(ToolCallResponder responder, String requestBody, JsonRpcRequest request, long startNanos,
+        ClientCapabilities sessionCapabilities, HeadlessLifetime.Lease execution) throws Exception
+    {
         final String[] resultContainer = new String[1];
         final Exception[] errorContainer = new Exception[1];
         final boolean[] completedFlag = new boolean[1];
-
-        // Run tool execution in background thread
-        Thread executionThread = new Thread(() -> {
-            server.bindToolCall(activeCall);
-            try
-            {
-                resultContainer[0] =
-                    protocolHandler.processRequest(requestBody, request, startNanos, sessionCapabilities,
-                        capture::completed);
-            }
-            catch (Exception e)
-            {
-                errorContainer[0] = e;
-            }
-            finally
-            {
-                server.unbindToolCall();
-                synchronized (completedFlag)
+        ActiveToolCall activeCall;
+        boolean started = false;
+        try
+        {
+            Object requestId = request != null ? McpProtocolHandler.normalizeId(request.getId()) : null;
+            String toolName = request != null && request.getToolName() != null ? request.getToolName() : "unknown"; //$NON-NLS-1$
+            CallCapture capture = McpCallHistory.getInstance().beginCall(
+                request != null ? request.getMethod() : null, toolName, requestBody, startNanos);
+            activeCall = new ActiveToolCall(responder, toolName, requestId, capture);
+            Thread executionThread = new Thread(() -> {
+                try (execution)
                 {
-                    completedFlag[0] = true;
-                    completedFlag.notifyAll();
+                    server.bindToolCall(activeCall);
+                    resultContainer[0] = execution == null
+                        ? protocolHandler.processRequest(requestBody, request, startNanos, sessionCapabilities,
+                            capture::completed)
+                        : protocolHandler.processRequest(requestBody, request, startNanos, sessionCapabilities,
+                            capture::completed, execution);
                 }
-            }
-        }, "MCP-Tool-Executor"); //$NON-NLS-1$
+                catch (Exception e)
+                {
+                    errorContainer[0] = e;
+                }
+                finally
+                {
+                    server.unbindToolCall();
+                    synchronized (completedFlag)
+                    {
+                        completedFlag[0] = true;
+                        completedFlag.notifyAll();
+                    }
+                }
+            }, "MCP-Tool-Executor"); //$NON-NLS-1$
 
-        // Daemon: a tool call still running (or stuck) at EDT shutdown must
-        // not keep the JVM alive after the workbench has closed (#135).
-        executionThread.setDaemon(true);
-        executionThread.start();
+            // A stuck tool must not keep the JVM alive after the workbench closes (#135).
+            executionThread.setDaemon(true);
+            server.setActiveToolCall(activeCall);
+            try { executionThread.start(); started = true; }
+            catch (RuntimeException | Error e) { server.clearActiveToolCall(activeCall); throw e; }
+        }
+        finally
+        {
+            if (!started && execution != null) { execution.close(); }
+        }
 
         // Wait for completion or user signal
         synchronized (completedFlag)

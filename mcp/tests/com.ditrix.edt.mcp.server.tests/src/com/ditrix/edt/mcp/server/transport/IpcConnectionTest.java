@@ -1,13 +1,25 @@
 package com.ditrix.edt.mcp.server.transport;
 
 import static org.junit.Assert.*;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+
+import java.lang.reflect.Field;
 import java.net.*;
 import java.nio.channels.*;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicReference;
+import org.eclipse.jface.preference.PreferenceStore;
 import org.junit.*;
+import com.ditrix.edt.mcp.server.ActiveToolCall;
+import com.ditrix.edt.mcp.server.Activator;
+import com.ditrix.edt.mcp.server.HeadlessLifetime;
+import com.ditrix.edt.mcp.server.HostKind;
+import com.ditrix.edt.mcp.server.McpServer;
 import com.ditrix.edt.mcp.server.ipc.*;
 import com.ditrix.edt.mcp.server.protocol.*;
 import com.ditrix.edt.mcp.server.tools.*;
@@ -15,6 +27,60 @@ import com.google.gson.*;
 
 public class IpcConnectionTest extends StdioTestSupport
 {
+    @Test public void anAdmittedRequestRunsWhenShutdownBeginsBeforeProtocolDispatch() throws Exception
+    {
+        try (var fixture = new DrainFixture())
+        {
+            fixture.startCall();
+            fixture.lifetime.requestShutdown(fixture.drained::countDown);
+            assertEquals("the admitted request is still pending", 1, fixture.drained.getCount());
+
+            fixture.finishTool.countDown();
+            fixture.dispatch.countDown();
+            String response = fixture.frames.poll(5, TimeUnit.SECONDS);
+            assertNotNull("the admitted request must answer", response);
+            var reply = JsonParser.parseString(response).getAsJsonObject();
+            assertEquals(2, reply.get("id").getAsInt());
+            assertTrue(response, reply.has("result"));
+            assertEquals("ran", reply.getAsJsonObject("result").getAsJsonObject("structuredContent")
+                .get("value").getAsString());
+            assertTrue("shutdown can finish after delivery", fixture.drained.await(5, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test public void aDetachedWaiterDoesNotReleaseThePendingExecution() throws Exception
+    {
+        try (var fixture = new DrainFixture())
+        {
+            fixture.startCall();
+            fixture.lifetime.requestShutdown(fixture.drained::countDown);
+            fixture.connection.close();
+            DrainFixture.join(fixture.waiter.get());
+            assertEquals("shutdown must still wait for the worker", 1, fixture.drained.getCount());
+
+            fixture.dispatch.countDown();
+            assertTrue("the detached call still runs", fixture.executed.await(5, TimeUnit.SECONDS));
+            assertEquals("shutdown must still wait inside the tool", 1, fixture.drained.getCount());
+            fixture.finishTool.countDown();
+            assertTrue("the worker releases the final lease", fixture.drained.await(5, TimeUnit.SECONDS));
+            assertTrue("a detached peer gets no tool result", fixture.frames.isEmpty());
+        }
+    }
+
+    @Test public void directProtocolDispatchStillRequiresItsOwnAdmission() throws Exception
+    {
+        try (var fixture = new DrainFixture())
+        {
+            fixture.startCall();
+            fixture.lifetime.requestShutdown(fixture.drained::countDown);
+            // Another request cannot borrow the lease held by the paused IPC worker.
+            fixture.finishTool.countDown();
+            String response = fixture.dispatcher.processRequest(call(3, DrainFixture.TOOL));
+            assertTrue(response, response.contains("Headless EDT is shutting down"));
+            assertEquals("unadmitted tool must not run", 1, fixture.executed.getCount());
+        }
+    }
+
     @Test public void aNewRequestOnAnOpenPeerDoesNotExtendTheDrain() throws Exception
     {
         var frames = new CopyOnWriteArrayList<String>();
@@ -154,6 +220,99 @@ public class IpcConnectionTest extends StdioTestSupport
             public ResponseType getResponseType() { return ResponseType.JSON; }
             public String execute(Map<String, String> arguments) { return payload; }
         };
+    }
+
+    private static final class DrainFixture implements AutoCloseable
+    {
+        private static final String TOOL = "get_server_status";
+        private final String savedApplication = System.getProperty("eclipse.application");
+        private final Field plugin = Activator.class.getDeclaredField("plugin");
+        private final Object savedPlugin;
+        private final McpToolRegistry registry = McpToolRegistry.getInstance();
+        private final Collection<IMcpTool> savedTools = registry.getAllTools();
+        final HeadlessLifetime lifetime = new HeadlessLifetime(Duration.ZERO, () -> { });
+        final BlockingQueue<String> frames = new LinkedBlockingQueue<>();
+        final CountDownLatch beforeDispatch = new CountDownLatch(1);
+        final CountDownLatch dispatch = new CountDownLatch(1);
+        final CountDownLatch executed = new CountDownLatch(1);
+        final CountDownLatch finishTool = new CountDownLatch(1);
+        final CountDownLatch drained = new CountDownLatch(1);
+        final AtomicReference<Thread> waiter = new AtomicReference<>();
+        final AtomicReference<Thread> worker = new AtomicReference<>();
+        final McpProtocolHandler dispatcher = new McpProtocolHandler();
+        final IpcConnection connection;
+
+        DrainFixture() throws Exception
+        {
+            plugin.setAccessible(true);
+            savedPlugin = plugin.get(null);
+            var server = new McpServer() {
+                @Override public void setActiveToolCall(ActiveToolCall call) {
+                    super.setActiveToolCall(call);
+                    waiter.set(Thread.currentThread());
+                }
+                @Override public void bindToolCall(ActiveToolCall call) {
+                    super.bindToolCall(call);
+                    worker.set(Thread.currentThread());
+                    beforeDispatch.countDown();
+                    try { assertTrue("test must release dispatch", dispatch.await(15, TimeUnit.SECONDS)); }
+                    catch (InterruptedException e) { throw new AssertionError(e); }
+                }
+            };
+            var activator = mock(Activator.class);
+            when(activator.getHeadlessLifetime()).thenReturn(lifetime);
+            when(activator.getPreferenceStore()).thenReturn(new PreferenceStore());
+            when(activator.getMcpServer()).thenReturn(server);
+            connection = new IpcConnection(server, dispatcher, frames::add, false, () -> { }, lifetime);
+            System.setProperty("eclipse.application", HostKind.APPLICATION_ID);
+            plugin.set(null, activator);
+            registry.replaceAll(List.of(new IMcpTool() {
+                @Override public String getName() { return TOOL; }
+                @Override public String getDescription() { return "Shutdown test probe"; }
+                @Override public String getInputSchema() { return "{\"type\":\"object\"}"; }
+                @Override public ResponseType getResponseType() { return ResponseType.JSON; }
+                @Override public String execute(Map<String, String> arguments) {
+                    executed.countDown();
+                    try { assertTrue("test must release tool", finishTool.await(15, TimeUnit.SECONDS)); }
+                    catch (InterruptedException e) { throw new AssertionError(e); }
+                    return "{\"value\":\"ran\"}";
+                }
+            }));
+        }
+
+        void startCall() throws Exception
+        {
+            connection.accept(init(1, false));
+            assertNotNull("initialize must answer", frames.poll());
+            connection.accept(initialized());
+            connection.accept(call(2, TOOL));
+            assertTrue("worker must reach the gate before dispatch", beforeDispatch.await(5, TimeUnit.SECONDS));
+        }
+
+        static void join(Thread thread) throws InterruptedException
+        {
+            if (thread != null)
+            {
+                thread.join(5000);
+                assertFalse("test thread must exit: " + thread.getName(), thread.isAlive());
+            }
+        }
+
+        @Override public void close() throws Exception
+        {
+            connection.close();
+            dispatch.countDown();
+            finishTool.countDown();
+            try { join(waiter.get()); join(worker.get()); }
+            finally
+            {
+                lifetime.close();
+                plugin.set(null, savedPlugin);
+                registry.replaceAll(savedTools);
+                if (savedApplication == null) { System.clearProperty("eclipse.application"); }
+                else { System.setProperty("eclipse.application", savedApplication); }
+            }
+        }
     }
 
     private static void awaitFrames(List<String> frames, int expected) throws Exception

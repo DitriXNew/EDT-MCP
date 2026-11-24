@@ -134,49 +134,52 @@ public final class IpcConnection implements AutoCloseable
     }
     private void startToolCall(String frame, JsonRpcRequest request, long start, JsonElement id)
     {
-        // Admission is top-level and atomic with the drain. Only admitted requests can
-        // hold a lease through response delivery; refusing a new call must not extend shutdown.
-        var written = lifetime == null ? null : lifetime.tool();
-        if (lifetime != null && written == null)
+        // Admit once for both owners: the worker can outlive the response waiter.
+        var admission = lifetime == null ? null : lifetime.toolRequest();
+        if (lifetime != null && admission == null)
         {
             if (!id.isJsonNull()) { send(StdioBootstrap.error(id, -32603, "Headless EDT is shutting down")); }
             return;
         }
+        var execution = admission == null ? null : admission.execution();
+        var delivery = admission == null ? null : admission.delivery();
         ClientCapabilities client = capabilities;
-        Thread waiter = new Thread(() -> {
-            try (var lease = written)
-            {
-                ToolCallResponder responder = new ToolCallResponder.Ipc(response -> { if (!id.isJsonNull()) { send(response); } });
-                String response;
-                try { response = executor.execute(responder, frame, request, start, client); }
-                catch (Exception e)
-                { Activator.logError("IPC tool execution failed", e);
-                  response = StdioBootstrap.error(id, -32603, "EDT tool execution failed; its outcome may be unknown. Inspect EDT before retrying."); }
-                if (response != null) { responder.send(response); }
-            }
-            catch (IOException | RuntimeException e) { close(); }
-            finally { synchronized (requests) { requests.remove(Thread.currentThread()); } }
-        }, "edt-mcp-ipc-request");
-        waiter.setDaemon(true);
+        boolean started = false;
         try
         {
+            ToolCallResponder responder = new ToolCallResponder.Ipc(response -> { if (!id.isJsonNull()) { send(response); } });
+            Thread waiter = new Thread(() -> {
+                try (delivery)
+                {
+                    String response;
+                    try { response = executor.execute(responder, frame, request, start, client, execution); }
+                    catch (Exception e)
+                    { Activator.logError("IPC tool execution failed", e);
+                      response = StdioBootstrap.error(id, -32603, "EDT tool execution failed; its outcome may be unknown. Inspect EDT before retrying."); }
+                    if (response != null) { responder.send(response); }
+                }
+                catch (IOException | RuntimeException e) { close(); }
+                finally { synchronized (requests) { requests.remove(Thread.currentThread()); } }
+            }, "edt-mcp-ipc-request");
+            waiter.setDaemon(true);
             synchronized (requests)
             {
                 if (!closed)
                 {
                     requests.add(waiter);
-                    try { waiter.start(); }
+                    try { waiter.start(); started = true; }
                     catch (RuntimeException | Error e) { requests.remove(waiter); throw e; }
-                    return;
                 }
             }
         }
-        catch (RuntimeException | Error e)
+        finally
         {
-            if (written != null) { written.close(); }
-            throw e;
+            if (!started && admission != null)
+            {
+                execution.close();
+                delivery.close();
+            }
         }
-        if (written != null) { written.close(); }
     }
 
     private static HeadlessLifetime currentLifetime()

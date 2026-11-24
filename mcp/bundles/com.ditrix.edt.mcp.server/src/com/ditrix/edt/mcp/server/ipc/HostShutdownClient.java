@@ -11,6 +11,7 @@ import java.net.StandardProtocolFamily;
 import java.net.UnixDomainSocketAddress;
 import java.nio.channels.OverlappingFileLockException;
 import java.nio.channels.SocketChannel;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
 import java.nio.file.LinkOption;
@@ -20,6 +21,7 @@ import java.nio.file.attribute.BasicFileAttributes;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Pattern;
 import com.ditrix.edt.mcp.server.protocol.McpConstants;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -79,6 +81,11 @@ public final class HostShutdownClient
 
     /** How often the exit is re-checked; the wait is short because the host is already dying. */
     private static final long POLL_MILLIS = 50;
+
+    /** proc_pid_stat(5): fields 4-19, num_threads (20), then fields 21-52 or later. */
+    private static final Pattern EXITED_STAT_FIELDS = Pattern.compile("(?: -?[0-9]++){16} 1(?: -?[0-9]++){32,}+\n");
+    /** Generous upper bound for one procfs stat record, including the process name. */
+    private static final int MAX_STAT_BYTES = 2048;
 
     private HostShutdownClient() { }
 
@@ -220,15 +227,13 @@ public final class HostShutdownClient
      */
     public static int stop(Path ipc, Path workspace, long timeoutMillis, PrintStream err)
     {
-        // The workspace lock is probed first and without the registry: a directly launched headless
-        // EDT holds it before its IPC directory exists, so answering "no host" from a missing
-        // registry would let a wrapper start a second host against a workspace that is owned.
-        var locked = EndpointRegistry.workspaceLockState(workspace);
         int registryState = checkDirectory(ipc, "MCP endpoint registry", err, LinkOption.NOFOLLOW_LINKS);
-        if (registryState == ABSENT && locked != EndpointRegistry.LockState.FREE)
+        // A directly launched host can acquire the lock before creating its IPC directory.
+        // Sample occupancy after observing absence, not before the directory check can race it.
+        if (registryState == ABSENT && EndpointRegistry.workspaceLockState(workspace) != EndpointRegistry.LockState.FREE)
         {
             err.println("edt-mcp-shutdown: no IPC registry for " + workspace
-                + ", but a process holds its workspace lock; the host state is unknown");
+                + ", but its workspace lock is held or unverified; the host state is unknown");
             return NOT_STOPPED;
         }
         if (registryState != STOPPED) { return registryState; }
@@ -326,9 +331,10 @@ public final class HostShutdownClient
                 // goes. A process that exits after a failed save must not read as a clean stop, or
                 // a wrapper would start another host over an unsaved workspace.
                 String receipt = readCompletion(socket);
-                if (exitedBy(endpoint, exitDeadline))
+                boolean confirmed = isShutdownReceipt(receipt);
+                if (exitedBy(endpoint, exitDeadline, confirmed))
                 {
-                    if (!isShutdownReceipt(receipt))
+                    if (!confirmed)
                     {
                         err.println("edt-mcp-shutdown: the host exited without confirming the cleanup; the workspace may not be saved.");
                         return NOT_STOPPED;
@@ -346,7 +352,7 @@ public final class HostShutdownClient
                 return NOT_STOPPED;
             }
             long legacyDeadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(Math.max(0, timeoutMillis));
-            if (exitedBy(endpoint, legacyDeadline)) { return STOPPED; }
+            if (exitedBy(endpoint, legacyDeadline, true)) { return STOPPED; }
             err.println("edt-mcp-shutdown: PID " + endpoint.pid() + " is still running after the shutdown request; the host did not close.");
             return NOT_STOPPED;
         }
@@ -463,19 +469,49 @@ public final class HostShutdownClient
      */
     static boolean exited(EndpointRegistry.Endpoint endpoint, long timeoutMillis)
     {
-        return exitedBy(endpoint, System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(Math.max(0, timeoutMillis)));
+        return exitedBy(endpoint, System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(Math.max(0, timeoutMillis)), true);
     }
 
-    private static boolean exitedBy(EndpointRegistry.Endpoint endpoint, long deadline)
+    private static boolean exitedBy(EndpointRegistry.Endpoint endpoint, long deadline, boolean allowZombie)
     {
         while (true)
         {
             long remaining = deadline - System.nanoTime();
             if (remaining <= 0) { return false; }
-            if (!EndpointRegistry.live(endpoint)) { return true; }
+            if (!EndpointRegistry.live(endpoint) || (allowZombie && linuxProcessExited(endpoint.pid()))) { return true; }
             try { TimeUnit.NANOSECONDS.sleep(Math.min(remaining, TimeUnit.MILLISECONDS.toNanos(POLL_MILLIS))); }
             catch (InterruptedException e) { Thread.currentThread().interrupt(); return false; }
         }
+    }
+
+    private static boolean linuxProcessExited(long pid)
+    {
+        try
+        {
+            if (!"Linux".equals(System.getProperty("os.name"))) { return false; }
+            try (var stat = Files.newInputStream(Path.of("/proc", Long.toString(pid), "stat")))
+            {
+                byte[] bytes = stat.readNBytes(MAX_STAT_BYTES + 1);
+                // The name is an opaque byte sequence; only the ASCII delimiters/fields matter.
+                return bytes.length <= MAX_STAT_BYTES
+                    && isExitedLinuxStat(pid, new String(bytes, StandardCharsets.ISO_8859_1));
+            }
+        }
+        catch (IOException | SecurityException e) { return false; }
+    }
+
+    /** A Linux zombie is already exited even while ProcessHandle sees its unreaped PID. */
+    static boolean isExitedLinuxStat(long pid, String stat)
+    {
+        String prefix = pid + " (";
+        // comm may contain spaces, parentheses and newlines. Numeric fields never contain ')'.
+        int close = stat.lastIndexOf(')');
+        if (!stat.startsWith(prefix) || close < prefix.length() || close + 3 >= stat.length()
+            || stat.charAt(close + 1) != ' ') { return false; }
+        char state = stat.charAt(close + 2);
+        // An exited thread-group leader can be a zombie while the rest of the JVM still runs.
+        return (state == 'Z' || state == 'X')
+            && EXITED_STAT_FIELDS.matcher(stat).region(close + 3, stat.length()).matches();
     }
 
     /** The value that follows {@code name}, or {@code null} when it is absent or has none. */

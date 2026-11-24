@@ -13,6 +13,9 @@ public final class HeadlessLifetime implements AutoCloseable
 {
     public interface Timer { AutoCloseable schedule(Runnable task, long delayNanos); }
     public interface Lease extends AutoCloseable { @Override void close(); }
+
+    /** The two independent owners of an admitted IPC call. */
+    public record ToolRequest(Lease execution, Lease delivery) { }
     private final long idleNanos;
     private final Timer timer;
     private final Runnable shutdown;
@@ -52,6 +55,13 @@ public final class HeadlessLifetime implements AutoCloseable
      * @return the lease, or {@code null} when the call arrived after the drain started
      */
     public synchronized Lease tool() { return acquire(false); }
+
+    /** Admits an IPC call once, reserving leases for both execution and response delivery. */
+    public synchronized ToolRequest toolRequest()
+    {
+        if (stopping) { return null; }
+        return new ToolRequest(acquire(false), acquire(false));
+    }
 
     /**
      * Admits tool work started by an operation that is already running - the follow-up a tool
@@ -100,7 +110,7 @@ public final class HeadlessLifetime implements AutoCloseable
 
     /**
      * Stop admitting connections and new top-level operations, but let the operations already
-     * running finish - including the nested leases they take for their own follow-up work.
+     * admitted finish - including the nested leases they take for their own follow-up work.
      */
     public void requestShutdown(Runnable drained)
     {

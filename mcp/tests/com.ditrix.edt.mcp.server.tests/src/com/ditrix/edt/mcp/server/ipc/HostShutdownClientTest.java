@@ -316,6 +316,31 @@ public class HostShutdownClientTest
         }
     }
 
+    @Test public void aHostTakingTheLockDuringTheRegistryCheckIsNotAbsent() throws Exception
+    {
+        Path ipc = temporary.newFolder().toPath().resolve("missing-ipc");
+        Path workspace = temporary.newFolder().toPath();
+        Path lock = Files.createDirectory(workspace.resolve(".metadata")).resolve(".lock");
+        try (var channel = FileChannel.open(lock, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
+             var err = new PrintStream(new ByteArrayOutputStream())
+             {
+                 @Override public void println(String message)
+                 {
+                     if (message.contains("registry does not exist"))
+                     {
+                         // Synchronize at the absence observation, without racing a real EDT launch.
+                         // Closing the channel at the end of the test releases the lock.
+                         try { channel.lock(); }
+                         catch (IOException e) { throw new AssertionError(e); }
+                     }
+                     super.println(message);
+                 }
+             })
+        {
+            assertEquals(HostShutdownClient.NOT_STOPPED, HostShutdownClient.stop(ipc, workspace, 500, err));
+        }
+    }
+
     @Test public void aMissingRegistryWithAFreeWorkspaceIsStillNoHost() throws Exception
     {
         // The other half: nothing there really is nothing there, and the lock proves it.

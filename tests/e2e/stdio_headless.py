@@ -91,26 +91,21 @@ def run_command_stop(java, install, root):
                         raise AssertionError("Command-stop host did not publish IPC; inspect " + str(log)) from None
                     time.sleep(1)
             runtime = bootstrap_runtime(jar)
-            # Reap the host while the CLI is still running. On Linux an unreaped child can
-            # still look alive to ProcessHandle, making the two processes wait for each other.
-            with subprocess.Popen(
+            # Invoke the CLI synchronously. Do not poll or reap the host until it returns:
+            # Linux keeps the exited host's PID as a zombie, which must not block clean stop.
+            stop = subprocess.run(
                 [str(java), "-cp", str(runtime), "com.ditrix.edt.mcp.server.ipc.HostShutdownClient",
                  "-data", str(workspace), "-timeout", "180"],
                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
-                text=True,
-            ) as stop:
-                try:
-                    deadline = time.monotonic() + 300
-                    while host.poll() is None and stop.poll() is None and time.monotonic() < deadline:
-                        time.sleep(0.1)
-                    _, stderr = stop.communicate(timeout=max(0, deadline - time.monotonic()))
-                    assert stop.returncode == 0, (
-                        "The host must accept the stop command and exit cleanly: exit "
-                        + str(stop.returncode) + " stderr=" + stderr.strip())
-                    assert host.wait(timeout=5) == 0, "An accepted stop must be a clean exit, not a kill"
-                finally:
-                    if stop.poll() is None:
-                        stop.kill()
+                text=True, timeout=300,
+            )
+            assert stop.returncode == 0, (
+                "The stop command must succeed before the parent reaps the host: exit "
+                + str(stop.returncode) + " stderr=" + stop.stderr.strip())
+            # Check that the host already exited when the CLI returned, without reaping it yet.
+            status = os.waitid(os.P_PID, host.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+            assert status is not None, "The stop command returned before the host exited"
+            assert host.wait(timeout=5) == 0, "An accepted stop must be a clean exit, not a kill"
             command_log = (workspace / ".metadata/.log").read_text(encoding="utf-8", errors="replace")
             assert "EDT MCP headless workspace saved" in command_log, "The stop command must save the workspace"
         finally:
