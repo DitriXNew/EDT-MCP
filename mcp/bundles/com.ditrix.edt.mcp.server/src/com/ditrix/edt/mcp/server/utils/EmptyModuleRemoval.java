@@ -4,21 +4,29 @@ package com.ditrix.edt.mcp.server.utils;
 
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IResource;
 import org.eclipse.core.resources.IWorkspace;
 import org.eclipse.core.runtime.Adapters;
+import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.ICoreRunnable;
+import org.eclipse.core.runtime.IStatus;
 import org.eclipse.core.runtime.NullProgressMonitor;
+import org.eclipse.core.runtime.Status;
+import org.eclipse.core.runtime.jobs.ISchedulingRule;
+import org.eclipse.core.runtime.jobs.Job;
 import org.eclipse.core.runtime.jobs.MultiRule;
 import org.eclipse.emf.ecore.EReference;
+import org.eclipse.swt.widgets.Display;
 import org.eclipse.ui.IEditorInput;
 import org.eclipse.ui.IEditorReference;
 import org.eclipse.ui.IFileEditorInput;
 import org.eclipse.ui.PartInitException;
 import org.eclipse.ui.PlatformUI;
+import org.eclipse.ui.progress.UIJob;
 
 import com._1c.g5.v8.bm.core.IBmObject;
 import com._1c.g5.v8.dt.bsl.model.BslPackage;
@@ -44,7 +52,7 @@ public final class EmptyModuleRemoval
     public static Owner resolveOwner(IFile file, MetadataScope scope)
     {
         String path = file.getProjectRelativePath().toPortableString();
-        String fqn = VendorSupportGuard.moduleOwnerFqn(path, true);
+        String fqn = sourceOwnerFqn(file);
         String feature = moduleFeature(file.getName());
         if (scope.isExternalObjects() || scope.configuration() == null || feature == null || fqn == null)
         {
@@ -78,6 +86,11 @@ public final class EmptyModuleRemoval
             }
             return new Owner(ownerFile, ((IBmObject)owner).bmGetId(), ownerFile.getModificationStamp());
         });
+    }
+
+    static String sourceOwnerFqn(IFile file)
+    {
+        return VendorSupportGuard.moduleOwnerFqn(BslModuleUtils.sourceRelativePath(file), true);
     }
 
     private static String moduleFeature(String name)
@@ -128,49 +141,62 @@ public final class EmptyModuleRemoval
     public static void remove(IFile file, Owner owner, String expectedHash, Runnable entered, Runnable committed)
         throws Exception
     {
+        IWorkspace workspace = file.getWorkspace();
+        var rules = workspace.getRuleFactory();
+        var rule = MultiRule.combine(rules.deleteRule(file), rules.modifyRule(owner.file()));
+        boolean windowed = HostKind.current() != HostKind.HEADLESS;
+        var gate = new CommitGate();
         AtomicReference<Exception> failure = new AtomicReference<>();
-        // In a workbench the editor check and resource operation run in one dispatch. No editor opens
-        // or accepts typing between them. Never wait for a build or export on the UI thread.
-        ReadToolExecution.dispatch(() -> {
-            IWorkspace workspace = file.getWorkspace();
-            ICoreRunnable op = monitor -> {
-                try
-                {
-                    if (HostKind.current() != HostKind.HEADLESS)
-                    {
-                        Windowed.requireClosed(file, owner.file());
-                    }
-                    if (!owner.file().exists() || !owner.file().isSynchronized(IResource.DEPTH_ZERO)
-                        || owner.file().getModificationStamp() != owner.modificationStamp())
-                    {
-                        throw Refusals.state("The module's owner changed or is not in sync. Nothing was deleted.");
-                    }
-                    validateSource(file, expectedHash);
-                    entered.run();
-                    // Like EDT's merge operation, mutate the workspace, not the path on disk. Do not FORCE
-                    // an out-of-sync file, keep Eclipse local history, and never remove parent folders.
-                    file.delete(IResource.KEEP_HISTORY, monitor);
-                    committed.run();
-                }
-                catch (Exception e)
-                {
-                    failure.set(e);
-                }
-            };
+        AtomicBoolean deleted = new AtomicBoolean();
+        ICoreRunnable op = monitor -> {
             try
             {
-                var rules = workspace.getRuleFactory();
-                var rule = MultiRule.combine(rules.deleteRule(file), rules.modifyRule(owner.file()));
-                workspace.run(op, rule, IWorkspace.AVOID_UPDATE, new NullProgressMonitor());
+                if (windowed)
+                {
+                    Windowed.requireClosed(file, owner.file());
+                }
+                if (!owner.file().exists() || !owner.file().isSynchronized(IResource.DEPTH_ZERO)
+                    || owner.file().getModificationStamp() != owner.modificationStamp())
+                {
+                    throw Refusals.state("The module's owner changed or is not in sync. Nothing was deleted.");
+                }
+                validateSource(file, expectedHash);
+                if (monitor.isCanceled() || !gate.enter())
+                {
+                    throw cancelled();
+                }
+                entered.run();
+                // Like EDT's merge operation, mutate the workspace, not the path on disk. Do not FORCE
+                // an out-of-sync file, keep Eclipse local history, and never remove parent folders.
+                file.delete(IResource.KEEP_HISTORY, monitor);
+                committed.run();
+                deleted.set(true);
             }
             catch (Exception e)
             {
                 failure.set(e);
             }
-        });
+        };
+        IStatus status = Status.OK_STATUS;
+        if (windowed)
+        {
+            status = Windowed.run(workspace, op, rule, gate);
+        }
+        else
+        {
+            workspace.run(op, rule, IWorkspace.AVOID_UPDATE, new NullProgressMonitor());
+        }
         if (failure.get() != null)
         {
             throw failure.get();
+        }
+        if (!deleted.get())
+        {
+            if (status != null && !status.isOK() && status.getSeverity() != IStatus.CANCEL)
+            {
+                throw new CoreException(status);
+            }
+            throw cancelled();
         }
         // Verify both the workspace and physical file; UNKNOWN storage state must not report success.
         var path = file.getLocation();
@@ -181,8 +207,101 @@ public final class EmptyModuleRemoval
         }
     }
 
+    private static IllegalStateException cancelled()
+    {
+        return Refusals.state("Blank module removal was cancelled before deletion. Nothing was deleted.");
+    }
+
+    /** Exactly one of cancellation and entering the mutation may win. */
+    static final class CommitGate
+    {
+        private final AtomicBoolean claimed = new AtomicBoolean();
+
+        boolean enter()
+        {
+            return claimed.compareAndSet(false, true);
+        }
+
+        boolean cancelBeforeEntry()
+        {
+            return claimed.compareAndSet(false, true);
+        }
+    }
+
     static final class Windowed
     {
+        private static IStatus run(IWorkspace workspace, ICoreRunnable op, ISchedulingRule rule, CommitGate gate)
+            throws Exception
+        {
+            // UIJob acquires its rule before queuing work on SWT and associates the rule with
+            // the UI thread for runInUIThread. The editor check and workspace mutation stay together.
+            if (Display.getCurrent() != null)
+            {
+                throw Refusals.state("Call deleteModule from the MCP client, not the EDT UI thread. "
+                    + "Nothing was deleted.");
+            }
+            if (Thread.currentThread().isInterrupted())
+            {
+                throw cancelled();
+            }
+            var currentRule = Job.getJobManager().currentRule();
+            if (rule != null && currentRule != null && currentRule.isConflicting(rule))
+            {
+                throw Refusals.state("The caller already holds a conflicting workspace rule. "
+                    + "Nothing was deleted.");
+            }
+            var job = UIJob.create("Remove blank BSL module", (ICoreRunnable) monitor ->
+                workspace.run(op, rule, IWorkspace.AVOID_UPDATE, monitor));
+            job.setRule(rule);
+            job.setSystem(true);
+            McpJobs.schedule(job);
+            return await(job, gate);
+        }
+
+        static IStatus await(Job job, CommitGate gate)
+        {
+            boolean interrupted = false;
+            try
+            {
+                for (;;)
+                {
+                    try
+                    {
+                        job.join();
+                        var result = job.getResult();
+                        if (result != null)
+                        {
+                            return result;
+                        }
+                        // A suspended Job manager can let join return while still holding the job.
+                        // Do not report a refusal unless we also prevent a later commit.
+                        if (gate.cancelBeforeEntry())
+                        {
+                            job.cancel();
+                            return Status.CANCEL_STATUS;
+                        }
+                    }
+                    catch (InterruptedException e)
+                    {
+                        interrupted = true;
+                        if (gate.cancelBeforeEntry())
+                        {
+                            job.cancel();
+                            return Status.CANCEL_STATUS;
+                        }
+                        // A deletion already admitted must report its actual result.
+                    }
+                }
+            }
+            finally
+            {
+                if (interrupted)
+                {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        }
+
         private static void requireClosed(IFile file, IFile owner) throws PartInitException
         {
             for (var window : PlatformUI.getWorkbench().getWorkbenchWindows())

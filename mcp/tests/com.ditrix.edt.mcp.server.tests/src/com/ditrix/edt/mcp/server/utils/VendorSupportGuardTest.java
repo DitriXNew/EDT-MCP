@@ -20,6 +20,8 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyZeroInteractions;
 import static org.mockito.Mockito.when;
 
+import org.eclipse.core.resources.IFile;
+import org.eclipse.core.runtime.Path;
 import org.eclipse.emf.ecore.EObject;
 import org.junit.After;
 import org.junit.Before;
@@ -409,6 +411,19 @@ public class VendorSupportGuardTest
         when(support.canEdit(module, EditingMode.DIRECT)).thenReturn(false);
         assertTrue(VendorSupportGuard.refusalForModule(null, scope,
             "src/CommonModules/" + RU_CALC + "/Module.bsl", module).contains("the module is under vendor support")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    @Test
+    public void testDeletionUnderNonstandardSourceRootChecksTheActualVendorLockedOwner()
+    {
+        IFile file = mock(IFile.class);
+        when(file.getProjectRelativePath()).thenReturn(new Path("source/Catalogs/Goods/ObjectModule.bsl")); //$NON-NLS-1$
+        when(support.canEdit(goods, EditingMode.DIRECT)).thenReturn(false);
+
+        String refusal = VendorSupportGuard.refusalForSourceRelativeModuleFile(null, scope, file);
+
+        assertNotNull(refusal);
+        assertTrue(refusal, refusal.contains("cannot be written: Catalog.Goods")); //$NON-NLS-1$
     }
 
     @Test

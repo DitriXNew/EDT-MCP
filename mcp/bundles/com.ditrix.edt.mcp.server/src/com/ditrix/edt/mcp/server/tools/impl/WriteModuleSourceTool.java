@@ -256,7 +256,9 @@ public class WriteModuleSourceTool implements IMcpTool
             {
                 return root.errorJson();
             }
-            String locked = vendorSupportRefusal(ctx, root, file);
+            String locked = req.isDeleteModule()
+                ? deletionVendorSupportError(root.scope(), file)
+                : vendorSupportRefusal(ctx, root, file);
             if (locked != null)
             {
                 return locked;
@@ -355,6 +357,12 @@ public class WriteModuleSourceTool implements IMcpTool
         IFile file)
     {
         String refusal = VendorSupportGuard.refusalForModuleFile(ctx.project(), root.scope(), file);
+        return refusal == null ? null : ToolResult.error(refusal).toJson();
+    }
+
+    private static String deletionVendorSupportError(MetadataScope scope, IFile file)
+    {
+        String refusal = VendorSupportGuard.refusalForSourceRelativeModuleFile(file.getProject(), scope, file);
         return refusal == null ? null : ToolResult.error(refusal).toJson();
     }
 
@@ -710,10 +718,10 @@ public class WriteModuleSourceTool implements IMcpTool
         {
             return ToolResult.error("The module owner changed after consent. Nothing was deleted.").toJson(); //$NON-NLS-1$
         }
-        String locked = VendorSupportGuard.refusalForModuleFile(file.getProject(), scope, file);
+        String locked = deletionVendorSupportError(scope, file);
         if (locked != null)
         {
-            return ToolResult.error(locked).toJson();
+            return locked;
         }
         EmptyModuleRemoval.remove(file, owner, req.expectedHash,
             () -> mutationEntered.set(true), () -> mutationCommitted.set(true));
