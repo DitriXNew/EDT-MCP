@@ -242,7 +242,17 @@ public final class HostShutdownClient
      */
     public static int stop(Path ipc, Path workspace, long timeoutMillis, PrintStream err)
     {
+        // The workspace lock is probed first and without the registry: a directly launched headless
+        // EDT holds it before its IPC directory exists, so answering "no host" from a missing
+        // registry would let a wrapper start a second host against a workspace that is owned.
+        var locked = EndpointRegistry.workspaceLockState(workspace);
         int registryState = checkDirectory(ipc, "MCP endpoint registry", err, LinkOption.NOFOLLOW_LINKS);
+        if (registryState == ABSENT && locked != EndpointRegistry.LockState.FREE)
+        {
+            err.println("edt-mcp-shutdown: no IPC registry for " + workspace
+                + ", but a process holds its workspace lock; the host state is unknown");
+            return NOT_STOPPED;
+        }
         if (registryState != STOPPED) { return registryState; }
         EndpointRegistry registry;
         try { registry = new EndpointRegistry(EndpointRegistry.privateDirectory(ipc), workspace); }
@@ -279,7 +289,10 @@ public final class HostShutdownClient
             return ABSENT;
         }
 
-        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(Math.max(0, timeoutMillis));
+        // The connect and decision have their own bound; -timeout is the exit budget the option
+        // documents, and it starts when the host accepts. Sharing one deadline would hand a slow
+        // but clean shutdown less than the caller asked for and have it force-killed.
+        long decisionDeadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(Math.max(0, timeoutMillis));
         SocketChannel channel;
         try { channel = SocketChannel.open(StandardProtocolFamily.UNIX); }
         catch (IOException | RuntimeException e)
@@ -292,8 +305,9 @@ public final class HostShutdownClient
         });
         try (var socket = new JsonFrames.Socket(channel))
         {
-            closer.schedule(() -> { try { channel.close(); } catch (IOException ignored) { } },
-                Math.max(0, deadline - System.nanoTime()), TimeUnit.NANOSECONDS);
+            var decisionTimeout = closer.schedule(
+                () -> { try { channel.close(); } catch (IOException ignored) { } },
+                Math.max(0, decisionDeadline - System.nanoTime()), TimeUnit.NANOSECONDS);
             socket.connect(UnixDomainSocketAddress.of(endpoint.socket()));
             IpcHandshake.client(socket, endpoint);
             socket.write("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}");
@@ -321,9 +335,24 @@ public final class HostShutdownClient
             }
             if (decision.equals(McpConstants.METHOD_HOST_SHUTDOWN_ACCEPTED))
             {
-                // Accepted: wait for the process exit, whose budget is separate from the answer.
-                // The completion notification is informative, not the gate - the process is.
-                if (exitedBy(endpoint, deadline)) { return STOPPED; }
+                // Accepted: the exit budget starts now, so the option means what it documents.
+                decisionTimeout.cancel(false);
+                long exitDeadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(Math.max(0, timeoutMillis));
+                closer.schedule(() -> { try { channel.close(); } catch (IOException ignored) { } },
+                    Math.max(0, exitDeadline - System.nanoTime()), TimeUnit.NANOSECONDS);
+                // The cleanup result is the host's own verdict and it arrives before the process
+                // goes. A process that exits after a failed save must not read as a clean stop, or
+                // a wrapper would start another host over an unsaved workspace.
+                String receipt = readCompletion(socket);
+                if (exitedBy(endpoint, exitDeadline))
+                {
+                    if (!isShutdownReceipt(receipt))
+                    {
+                        err.println("edt-mcp-shutdown: the host exited without confirming the cleanup; the workspace may not be saved.");
+                        return NOT_STOPPED;
+                    }
+                    return STOPPED;
+                }
                 err.println("edt-mcp-shutdown: the host accepted the request but PID " + endpoint.pid()
                     + " is still running; the host may still be saving.");
                 return NOT_STOPPED;
@@ -334,7 +363,8 @@ public final class HostShutdownClient
                 err.println("edt-mcp-shutdown: shutdown receipt was missing or reported failure.");
                 return NOT_STOPPED;
             }
-            if (exitedBy(endpoint, deadline)) { return STOPPED; }
+            long legacyDeadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(Math.max(0, timeoutMillis));
+            if (exitedBy(endpoint, legacyDeadline)) { return STOPPED; }
             err.println("edt-mcp-shutdown: PID " + endpoint.pid() + " is still running after the shutdown request; the host did not close.");
             return NOT_STOPPED;
         }
@@ -368,6 +398,32 @@ public final class HostShutdownClient
         }
         while (isUnrelatedNotification(frame));
         return frame;
+    }
+
+    /**
+     * Reads until the cleanup result arrives, skipping unrelated notifications. The host sends it
+     * before it closes the transport, so an end of stream here means the host exited without one.
+     *
+     * @param socket the connected peer
+     * @return the completion frame, or null when the stream ended first
+     * @throws IOException when the peer fails
+     */
+    private static String readCompletion(JsonFrames.Socket socket)
+    {
+        try
+        {
+            String frame;
+            while ((frame = socket.read()) != null)
+            {
+                if (McpConstants.METHOD_HOST_SHUTDOWN_COMPLETE.equals(methodOf(frame))) { return frame; }
+            }
+        }
+        catch (IOException e)
+        {
+            // The exit budget closed the socket, or the host went down without a receipt. Either
+            // way there is no verdict to read, which the caller reports as unconfirmed.
+        }
+        return null;
     }
 
     /** The {@code method} of a framed notification, or null when the frame is not one. */

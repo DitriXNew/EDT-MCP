@@ -14,6 +14,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.function.Consumer;
 import com.ditrix.edt.mcp.server.Activator;
+import com.ditrix.edt.mcp.server.HeadlessLifetime;
 import com.ditrix.edt.mcp.server.McpServer;
 import com.ditrix.edt.mcp.server.ipc.StdioBootstrap;
 import com.ditrix.edt.mcp.server.protocol.ClientCapabilities;
@@ -132,11 +133,18 @@ public final class IpcConnection implements AutoCloseable
             {
                 ToolCallResponder responder = new ToolCallResponder.Ipc(response -> { if (!id.isJsonNull()) { send(response); } });
                 String response;
-                try { response = executor.execute(responder, frame, request, start, client); }
-                catch (Exception e)
-                { com.ditrix.edt.mcp.server.Activator.logError("IPC tool execution failed", e);
-                  response = StdioBootstrap.error(id, -32603, "EDT tool execution failed; its outcome may be unknown. Inspect EDT before retrying."); }
-                if (response != null) { responder.send(response); }
+                // The request is finished only once its response has been written, not when the tool
+                // body returns. Without this outer lease the executor's own lease is the last one,
+                // and a drain starting at that moment stops the transport while this thread is
+                // still serializing - the caller sees an unknown outcome for work that completed.
+                try (var written = lifetimeLease())
+                {
+                    try { response = executor.execute(responder, frame, request, start, client); }
+                    catch (Exception e)
+                    { com.ditrix.edt.mcp.server.Activator.logError("IPC tool execution failed", e);
+                      response = StdioBootstrap.error(id, -32603, "EDT tool execution failed; its outcome may be unknown. Inspect EDT before retrying."); }
+                    if (response != null) { responder.send(response); }
+                }
             }
             catch (IOException | RuntimeException e) { close(); }
             finally { synchronized (requests) { requests.remove(Thread.currentThread()); } }
@@ -144,6 +152,20 @@ public final class IpcConnection implements AutoCloseable
         waiter.setDaemon(true);
         synchronized (requests)
         { if (!closed) { requests.add(waiter); waiter.start(); } }
+    }
+
+    /**
+     * A lease covering one request end to end, or {@code null} when there is no headless lifetime.
+     * It is nested by definition: this thread is running a request that already holds one, and the
+     * drain waits for it, so the follow-up work of a running operation is admitted.
+     *
+     * @return the lease to close after the response is written, or null
+     */
+    private static HeadlessLifetime.Lease lifetimeLease()
+    {
+        var activator = Activator.getDefault();
+        var lifetime = activator == null ? null : activator.getHeadlessLifetime();
+        return lifetime == null ? null : lifetime.nestedTool();
     }
 
     private void send(String response)

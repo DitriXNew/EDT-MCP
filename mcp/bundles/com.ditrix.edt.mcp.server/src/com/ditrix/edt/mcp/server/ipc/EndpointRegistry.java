@@ -255,7 +255,16 @@ public final class EndpointRegistry
      *
      * @return whether a process still holds the workspace lock
      */
-    public LockState workspaceLockState()
+    public LockState workspaceLockState() { return workspaceLockState(workspace); }
+
+    /**
+     * Probes a workspace lock without a registry, so a caller can ask whether a workspace is owned
+     * before it has resolved the private registry at all.
+     *
+     * @param workspace the workspace directory
+     * @return HELD, FREE, or UNKNOWN when the probe itself could not decide
+     */
+    public static LockState workspaceLockState(Path workspace)
     {
         Path lock = workspace.resolve(".metadata/.lock");
         try (FileChannel channel = FileChannel.open(lock, StandardOpenOption.WRITE))
@@ -263,8 +272,24 @@ public final class EndpointRegistry
             try (FileLock held = channel.tryLock()) { return held == null ? LockState.HELD : LockState.FREE; }
         }
         catch (OverlappingFileLockException e) { return LockState.HELD; }
-        catch (NoSuchFileException e) { return LockState.FREE; }
+        catch (NoSuchFileException e)
+        {
+            // A lock that exists without following it never resolved, so its state is unknown. Only
+            // a path that is really absent proves the workspace is free.
+            return existsWithoutFollowing(lock) ? LockState.UNKNOWN : LockState.FREE;
+        }
         catch (IOException e) { return LockState.UNKNOWN; }
+    }
+
+    /** True when the path itself exists, whether or not its target resolves. */
+    private static boolean existsWithoutFollowing(Path path)
+    {
+        try
+        {
+            Files.readAttributes(path, java.nio.file.attribute.BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+            return true;
+        }
+        catch (IOException | SecurityException e) { return false; }
     }
 
     public static boolean sameProcess(long pid, String startTime)

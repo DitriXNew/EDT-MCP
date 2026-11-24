@@ -296,6 +296,50 @@ public class HostShutdownClientTest
         finally { child.destroyForcibly(); child.waitFor(); }
     }
 
+    @Test public void aMissingRegistryWithAHeldWorkspaceLockIsNotNoHost() throws Exception
+    {
+        // A directly launched headless EDT holds .metadata/.lock before its IPC directory exists.
+        // Answering "no host" from the missing registry would let a wrapper start a second host.
+        Path root = temporary.newFolder().toPath();
+        Path ipc = root.resolve("ipc-that-does-not-exist");
+        Path workspace = PrivatePaths.directory(temporary.newFolder().toPath());
+        Path metadata = workspace.resolve(".metadata");
+        Files.createDirectories(metadata);
+        Path lock = metadata.resolve(".lock");
+        Files.writeString(lock, "");
+        var messages = new ByteArrayOutputStream();
+        try (var channel = FileChannel.open(lock, StandardOpenOption.WRITE);
+             var held = channel.lock())
+        {
+            assertEquals(HostShutdownClient.NOT_STOPPED, HostShutdownClient.stop(ipc, workspace, 500, sink(messages)));
+            assertTrue(text(messages), text(messages).contains("host state is unknown"));
+        }
+    }
+
+    @Test public void aMissingRegistryWithAFreeWorkspaceIsStillNoHost() throws Exception
+    {
+        // The other half: nothing there really is nothing there, and the lock proves it.
+        Path root = temporary.newFolder().toPath();
+        Path ipc = root.resolve("ipc-that-does-not-exist");
+        Path workspace = PrivatePaths.directory(temporary.newFolder().toPath());
+        var messages = new ByteArrayOutputStream();
+        assertEquals(HostShutdownClient.ABSENT, HostShutdownClient.stop(ipc, workspace, 500, sink(messages)));
+        assertTrue(text(messages), text(messages).contains("does not exist"));
+    }
+
+    @Test public void aDanglingWorkspaceLockIsNotFree() throws Exception
+    {
+        // A lock that exists without following it but whose target does not resolve proves nothing:
+        // FREE would let a wrapper start a host against a workspace that may still be owned.
+        var registry = registry();
+        Path metadata = registry.workspace().resolve(".metadata");
+        Files.createDirectories(metadata);
+        Path lock = metadata.resolve(".lock");
+        try { Files.createSymbolicLink(lock, metadata.resolve("missing-lock")); }
+        catch (IOException | UnsupportedOperationException e) { Assume.assumeNoException(e); }
+        assertEquals(EndpointRegistry.LockState.UNKNOWN, registry.workspaceLockState());
+    }
+
     @Test public void aHostThatRefusesIsNotReportedAsStoppedAndMustNotBeKilled() throws Exception
     {
         // An interactive EDT answers "refused" and keeps running. Reporting NOT_STOPPED here would
