@@ -257,6 +257,7 @@ class HeadlessDriverTest(unittest.TestCase):
                  patch.object(S, "seed_and_read_modules"), \
                  patch.object(S, "run_designer_writes"), \
                  patch.object(S, "run_additional_reads"), \
+                 patch.object(S, "run_command_stop") as command_stop, \
                  patch("builtins.print"):
                 S.main()
             environment = popen.call_args.kwargs["env"]
@@ -264,6 +265,8 @@ class HeadlessDriverTest(unittest.TestCase):
             self.assertEqual(2, sum(name == "get_server_status" for name, _ in calls))
             registrations.assert_called_once()
             runtime.assert_called_once()
+            # The stop command runs on its own host and workspace, after the shared one has saved.
+            command_stop.assert_called_once()
             reads = [(name, arguments) for name, arguments in calls if name in (*C.MOVED_TOOLS, "read_module_source")]
             self.assertEqual(23, len(reads))
             self.assertIn("Вычисление", json.dumps(reads, ensure_ascii=False))
