@@ -40,13 +40,7 @@ public final class StdioPluginSupport
     // verify the hash-named runtime, and call StdioBootstrap.main(String[]). Trusting a manifest
     // or a class name alone would not prove this contract. Keep this list scoped to this ABI.
     static final Set<String> COMPATIBLE_ENTRY_HASHES = Set.of(
-        "26b2d4c1384cee32e8c5c56cf78b988b9b18a5ae79612d6558e8dbd4f92f3e6b", // v2.26.1
-        // The same launcher, built before the entry became reproducible: identical classes and
-        // manifest, only the embedded license carried CRLF from a Windows checkout. A machine that
-        // extracted it must be able to upgrade without closing its clients, or the normalization
-        // would strand exactly the installs it was meant to help. Drop it when no such install is
-        // expected to upgrade any more.
-        "958937f8d1b548ce21698317ca0c17ef4a475e40a797de1dfeef72c6d19686f8"
+        "26b2d4c1384cee32e8c5c56cf78b988b9b18a5ae79612d6558e8dbd4f92f3e6b"  // v2.26.1, still shipped
     );
     private StdioPluginSupport() { }
 

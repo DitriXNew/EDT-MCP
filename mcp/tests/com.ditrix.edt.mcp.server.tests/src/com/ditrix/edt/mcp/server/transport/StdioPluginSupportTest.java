@@ -77,15 +77,6 @@ public class StdioPluginSupportTest extends StdioTestSupport
             StdioPluginSupport.COMPATIBLE_ENTRY_HASHES.contains(fingerprint));
     }
 
-    @Test public void thePreNormalizationLauncherIsStillCompatible() throws Exception
-    {
-        // Installs that extracted the CRLF build of the same launcher must upgrade without closing
-        // their clients: its classes and manifest are identical, so replacing it is not required.
-        assertTrue("The CRLF build of the v2.26.1 launcher is the same ABI",
-            StdioPluginSupport.COMPATIBLE_ENTRY_HASHES.contains(
-                "958937f8d1b548ce21698317ca0c17ef4a475e40a797de1dfeef72c6d19686f8"));
-    }
-
     @Test public void aRefusedCompatibleSwapStillPublishesTheNewRuntime() throws Exception
     {
         Path directory = seeded();
