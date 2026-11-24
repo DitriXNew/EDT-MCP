@@ -15,6 +15,26 @@ import com.google.gson.*;
 
 public class IpcConnectionTest extends StdioTestSupport
 {
+    @Test public void aStalledResponseReleasesTheDrainLeaseAfterDetaching() throws Exception
+    {
+        var deadlines = Executors.newSingleThreadScheduledExecutor();
+        var detached = new CountDownLatch(1);
+        var drained = new CountDownLatch(1);
+        try (var lifetime = new com.ditrix.edt.mcp.server.HeadlessLifetime(java.time.Duration.ZERO, () -> { });
+             var lease = lifetime.tool())
+        {
+            lifetime.requestShutdown(drained::countDown);
+            IpcListener.withWriteDeadline(deadlines, 100, detached::countDown, () -> {
+                assertEquals(1, drained.getCount());
+                try { assertTrue(detached.await(3, TimeUnit.SECONDS)); }
+                catch (InterruptedException e) { throw new AssertionError(e); }
+            });
+            lease.close();
+            assertEquals(0, drained.getCount());
+        }
+        finally { deadlines.shutdownNow(); }
+    }
+
     @Test public void concurrentBridgesDeliverTheirOwnModes() throws Exception
     {
         var registry = McpToolRegistry.getInstance(); var saved = registry.getAllTools();

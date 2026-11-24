@@ -80,14 +80,26 @@ def run_command_stop(java, install, root):
                         raise AssertionError("Command-stop host did not publish IPC; inspect " + str(log)) from None
                     time.sleep(1)
             runtime = Path(jar).parent / (Path(jar).parent / "current").read_text(encoding="utf-8").strip()
-            stop = subprocess.run(
+            # Reap the host while the CLI is still running. On Linux an unreaped child can
+            # still look alive to ProcessHandle, making the two processes wait for each other.
+            with subprocess.Popen(
                 [str(java), "-cp", str(runtime), "com.ditrix.edt.mcp.server.ipc.HostShutdownClient",
                  "-data", str(workspace), "-timeout", "180"],
-                capture_output=True, text=True, timeout=300)
-            assert stop.returncode == 0, (
-                "The host must accept the stop command and exit cleanly: exit " + str(stop.returncode)
-                + " stderr=" + stop.stderr.strip())
-            assert host.wait(timeout=180) == 0, "An accepted stop must be a clean exit, not a kill"
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                text=True,
+            ) as stop:
+                try:
+                    deadline = time.monotonic() + 300
+                    while host.poll() is None and stop.poll() is None and time.monotonic() < deadline:
+                        time.sleep(0.1)
+                    _, stderr = stop.communicate(timeout=max(0, deadline - time.monotonic()))
+                    assert stop.returncode == 0, (
+                        "The host must accept the stop command and exit cleanly: exit "
+                        + str(stop.returncode) + " stderr=" + stderr.strip())
+                    assert host.wait(timeout=5) == 0, "An accepted stop must be a clean exit, not a kill"
+                finally:
+                    if stop.poll() is None:
+                        stop.kill()
             command_log = (workspace / ".metadata/.log").read_text(encoding="utf-8", errors="replace")
             assert "EDT MCP headless workspace saved" in command_log, "The stop command must save the workspace"
         finally:

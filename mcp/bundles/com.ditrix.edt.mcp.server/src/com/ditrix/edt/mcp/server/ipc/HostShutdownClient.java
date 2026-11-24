@@ -153,7 +153,7 @@ public final class HostShutdownClient
         }
         catch (NoSuchFileException e)
         {
-            if (provablyAbsent(path, options))
+            if (EndpointRegistry.provablyAbsent(path, options))
             {
                 err.println("edt-mcp-shutdown: the " + label + " does not exist: " + path);
                 return ABSENT;
@@ -168,33 +168,6 @@ public final class HostShutdownClient
         err.println("edt-mcp-shutdown: cannot read the " + label + " at " + path
             + ": " + message(error) + "; the host state is unknown");
         return NOT_STOPPED;
-    }
-
-    private static boolean provablyAbsent(Path path, LinkOption... options)
-    {
-        // Windows also reports NoSuchFileException when a regular file obstructs the path.
-        // Walk up to find the nearest component that exists: absence is proven only when that
-        // component is an ordinary directory. A component that exists but is a link we cannot
-        // follow, or whose followed chain does not resolve, leaves the state unknown - walking
-        // past it would report a workspace behind a dangling link as merely missing.
-        Path absolute = path.toAbsolutePath();
-        for (Path current = absolute; current != null; current = current.getParent())
-        {
-            BasicFileAttributes attributes;
-            try { attributes = Files.readAttributes(current, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS); }
-            catch (NoSuchFileException e) { continue; }
-            catch (IOException | SecurityException e) { return false; }
-            // The path itself exists without following it - a link whose chain did not resolve -
-            // so it is not absent, and its parent must not stand in for it.
-            if (current.equals(absolute)) { return false; }
-            // A component we cannot follow proves nothing either: the chain never resolved
-            // through it, so the state stays unknown rather than reading as absent.
-            if (attributes.isSymbolicLink() && options.length > 0) { return false; }
-            try { return Files.readAttributes(current, BasicFileAttributes.class, options).isDirectory(); }
-            catch (NoSuchFileException e) { return false; }
-            catch (IOException | SecurityException e) { return false; }
-        }
-        return false;
     }
 
     /**
@@ -305,9 +278,12 @@ public final class HostShutdownClient
         });
         try (var socket = new JsonFrames.Socket(channel))
         {
-            var decisionTimeout = closer.schedule(
-                () -> { try { channel.close(); } catch (IOException ignored) { } },
-                Math.max(0, decisionDeadline - System.nanoTime()), TimeUnit.NANOSECONDS);
+            var awaitingDecision = new java.util.concurrent.atomic.AtomicBoolean(true);
+            var decisionTimeout = closer.schedule(() -> {
+                if (awaitingDecision.getAndSet(false)) {
+                    try { channel.close(); } catch (IOException ignored) { }
+                }
+            }, Math.max(0, decisionDeadline - System.nanoTime()), TimeUnit.NANOSECONDS);
             socket.connect(UnixDomainSocketAddress.of(endpoint.socket()));
             IpcHandshake.client(socket, endpoint);
             socket.write("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}");
@@ -322,7 +298,9 @@ public final class HostShutdownClient
             // The first answer is the decision: accepted means the host is closing, refused means it
             // keeps running on purpose. Neither is a timeout, so neither has to wait one out.
             String decision = readDecision(socket);
-            if (decision == null)
+            boolean decidedBeforeTimeout = awaitingDecision.getAndSet(false);
+            decisionTimeout.cancel(false);
+            if (!decidedBeforeTimeout || decision == null)
             {
                 err.println("edt-mcp-shutdown: the host did not answer the shutdown request; the host state is unknown.");
                 return NOT_STOPPED;
@@ -336,7 +314,6 @@ public final class HostShutdownClient
             if (decision.equals(McpConstants.METHOD_HOST_SHUTDOWN_ACCEPTED))
             {
                 // Accepted: the exit budget starts now, so the option means what it documents.
-                decisionTimeout.cancel(false);
                 long exitDeadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(Math.max(0, timeoutMillis));
                 closer.schedule(() -> { try { channel.close(); } catch (IOException ignored) { } },
                     Math.max(0, exitDeadline - System.nanoTime()), TimeUnit.NANOSECONDS);

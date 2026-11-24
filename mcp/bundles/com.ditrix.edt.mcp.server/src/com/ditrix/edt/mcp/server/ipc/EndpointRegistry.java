@@ -15,6 +15,7 @@ import java.nio.file.LinkOption;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.security.MessageDigest;
 import java.time.Duration;
 import java.time.Instant;
@@ -169,7 +170,11 @@ public final class EndpointRegistry
     public record StartupClaim(Instant requested, Long pid, String startTime)
     {
         /** Whether the claim is inside {@link #CLAIM_WINDOW} of its own requested time. */
-        public boolean isRecent(Instant now) { return requested != null && requested.plus(CLAIM_WINDOW).isAfter(now); }
+        public boolean isRecent(Instant now)
+        {
+            return requested != null && !requested.isAfter(now)
+                && Duration.between(requested, now).compareTo(CLAIM_WINDOW) < 0;
+        }
 
         /** Whether the claim names a process that is still alive. */
         public boolean namesALiveProcess() { return pid != null && startTime != null && sameProcess(pid, startTime); }
@@ -276,20 +281,37 @@ public final class EndpointRegistry
         {
             // A lock that exists without following it never resolved, so its state is unknown. Only
             // a path that is really absent proves the workspace is free.
-            return existsWithoutFollowing(lock) ? LockState.UNKNOWN : LockState.FREE;
+            return provablyAbsent(lock, LinkOption.NOFOLLOW_LINKS)
+                ? LockState.FREE : LockState.UNKNOWN;
         }
-        catch (IOException e) { return LockState.UNKNOWN; }
+        catch (IOException | SecurityException e) { return LockState.UNKNOWN; }
     }
 
-    /** True when the path itself exists, whether or not its target resolves. */
-    private static boolean existsWithoutFollowing(Path path)
+    static boolean provablyAbsent(Path path, LinkOption... options)
     {
-        try
+        // Windows also reports NoSuchFileException when a regular file obstructs the path.
+        // Walk up to find the nearest component that exists: absence is proven only when that
+        // component is an ordinary directory. A component that exists but is a link we cannot
+        // follow, or whose followed chain does not resolve, leaves the state unknown - walking
+        // past it would report a workspace behind a dangling link as merely missing.
+        Path absolute = path.toAbsolutePath();
+        for (Path current = absolute; current != null; current = current.getParent())
         {
-            Files.readAttributes(path, java.nio.file.attribute.BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
-            return true;
+            BasicFileAttributes attributes;
+            try { attributes = Files.readAttributes(current, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS); }
+            catch (NoSuchFileException e) { continue; }
+            catch (IOException | SecurityException e) { return false; }
+            // The path itself exists without following it - a link whose chain did not resolve -
+            // so it is not absent, and its parent must not stand in for it.
+            if (current.equals(absolute)) { return false; }
+            // A component we cannot follow proves nothing either: the chain never resolved
+            // through it, so the state stays unknown rather than reading as absent.
+            if (attributes.isSymbolicLink() && options.length > 0) { return false; }
+            try { return Files.readAttributes(current, BasicFileAttributes.class, options).isDirectory(); }
+            catch (NoSuchFileException e) { return false; }
+            catch (IOException | SecurityException e) { return false; }
         }
-        catch (IOException | SecurityException e) { return false; }
+        return false;
     }
 
     public static boolean sameProcess(long pid, String startTime)

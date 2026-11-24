@@ -327,6 +327,23 @@ public class HostShutdownClientTest
         assertTrue(text(messages), text(messages).contains("does not exist"));
     }
 
+    @Test public void aClaimFromTheDistantFutureDoesNotPreventStopping() throws Exception
+    {
+        var registry = registry();
+        EndpointRegistry.atomicWrite(registry.claimPath(),
+            "{\"requested\":\"" + java.time.Instant.MAX + "\",\"process\":null}");
+        assertEquals(HostShutdownClient.ABSENT, HostShutdownClient.stop(
+            registry.directory(), registry.workspace(), 500, sink(new ByteArrayOutputStream())));
+    }
+
+    @Test public void aDanglingWorkspaceLockAncestorIsNotFree() throws Exception
+    {
+        var registry = registry();
+        try { Files.createSymbolicLink(registry.workspace().resolve(".metadata"), registry.workspace().resolve("missing")); }
+        catch (IOException | UnsupportedOperationException e) { Assume.assumeNoException(e); }
+        assertEquals(EndpointRegistry.LockState.UNKNOWN, registry.workspaceLockState());
+    }
+
     @Test public void aDanglingWorkspaceLockIsNotFree() throws Exception
     {
         // A lock that exists without following it but whose target does not resolve proves nothing:

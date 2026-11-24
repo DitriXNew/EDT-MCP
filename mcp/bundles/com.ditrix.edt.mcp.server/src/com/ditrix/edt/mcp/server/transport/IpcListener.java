@@ -116,9 +116,8 @@ public final class IpcListener implements AutoCloseable
             Boolean plainTextMode = IpcHandshake.plainTextMode(hello);
             peer.write("{\"accepted\":true}");
             timeout.cancel(false);
-            try (IpcConnection connection = new IpcConnection(mcpServer, new McpProtocolHandler(), json -> {
-                try { peer.write(json); } catch (IOException e) { closePeer(peer); throw new UncheckedIOException(e); }
-            }, plainTextMode, () -> closePeer(peer)))
+            try (IpcConnection connection = new IpcConnection(mcpServer, new McpProtocolHandler(),
+                json -> writeReply(peer, json), plainTextMode, () -> closePeer(peer)))
             {
                 notification = connection::toolsChanged;
                 ToolsChangedListeners.add(notification);
@@ -133,6 +132,26 @@ public final class IpcListener implements AutoCloseable
             if (notification != null) { ToolsChangedListeners.remove(notification); }
             peers.remove(peer); slots.release();
         }
+    }
+
+    private void writeReply(JsonFrames.Socket peer, String json)
+    {
+        // Tool response waiters hold a drain lease. A peer that stops reading must not
+        // pin that lease, so close the socket from the independent deadline thread.
+        withWriteDeadline(deadlines, 5000, () -> closePeer(peer), () -> {
+            try { peer.write(json); }
+            catch (IOException e) { closePeer(peer); throw new UncheckedIOException(e); }
+        });
+    }
+
+    static void withWriteDeadline(ScheduledExecutorService scheduler, long millis, Runnable detach, Runnable write)
+    {
+        var pending = new java.util.concurrent.atomic.AtomicBoolean(true);
+        var timeout = scheduler.schedule(() -> {
+            if (pending.getAndSet(false)) { detach.run(); }
+        }, millis, TimeUnit.MILLISECONDS);
+        try { write.run(); }
+        finally { pending.set(false); timeout.cancel(false); }
     }
 
     private static void closePeer(JsonFrames.Socket peer)
