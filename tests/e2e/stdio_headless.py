@@ -51,6 +51,17 @@ def call(client, name, arguments):
     return response["result"]
 
 
+def bootstrap_runtime(jar):
+    """The runtime the given launcher resolves: its own ABI pointer, else the legacy pointer."""
+    directory = Path(jar).parent
+    for pointer in sorted(directory.glob("current-abi-*")):
+        name = pointer.read_text(encoding="utf-8").strip()
+        runtime = directory / name
+        if runtime.is_file():
+            return runtime
+    return directory / directory.joinpath("current").read_text(encoding="utf-8").strip()
+
+
 def run_command_stop(java, install, root):
     """The external stop command against its own real host: the wrapper's exact call.
 
@@ -79,7 +90,7 @@ def run_command_stop(java, install, root):
                     if time.monotonic() >= deadline:
                         raise AssertionError("Command-stop host did not publish IPC; inspect " + str(log)) from None
                     time.sleep(1)
-            runtime = Path(jar).parent / (Path(jar).parent / "current").read_text(encoding="utf-8").strip()
+            runtime = bootstrap_runtime(jar)
             # Reap the host while the CLI is still running. On Linux an unreaped child can
             # still look alive to ProcessHandle, making the two processes wait for each other.
             with subprocess.Popen(
