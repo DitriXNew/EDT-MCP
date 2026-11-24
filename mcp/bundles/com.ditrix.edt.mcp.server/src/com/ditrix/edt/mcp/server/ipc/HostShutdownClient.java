@@ -9,6 +9,7 @@ import java.io.IOException;
 import java.io.PrintStream;
 import java.net.StandardProtocolFamily;
 import java.net.UnixDomainSocketAddress;
+import java.nio.channels.OverlappingFileLockException;
 import java.nio.channels.SocketChannel;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
@@ -183,21 +184,25 @@ public final class HostShutdownClient
     {
         // One shared probe: the stop command and StartupCoordinator read the same claim and the
         // same workspace lock, so they cannot disagree about whether a workspace is occupied.
-        try
+        try (var channel = PrivatePaths.lockFile(registry.lockPath()); var lock = channel.tryLock())
         {
+            if (lock == null) { return true; }
+            // Recheck under the startup mutex: publication may have raced the initial read.
+            var endpoint = registry.read();
+            if (endpoint != null && EndpointRegistry.live(endpoint)) { return true; }
             var claim = registry.readStartupClaim();
-            if (claim != null && (claim.namesALiveProcess() || claim.isRecent(java.time.Instant.now())))
+            if (claim != null)
             {
-                return true;
+                boolean live = claim.namesALiveProcess();
+                if (live || (claim.pid() == null && claim.isRecent(java.time.Instant.now()))) { return true; }
             }
+            return registry.workspaceLockState() != EndpointRegistry.LockState.FREE;
         }
-        catch (IOException e)
+        catch (IOException | OverlappingFileLockException | SecurityException e)
         {
-            // A claim that exists and cannot be resolved is not a missing claim.
+            // A busy mutex or a probe failure is not proof of absence.
             return true;
         }
-        // FREE and HELD both answer; only an unreadable lock leaves the workspace unknown.
-        return registry.workspaceLockState() != EndpointRegistry.LockState.FREE;
     }
 
 

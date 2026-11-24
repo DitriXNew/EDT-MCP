@@ -207,7 +207,7 @@ public final class EndpointRegistry
     public StartupClaim readStartupClaim() throws IOException
     {
         Path claim = claimPath();
-        try { Files.readAttributes(claim, java.nio.file.attribute.BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS); }
+        try { PrivatePaths.verifyFile(claim); }
         catch (NoSuchFileException e) { return null; }
         catch (IOException | SecurityException e) { throw new IOException("Cannot probe the EDT startup claim", e); }
         String body;

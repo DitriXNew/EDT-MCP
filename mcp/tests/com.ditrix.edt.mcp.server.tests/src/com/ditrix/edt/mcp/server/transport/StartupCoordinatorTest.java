@@ -19,6 +19,15 @@ public class StartupCoordinatorTest extends StdioTestSupport
         EndpointRegistry.atomicWrite(registry.claimPath(), new Gson().toJson(value));
     }
 
+    @Test public void unreadableEndpointDoesNotLaunchAnotherHost() throws Exception
+    {
+        var registry = registry(); AtomicInteger starts = new AtomicInteger();
+        EndpointRegistry.atomicWrite(registry.recordPath(), "not an endpoint");
+        var coordinator = new StartupCoordinator(registry, () -> { starts.incrementAndGet(); return null; });
+        assertThrows(java.io.IOException.class, coordinator::ensureStarted);
+        assertEquals(0, starts.get());
+    }
+
     @Test public void recentClaimWithKnownDeadIdentityRecoversImmediately() throws Exception
     {
         var registry = registry(); AtomicInteger starts = new AtomicInteger();
