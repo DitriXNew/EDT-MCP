@@ -5,7 +5,6 @@ import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.nio.file.attribute.*;
-import java.security.MessageDigest;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.jar.*;
@@ -187,10 +186,10 @@ public class BootstrapPackagingTest extends StdioTestSupport
             assertNotNull("Use the real entry jar built into the plugin", input); Files.copy(input, entry);
         }
         byte[] bytes = fakeRuntime();
-        String name = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes)) + ".jar";
+        String name = StdioPluginSupportTest.runtimeName(bytes);
         Path runtime = directory.resolve(name);
         PrivatePaths.atomicWrite(runtime, bytes);
-        PrivatePaths.atomicWrite(directory.resolve("current"), (name + "\n").getBytes(StandardCharsets.UTF_8));
+        PrivatePaths.atomicWrite(directory.resolve("current-abi-1"), (name + "\n").getBytes(StandardCharsets.UTF_8));
         return new EntryFiles(directory, entry, runtime, directory.resolve("executed.marker"));
     }
 
@@ -207,6 +206,28 @@ public class BootstrapPackagingTest extends StdioTestSupport
         assertEquals(1, result.exit());
         assertTrue(result.stderr(), result.stderr().startsWith("EDT MCP entry: "));
         assertEquals(result.stderr(), 1, result.stderr().lines().count());
+    }
+
+    @Test public void builtEntryDoesNotFallBackToTheLegacyPointer() throws Exception
+    {
+        var files = entryFiles();
+        // The legacy pointer leads to a valid, executable jar, but this entry must ignore it.
+        PrivatePaths.atomicWrite(files.directory().resolve("current"),
+            (files.runtime().getFileName().toString().replaceFirst("^abi-1-", "") + "\n").getBytes(StandardCharsets.UTF_8));
+        Path legacy = files.directory().resolve(Files.readString(files.directory().resolve("current")).trim());
+        PrivatePaths.atomicWrite(legacy, fakeRuntime());
+        Files.deleteIfExists(files.directory().resolve("current-abi-1"));
+        assertRefused(files, runEntry(files));
+    }
+
+    @Test public void builtEntryRejectsAnExecutableRuntimeFromAnotherAbi() throws Exception
+    {
+        var files = entryFiles();
+        String otherAbi = files.runtime().getFileName().toString().replaceFirst("^abi-1-", "abi-2-");
+        PrivatePaths.atomicWrite(files.directory().resolve(otherAbi), fakeRuntime());
+        PrivatePaths.atomicWrite(files.directory().resolve("current-abi-1"),
+            (otherAbi + "\n").getBytes(StandardCharsets.UTF_8));
+        assertRefused(files, runEntry(files));
     }
 
     @Test public void builtEntryExecutesAValidRuntimeWithOnlyTheEntryJarOnItsClasspath() throws Exception
@@ -352,7 +373,7 @@ public class BootstrapPackagingTest extends StdioTestSupport
         try (var paused = new PausedEntry(files))
         {
             Files.delete(files.runtime());
-            StdioPluginSupportTest.assertListing(files.directory(), "current", "entry.jar");
+            StdioPluginSupportTest.assertListing(files.directory(), "current-abi-1", "entry.jar");
             var result = paused.resume(); assertRefused(files, result);
             assertEquals("EDT MCP entry: com.ditrix.edt.mcp.server.ipc.StdioBootstrap" + System.lineSeparator(), result.stderr());
         }
@@ -374,7 +395,7 @@ public class BootstrapPackagingTest extends StdioTestSupport
             assertEquals(result.stderr(), 0, result.exit());
             assertEquals("", result.stdout()); assertEquals("", result.stderr());
             assertEquals("runtime executed", Files.readString(files.marker()));
-            StdioPluginSupportTest.assertListing(files.directory(), "current", "previous", "extract.lock",
+            StdioPluginSupportTest.assertListing(files.directory(), "current-abi-1", "previous-abi-1", "extract.lock",
                 "entry.jar", "edt-mcp-bootstrap.jar", current, files.runtime().getFileName().toString(), "executed.marker");
         }
     }
