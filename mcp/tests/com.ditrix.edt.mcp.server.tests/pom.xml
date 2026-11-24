@@ -30,11 +30,28 @@
           <includes>
             <include>**/*Test.java</include>
           </includes>
+          <!--
+            The forked test JVM must not inherit the developer machine's locale.
+
+            The platform renders some diagnostics from its own message bundles BY LOCALE - the
+            BSL parser, for one, ships only an _ru bundle and names a grammar production as
+            "#\u041a\u043e\u043d\u0435\u0446\u041e\u0431\u043b\u0430\u0441\u0442\u0438" where an English JVM says "#EndRegion". A test asserting on such a message
+            then passes on an en_US CI runner and fails on a Russian workstation: a property of
+            the machine rather than of the code. Pinning the locale makes the suite report the
+            same verdict everywhere.
+
+            ${tycho.testArgLine} is NOT decoration: it is what jacoco's prepare-agent puts the
+            coverage agent into, and it is this plugin's own default value for argLine. Dropping
+            it - or passing -Dtycho.testArgLine=... on the command line, which replaces the
+            property the agent sets - silently produces a suite with no coverage data at all.
+          -->
+          <argLine>${tycho.testArgLine} -Duser.language=en -Duser.country=US</argLine>
         </configuration>
       </plugin>
       <!-- Coverage: instrument the production bundle while these tests run.
-           Tycho Surefire appends ${tycho.testArgLine} to the test JVM args, so the
-           agent is attached there; the .exec lands in this fragment's target/. -->
+           prepare-agent writes the agent invocation into ${tycho.testArgLine}, which the
+           surefire configuration above passes to the forked JVM; the .exec lands in this
+           fragment's target/. Whoever edits that argLine must keep the property in it. -->
       <plugin>
         <groupId>org.jacoco</groupId>
         <artifactId>jacoco-maven-plugin</artifactId>
