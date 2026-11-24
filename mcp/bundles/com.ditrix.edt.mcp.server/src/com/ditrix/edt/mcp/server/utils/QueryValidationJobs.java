@@ -7,16 +7,19 @@ package com.ditrix.edt.mcp.server.utils;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 import java.util.function.LongSupplier;
+import java.util.function.Supplier;
 
 import org.eclipse.xtext.util.CancelIndicator;
 
@@ -37,15 +40,19 @@ public final class QueryValidationJobs implements AutoCloseable
 {
     public static final String TOOL = "validate_query"; //$NON-NLS-1$
     private static final long INTERRUPT_POLL_NANOS = TimeUnit.MILLISECONDS.toNanos(100);
-    private static QueryValidationJobs shared = new QueryValidationJobs(2, 32);
+    // The shared lane belongs to this bundle instance, not to an individual activation.
+    // An uncooperative native callback cannot be made to release its slot by restarting MCP.
+    private static final QueryValidationJobs SHARED = new QueryValidationJobs(2, 32);
 
     private final ThreadPoolExecutor workers;
     private final int limit;
     private final int maxCompleted;
     private final LongSupplier nanoTime;
     private final LinkedHashMap<String, Task> detached = new LinkedHashMap<>();
-    private volatile boolean closed;
-    private int inFlight;
+    private final LinkedHashSet<Task> admitted = new LinkedHashSet<>();
+    private boolean paused;
+    private boolean closed;
+    private long generation;
 
     public record Result(String response, String jobId) { }
 
@@ -56,42 +63,82 @@ public final class QueryValidationJobs implements AutoCloseable
 
     QueryValidationJobs(int threadCount, int maxCompleted, LongSupplier nanoTime)
     {
+        this(threadCount, maxCompleted, nanoTime, task -> {
+            Thread thread = new Thread(task, "MCP-Query-Validation"); //$NON-NLS-1$
+            thread.setDaemon(true);
+            return thread;
+        });
+    }
+
+    QueryValidationJobs(int threadCount, int maxCompleted, LongSupplier nanoTime, ThreadFactory threadFactory)
+    {
         limit = threadCount;
         this.maxCompleted = Math.max(1, maxCompleted);
         this.nanoTime = nanoTime;
         // The queue covers executor handoff after a logical slot is released but before the
         // underlying worker asks for its next task. It does not add admission capacity.
         workers = new ThreadPoolExecutor(threadCount, threadCount, 60L, TimeUnit.SECONDS,
-            new ArrayBlockingQueue<>(threadCount), task -> {
-            Thread thread = new Thread(task, "MCP-Query-Validation"); //$NON-NLS-1$
-            thread.setDaemon(true);
-            return thread;
-        });
+            new ArrayBlockingQueue<>(threadCount), threadFactory);
         workers.allowCoreThreadTimeOut(true);
     }
 
-    public static synchronized QueryValidationJobs shared()
+    public static QueryValidationJobs shared()
     {
-        return shared;
+        return SHARED;
     }
 
-    /** Only bundle activation can reopen this lane; late calls during stop see the closed instance. */
-    public static synchronized void startShared()
+    /** Only bundle activation can reopen admission; old native work keeps its slot and ID. */
+    public static void startShared()
     {
-        if (shared.closed)
+        SHARED.resume();
+    }
+
+    public static void shutdownShared()
+    {
+        SHARED.pause();
+    }
+
+    synchronized void resume()
+    {
+        if (!closed)
         {
-            shared = new QueryValidationJobs(2, 32);
+            paused = false;
         }
     }
 
-    public static synchronized void shutdownShared()
+    /** Stops admission without forgetting running callbacks or their executor. */
+    synchronized void pause()
     {
-        shared.close();
+        paused = true;
+        generation++;
+        for (Task task : admitted)
+        {
+            if (task.started)
+            {
+                publish(task);
+            }
+            task.cancel();
+        }
+        // A worker may take a task concurrently, but it observes sticky cancellation before
+        // entering the action. Removed tasks never run and must release their own reservation.
+        List<Runnable> queued = new ArrayList<>();
+        workers.getQueue().drainTo(queued);
+        for (Runnable task : queued)
+        {
+            ((Task)task).discard();
+        }
+        notifyAll();
     }
 
     /** Returns the original response, or the same id the polling tools see if work is still active. */
     public Result run(String projectName, long timeoutMs, BooleanSupplier responseDelivered,
         Function<CancelIndicator, String> action)
+    {
+        return run(projectName, timeoutMs, responseDelivered, action, QueryValidationJobs::acquireHostLease);
+    }
+
+    Result run(String projectName, long timeoutMs, BooleanSupplier responseDelivered,
+        Function<CancelIndicator, String> action, Supplier<Lease> acquireLease)
     {
         if (Thread.currentThread().isInterrupted() || responseDelivered.getAsBoolean())
         {
@@ -99,35 +146,44 @@ public final class QueryValidationJobs implements AutoCloseable
         }
         long startNanos = nanoTime.getAsLong();
         long startMs = System.currentTimeMillis();
-        var activator = Activator.getDefault();
-        var lifetime = activator == null ? null : activator.getHeadlessLifetime();
-        var lease = lifetime == null ? null : lifetime.tool();
-        if (lifetime != null && lease == null)
+        final long expectedGeneration;
+        synchronized (this)
         {
-            throw new RejectedExecutionException("Headless EDT is shutting down."); //$NON-NLS-1$
+            if (closed || paused)
+            {
+                throw new RejectedExecutionException("Query validation is shutting down."); //$NON-NLS-1$
+            }
+            expectedGeneration = generation;
         }
+        // The host lease can belong to an activation that has since been stopped. Do not
+        // accept it into a later generation even if the same lane has already resumed.
+        Lease lease = acquireLease.get();
         Task task = new Task(projectName, startNanos, startMs, TimeUnit.MILLISECONDS.toNanos(timeoutMs), action,
             lease);
         try
         {
             synchronized (this)
             {
-                if (closed)
+                if (closed || paused)
                 {
                     throw new RejectedExecutionException("Query validation is shutting down."); //$NON-NLS-1$
                 }
-                if (inFlight >= limit)
+                if (generation != expectedGeneration)
+                {
+                    throw new RejectedExecutionException("MCP restarted during query admission."); //$NON-NLS-1$
+                }
+                if (admitted.size() >= limit)
                 {
                     throw new RejectedExecutionException("Query validation capacity is occupied."); //$NON-NLS-1$
                 }
-                inFlight++;
+                admitted.add(task);
                 try
                 {
                     workers.execute(task);
                 }
                 catch (RuntimeException | Error e)
                 {
-                    inFlight--;
+                    admitted.remove(task);
                     throw e;
                 }
             }
@@ -145,7 +201,7 @@ public final class QueryValidationJobs implements AutoCloseable
         {
             synchronized (this)
             {
-                while (!task.finished() && !closed && !responseDelivered.getAsBoolean())
+                while (!task.finished() && !task.cancellationRequested && !responseDelivered.getAsBoolean())
                 {
                     long remaining = task.remaining();
                     if (remaining <= 0)
@@ -162,7 +218,7 @@ public final class QueryValidationJobs implements AutoCloseable
                         break;
                     }
                 }
-                if (!interrupted && !closed && task.finished() && task.finishedInTime)
+                if (!interrupted && !task.cancellationRequested && task.finished() && task.finishedInTime)
                 {
                     if (task.failure != null)
                     {
@@ -170,9 +226,9 @@ public final class QueryValidationJobs implements AutoCloseable
                     }
                     return new Result(task.response, null);
                 }
-                if (closed || task.finished())
+                if (task.cancellationRequested || task.finished())
                 {
-                    return new Result(null, null);
+                    return new Result(null, task.published ? task.id : null);
                 }
                 // An early reply is committed here, under the same lock used at callback exit.
                 // A worker already done is not promoted. Once published, the id never changes.
@@ -181,7 +237,7 @@ public final class QueryValidationJobs implements AutoCloseable
                     task.cancel();
                     return new Result(null, null);
                 }
-                detached.put(task.id, task);
+                publish(task);
                 task.cancel();
                 return new Result(null, task.id);
             }
@@ -195,6 +251,18 @@ public final class QueryValidationJobs implements AutoCloseable
         }
     }
 
+    private static Lease acquireHostLease()
+    {
+        var activator = Activator.getDefault();
+        var lifetime = activator == null ? null : activator.getHeadlessLifetime();
+        Lease lease = lifetime == null ? null : lifetime.tool();
+        if (lifetime != null && lease == null)
+        {
+            throw new RejectedExecutionException("Headless EDT is shutting down."); //$NON-NLS-1$
+        }
+        return lease;
+    }
+
     public synchronized JobSnapshot await(String id, long waitMs)
     {
         Task task = detached.get(id);
@@ -204,7 +272,7 @@ public final class QueryValidationJobs implements AutoCloseable
         }
         long start = nanoTime.getAsLong();
         long budget = TimeUnit.MILLISECONDS.toNanos(waitMs);
-        while (!task.finished() && !closed)
+        while (!task.finished() && !paused && !closed)
         {
             long remaining = budget - (nanoTime.getAsLong() - start);
             if (remaining <= 0)
@@ -254,11 +322,17 @@ public final class QueryValidationJobs implements AutoCloseable
     public synchronized void close()
     {
         closed = true;
-        for (Runnable queued : workers.shutdownNow())
+        pause();
+        workers.shutdownNow();
+    }
+
+    private void publish(Task task)
+    {
+        if (!task.published)
         {
-            ((Task)queued).discard();
+            task.published = true;
+            detached.put(task.id, task);
         }
-        notifyAll();
     }
 
     /** Lifecycle is guarded by the registry lock; result fields are handed off at worker exit. */
@@ -273,6 +347,7 @@ public final class QueryValidationJobs implements AutoCloseable
         private volatile boolean cancellationRequested;
         private final FutureTask<Void> invocation;
         private boolean started;
+        private boolean published;
         private boolean exited;
         private long cancellationAtMs;
         private long completedAtMs;
@@ -292,12 +367,17 @@ public final class QueryValidationJobs implements AutoCloseable
             invocation = new FutureTask<>(() -> {
                 try
                 {
-                    CancelIndicator cancel = () -> closed || cancellationRequested || remaining() <= 0
+                    CancelIndicator cancel = () -> cancellationRequested || remaining() <= 0
                         || Thread.currentThread().isInterrupted();
-                    if (!cancel.isCanceled())
+                    synchronized (QueryValidationJobs.this)
                     {
-                        response = action.apply(cancel);
+                        if (cancel.isCanceled())
+                        {
+                            return null;
+                        }
+                        started = true;
                     }
+                    response = action.apply(cancel);
                 }
                 catch (RuntimeException e)
                 {
@@ -327,14 +407,6 @@ public final class QueryValidationJobs implements AutoCloseable
         {
             try (lease)
             {
-                synchronized (QueryValidationJobs.this)
-                {
-                    if (closed)
-                    {
-                        cancel();
-                    }
-                    started = !cancellationRequested;
-                }
                 invocation.run(); // Future.cancel can be terminal while this call remains inside EDT.
             }
             finally
@@ -343,7 +415,7 @@ public final class QueryValidationJobs implements AutoCloseable
             }
         }
 
-        /** Called only on a queued task returned by shutdownNow, so its runnable never runs. */
+        /** Called only on a task atomically drained from the queue, so its runnable never runs. */
         void discard()
         {
             try (lease)
@@ -362,7 +434,7 @@ public final class QueryValidationJobs implements AutoCloseable
             synchronized (QueryValidationJobs.this)
             {
                 exited = true;
-                inFlight--;
+                admitted.remove(this);
                 elapsedAtExit = elapsed;
                 completedAtMs = System.currentTimeMillis();
                 finishedInTime = elapsed < budgetNanos;

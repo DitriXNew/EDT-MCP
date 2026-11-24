@@ -179,6 +179,9 @@ public class Activator extends AbstractUIPlugin
     @Override
     public void stop(BundleContext context) throws Exception
     {
+        // Stop query admission before clearing the lease source. A racing HTTP call must
+        // not mistake a shutting-down headless host for a windowed host with no lease.
+        QueryValidationJobs.shutdownShared();
         com.ditrix.edt.mcp.server.transport.StdioPluginSupport.stop();
         HeadlessLifetime lifetime = headlessLifetime.getAndSet(null);
         if (lifetime != null) { lifetime.close(); }
@@ -190,7 +193,6 @@ public class Activator extends AbstractUIPlugin
 
         // Cancel Workmate conversations and stop their non-UI worker/deadline threads
         // before the bundle's services and class loader are torn down.
-        QueryValidationJobs.shutdownShared();
         BackgroundJobs.shutdownShared();
 
         if (mcpServer != null && mcpServer.isRunning())

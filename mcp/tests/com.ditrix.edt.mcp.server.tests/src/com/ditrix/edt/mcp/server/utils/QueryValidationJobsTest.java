@@ -8,11 +8,13 @@ package com.ditrix.edt.mcp.server.utils;
 import static org.junit.Assert.*;
 
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.Test;
@@ -196,13 +198,196 @@ public class QueryValidationJobsTest
             assertThrows(RejectedExecutionException.class, () -> QueryValidationJobs.shared()
                 .run("Demo", WAIT_MS, () -> false, cancel -> "must not start"));
             QueryValidationJobs.startShared();
-            assertNotSame(original, QueryValidationJobs.shared());
+            assertSame(original, QueryValidationJobs.shared());
             assertEquals("after restart", QueryValidationJobs.shared()
                 .run("Demo", WAIT_MS, () -> false, cancel -> "after restart").response());
         }
         finally
         {
             QueryValidationJobs.startShared();
+        }
+    }
+
+    @Test
+    public void restartKeepsTheSameDetachedIdAndCapacityUntilRealExit() throws Exception
+    {
+        var caller = Executors.newSingleThreadExecutor();
+        var entered = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        var delivered = new AtomicBoolean();
+        try (var jobs = new QueryValidationJobs(1, 2))
+        {
+            var response = caller.submit(() -> jobs.run("Demo", WAIT_MS, delivered::get, cancel -> {
+                entered.countDown();
+                awaitRelease(release);
+                return "discarded";
+            }));
+            try
+            {
+                assertTrue(entered.await(WAIT_MS, TimeUnit.MILLISECONDS));
+                delivered.set(true);
+                String id = response.get(WAIT_MS, TimeUnit.MILLISECONDS).jobId();
+                assertNotNull(id);
+                jobs.pause();
+                jobs.resume();
+
+                assertEquals(id, jobs.running().get(0).getId());
+                assertEquals(Status.RUNNING, jobs.await(id, 0).getStatus());
+                assertEquals(id, jobs.cancel(id).getSnapshot().getId());
+                assertThrows(RejectedExecutionException.class,
+                    () -> jobs.run("NewProject", WAIT_MS, () -> false, cancel -> "over capacity"));
+                release.countDown();
+                assertEquals(Status.CANCELLED, jobs.await(id, WAIT_MS).getStatus());
+                assertEquals("new", jobs.run("NewProject", WAIT_MS, () -> false, cancel -> "new").response());
+            }
+            finally
+            {
+                release.countDown();
+            }
+        }
+        finally
+        {
+            caller.shutdownNow();
+        }
+    }
+
+    @Test
+    public void stopDetachesAnAttachedCallerWithoutWaitingAndStickyCancelSurvivesRestart() throws Exception
+    {
+        var caller = Executors.newSingleThreadExecutor();
+        var entered = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        var cancelledInsideWorker = new AtomicBoolean();
+        try (var jobs = new QueryValidationJobs(1, 2))
+        {
+            var response = caller.submit(() -> jobs.run("Demo", WAIT_MS, () -> false, cancel -> {
+                entered.countDown();
+                awaitRelease(release);
+                cancelledInsideWorker.set(cancel.isCanceled());
+                return "discarded";
+            }));
+            try
+            {
+                assertTrue(entered.await(WAIT_MS, TimeUnit.MILLISECONDS));
+                assertTrue(jobs.running().isEmpty());
+                jobs.pause();
+                jobs.resume();
+                var stopped = response.get(WAIT_MS, TimeUnit.MILLISECONDS);
+                assertNull(stopped.response());
+                assertNotNull(stopped.jobId());
+                assertEquals(stopped.jobId(), jobs.runningForProject("Demo").getId());
+                release.countDown();
+                assertEquals(Status.CANCELLED, jobs.await(stopped.jobId(), WAIT_MS).getStatus());
+                assertTrue(cancelledInsideWorker.get());
+            }
+            finally
+            {
+                release.countDown();
+            }
+        }
+        finally
+        {
+            caller.shutdownNow();
+        }
+    }
+
+    @Test
+    public void stoppedBeforeNativeEntryDoesNotPublishOrRunAfterResume() throws Exception
+    {
+        var caller = Executors.newSingleThreadExecutor();
+        var workerCreated = new CountDownLatch(1);
+        var letWorkerStart = new CountDownLatch(1);
+        var enteredNative = new AtomicBoolean();
+        try (var jobs = new QueryValidationJobs(1, 2, System::nanoTime, runnable -> {
+            Thread thread = new Thread(() -> {
+                workerCreated.countDown();
+                awaitRelease(letWorkerStart);
+                runnable.run();
+            });
+            thread.setDaemon(true);
+            return thread;
+        }))
+        {
+            var result = caller.submit(() -> jobs.run("Demo", WAIT_MS, () -> false, cancel -> {
+                enteredNative.set(true);
+                return "unexpected";
+            }));
+            try
+            {
+                assertTrue(workerCreated.await(WAIT_MS, TimeUnit.MILLISECONDS));
+                jobs.pause();
+                jobs.resume();
+                assertNull(result.get(WAIT_MS, TimeUnit.MILLISECONDS).jobId());
+                assertTrue(jobs.running().isEmpty());
+                letWorkerStart.countDown();
+                long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(WAIT_MS);
+                while (true)
+                {
+                    try
+                    {
+                        assertEquals("fresh", jobs.run("Demo", WAIT_MS, () -> false, cancel -> "fresh").response());
+                        break;
+                    }
+                    catch (RejectedExecutionException handoff)
+                    {
+                        assertTrue(System.nanoTime() - deadline < 0);
+                        Thread.yield();
+                    }
+                }
+                assertFalse(enteredNative.get());
+                assertTrue(jobs.running().isEmpty());
+            }
+            finally
+            {
+                letWorkerStart.countDown();
+            }
+        }
+        finally
+        {
+            caller.shutdownNow();
+        }
+    }
+
+    @Test
+    public void leaseAcquiredAcrossRestartIsReleasedAndNeverAdmitted() throws Exception
+    {
+        var caller = Executors.newSingleThreadExecutor();
+        var oldLeaseReached = new CountDownLatch(1);
+        var returnOldLease = new CountDownLatch(1);
+        var oldLeaseReleases = new AtomicInteger();
+        var enteredNative = new AtomicBoolean();
+        try (var jobs = new QueryValidationJobs(1, 2))
+        {
+            var stale = caller.submit(() -> jobs.run("Demo", WAIT_MS, () -> false, cancel -> {
+                enteredNative.set(true);
+                return "unexpected";
+            }, () -> {
+                oldLeaseReached.countDown();
+                awaitRelease(returnOldLease);
+                return () -> oldLeaseReleases.incrementAndGet();
+            }));
+            try
+            {
+                assertTrue(oldLeaseReached.await(WAIT_MS, TimeUnit.MILLISECONDS));
+                jobs.pause();
+                jobs.resume();
+                returnOldLease.countDown();
+                var rejected = assertThrows(ExecutionException.class,
+                    () -> stale.get(WAIT_MS, TimeUnit.MILLISECONDS));
+                assertTrue(rejected.getCause() instanceof RejectedExecutionException);
+                assertFalse(enteredNative.get());
+                assertEquals("discarded lease must close exactly once", 1, oldLeaseReleases.get());
+                assertTrue(jobs.running().isEmpty());
+                assertEquals("fresh", jobs.run("Demo", WAIT_MS, () -> false, cancel -> "fresh").response());
+            }
+            finally
+            {
+                returnOldLease.countDown();
+            }
+        }
+        finally
+        {
+            caller.shutdownNow();
         }
     }
 
