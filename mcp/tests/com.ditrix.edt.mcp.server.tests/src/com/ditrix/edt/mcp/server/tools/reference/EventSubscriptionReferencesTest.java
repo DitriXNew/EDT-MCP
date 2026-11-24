@@ -13,6 +13,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.withSettings;
 
 import java.util.List;
 import java.util.concurrent.TimeUnit;
@@ -36,22 +37,14 @@ public class EventSubscriptionReferencesTest
 {
     private static final String FQN = "CommonModule.MyEventHandlers"; //$NON-NLS-1$
 
-    private interface BmModule extends CommonModule, IBmObject
-    {
-    }
-
-    private interface BmSubscription extends EventSubscription, IBmObject
-    {
-    }
-
     @Test
     public void handlerAppearsInReportWithoutAnIndexedBackReference()
     {
-        BmSubscription handler = subscription("MyBeforeWrite", FQN + ".BeforeWriteDocument"); //$NON-NLS-1$ //$NON-NLS-2$
-        BmSubscription sameNamePrefix = subscription("PrefixOnly", "CommonModule.MyEventHandlers2.Run"); //$NON-NLS-1$ //$NON-NLS-2$
-        BmSubscription wrongType = subscription("WrongType", "Document.MyEventHandlers.Run"); //$NON-NLS-1$ //$NON-NLS-2$
-        BmSubscription broken = subscription("MissingMethod", FQN + "."); //$NON-NLS-1$ //$NON-NLS-2$
-        BmSubscription bilingual = subscription("Localized", "ОбщийМодуль.myeventhandlers.Run"); //$NON-NLS-1$ //$NON-NLS-2$
+        EventSubscription handler = subscription("MyBeforeWrite", FQN + ".BeforeWriteDocument"); //$NON-NLS-1$ //$NON-NLS-2$
+        EventSubscription sameNamePrefix = subscription("PrefixOnly", "CommonModule.MyEventHandlers2.Run"); //$NON-NLS-1$ //$NON-NLS-2$
+        EventSubscription wrongType = subscription("WrongType", "Document.MyEventHandlers.Run"); //$NON-NLS-1$ //$NON-NLS-2$
+        EventSubscription broken = subscription("MissingMethod", FQN + "."); //$NON-NLS-1$ //$NON-NLS-2$
+        EventSubscription bilingual = subscription("Localized", "ОбщийМодуль.myeventhandlers.Run"); //$NON-NLS-1$ //$NON-NLS-2$
         ReferenceCollector collector = run(ReferenceSearchBound.of(10, 1000, () -> 0L),
             handler, sameNamePrefix, wrongType, broken, bilingual);
 
@@ -68,9 +61,9 @@ public class EventSubscriptionReferencesTest
     @Test
     public void limitStopsHandlerTraversalAndReportsThatMoreReferencesExist()
     {
-        BmSubscription first = subscription("First", FQN + ".Run"); //$NON-NLS-1$ //$NON-NLS-2$
-        BmSubscription second = subscription("Second", FQN + ".Run"); //$NON-NLS-1$ //$NON-NLS-2$
-        BmSubscription unseen = subscription("Unseen", FQN + ".Run"); //$NON-NLS-1$ //$NON-NLS-2$
+        EventSubscription first = subscription("First", FQN + ".Run"); //$NON-NLS-1$ //$NON-NLS-2$
+        EventSubscription second = subscription("Second", FQN + ".Run"); //$NON-NLS-1$ //$NON-NLS-2$
+        EventSubscription unseen = subscription("Unseen", FQN + ".Run"); //$NON-NLS-1$ //$NON-NLS-2$
         ReferenceCollector collector = run(ReferenceSearchBound.of(1, 1000, () -> 0L), first, second, unseen);
 
         verify(unseen, never()).getHandler();
@@ -84,12 +77,12 @@ public class EventSubscriptionReferencesTest
     public void noMatchStillPaysTimeBudgetAndCannotTurnPartialScanIntoZero()
     {
         AtomicLong nanos = new AtomicLong();
-        BmSubscription first = subscription("First", "AnotherModule.Run"); //$NON-NLS-1$ //$NON-NLS-2$
+        EventSubscription first = subscription("First", "AnotherModule.Run"); //$NON-NLS-1$ //$NON-NLS-2$
         when(first.getHandler()).thenAnswer(call -> {
             nanos.set(TimeUnit.MILLISECONDS.toNanos(2));
             return "AnotherModule.Run"; //$NON-NLS-1$
         });
-        BmSubscription unseen = subscription("Unseen", FQN + ".Run"); //$NON-NLS-1$ //$NON-NLS-2$
+        EventSubscription unseen = subscription("Unseen", FQN + ".Run"); //$NON-NLS-1$ //$NON-NLS-2$
         ReferenceSearchBound bound = ReferenceSearchBound.of(10, 1, nanos::get);
         ReferenceCollector collector = run(bound, first, unseen);
 
@@ -104,21 +97,22 @@ public class EventSubscriptionReferencesTest
         when(config.getEventSubscriptions()).thenReturn(new BasicEList<>(List.of(subscriptions)));
         IBmModel model = mock(IBmModel.class);
         IBmEngine engine = mock(IBmEngine.class);
-        BmModule module = mock(BmModule.class);
+        CommonModule module = mock(CommonModule.class, withSettings().extraInterfaces(IBmObject.class));
         when(module.getName()).thenReturn("MyEventHandlers"); //$NON-NLS-1$
         when(module.eClass()).thenReturn(MdClassPackage.Literals.COMMON_MODULE);
         when(model.getEngine()).thenReturn(engine);
-        when(engine.getBackReferences(module)).thenReturn(List.of());
+        when(engine.getBackReferences((IBmObject)module)).thenReturn(List.of());
 
-        ReferenceCollector collector = new ReferenceCollector(mock(IProject.class), model, module,
+        ReferenceCollector collector = new ReferenceCollector(mock(IProject.class), model, (IBmObject)module,
             bound.limit(), bound, config);
         collector.collect(() -> null, project -> null);
         return collector;
     }
 
-    private static BmSubscription subscription(String name, String value)
+    private static EventSubscription subscription(String name, String value)
     {
-        BmSubscription subscription = mock(BmSubscription.class);
+        // Mockito's OSGi class loader cannot mock private nested interfaces. Only use public EDT types.
+        EventSubscription subscription = mock(EventSubscription.class, withSettings().extraInterfaces(IBmObject.class));
         when(subscription.getName()).thenReturn(name);
         when(subscription.getHandler()).thenReturn(value);
         when(subscription.eClass()).thenReturn(MdClassPackage.Literals.EVENT_SUBSCRIPTION);
