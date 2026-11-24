@@ -2,13 +2,18 @@
 // Copyright (C) 2026 DitriX
 package com.ditrix.edt.mcp.server.utils;
 
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.withSettings;
 
 import java.io.ByteArrayInputStream;
-import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.FileSystems;
 import java.nio.file.Files;
@@ -20,13 +25,25 @@ import java.util.UUID;
 
 import javax.xml.stream.XMLStreamException;
 
+import org.eclipse.core.resources.IProject;
+import org.eclipse.emf.common.util.BasicEList;
 import org.eclipse.emf.common.util.URI;
 import org.junit.Assume;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
 
+import com._1c.g5.v8.bm.core.IBmNamespace;
+import com._1c.g5.v8.bm.core.IBmObject;
+import com._1c.g5.v8.bm.core.IBmTransaction;
+import com._1c.g5.v8.dt.core.naming.ITopObjectFqnGenerator;
+import com._1c.g5.v8.dt.metadata.mdclass.DataProcessor;
+import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
+import com._1c.g5.v8.dt.metadata.mdclass.Template;
+import com._1c.g5.v8.dt.metadata.mdclass.TemplateType;
 import com._1c.g5.v8.dt.moxel.MoxelFactory;
+import com._1c.g5.v8.dt.moxel.SpreadsheetDocument;
+import com.ditrix.edt.mcp.server.utils.SpreadsheetRenameGuard.Candidate;
 import com.ditrix.edt.mcp.server.utils.SpreadsheetRenameGuard.LanguageKey;
 
 public class SpreadsheetRenameGuardTest
@@ -153,10 +170,43 @@ public class SpreadsheetRenameGuardTest
         Assume.assumeTrue(read.availability() != ProjectSpreadsheetReader.Availability.UNSUPPORTED_PROVIDER);
         assertEquals(ProjectSpreadsheetReader.Availability.SECURE, read.availability());
         assertEquals(RUSSIAN, read.loss());
+        var candidate = new Candidate("Invoice", null, Set.of(RUSSIAN));
+        String refusal = SpreadsheetRenameGuard.refusal("Base", "DataProcessor.Processor", List.of(candidate),
+            false, item -> ProjectSpreadsheetReader.read(project, template, item.blank()));
+        assertTrue(refusal, refusal.contains("would erase the saved language description"));
+        Files.writeString(template, saved("<description/>"));
+        assertNull(SpreadsheetRenameGuard.refusal("Base", "DataProcessor.Processor", List.of(candidate),
+            false, item -> ProjectSpreadsheetReader.read(project, template, item.blank())));
     }
 
     @Test
-    public void nonSecureProviderDoesNotReadTheCandidate() throws Exception
+    public void missingOrMalformedSavedEvidenceDoesNotInventLossForTheAddressedOwner() throws Exception
+    {
+        Path project = temporary.newFolder("project").toPath().toRealPath();
+        Path template = project.resolve("Template.mxlx");
+        Path control = Files.createFile(project.resolve("Control.mxlx"));
+        Assume.assumeTrue(ProjectSpreadsheetReader.read(project, control, Set.of(RUSSIAN)).availability()
+            != ProjectSpreadsheetReader.Availability.UNSUPPORTED_PROVIDER);
+        var candidate = new Candidate("Invoice", null, Set.of(RUSSIAN));
+
+        var missing = ProjectSpreadsheetReader.read(project, template, candidate.blank());
+        assertEquals(ProjectSpreadsheetReader.Availability.UNVERIFIED, missing.availability());
+        assertNull(SpreadsheetRenameGuard.refusal("Base", "DataProcessor.Processor", List.of(candidate),
+            false, item -> missing));
+        String extensionRefusal = SpreadsheetRenameGuard.refusal("Extension", "DataProcessor.Processor",
+            List.of(candidate), true, item -> missing);
+        assertTrue(extensionRefusal, extensionRefusal.contains("cannot be verified safely"));
+
+        Files.writeString(template, "<document xmlns='" + NS + "'><languageSettings><languageInfo>");
+        var malformed = ProjectSpreadsheetReader.read(project, template, candidate.blank());
+        assertEquals(ProjectSpreadsheetReader.Availability.SECURE, malformed.availability());
+        assertNull(malformed.loss());
+        assertNull(SpreadsheetRenameGuard.refusal("Base", "DataProcessor.Processor", List.of(candidate),
+            false, item -> malformed));
+    }
+
+    @Test
+    public void nonSecureProviderRefusesOnlyCandidatesAndNeverModifiesTheirFiles() throws Exception
     {
         Path archive = temporary.getRoot().toPath().resolve("project.zip");
         try (var filesystem = FileSystems.newFileSystem(archive, Map.of("create", "true")))
@@ -164,9 +214,27 @@ public class SpreadsheetRenameGuardTest
             Path project = Files.createDirectory(filesystem.getPath("/project"));
             Path template = project.resolve("Template.mxlx");
             Files.writeString(template, saved("<description>Русский</description>"));
+            byte[] before = Files.readAllBytes(template);
             var read = ProjectSpreadsheetReader.read(project, template, Set.of(RUSSIAN));
             assertEquals(ProjectSpreadsheetReader.Availability.UNSUPPORTED_PROVIDER, read.availability());
             assertNull(read.loss());
+
+            // Like the stock Windows provider, ZIPFS provides DirectoryStream but not
+            // SecureDirectoryStream. Both owners must refuse without trying an alternate read.
+            var candidate = new Candidate("Invoice", null, Set.of(RUSSIAN));
+            for (boolean extension : List.of(false, true))
+            {
+                String refusal = SpreadsheetRenameGuard.refusal("Example", "DataProcessor.Processor",
+                    List.of(candidate), extension,
+                    item -> ProjectSpreadsheetReader.read(project, template, item.blank()));
+                assertTrue(refusal, refusal.contains("saved description cannot be verified safely"));
+                assertTrue(refusal, refusal.contains("Nothing was renamed"));
+                assertTrue(refusal, refusal.contains("Invoice") && refusal.contains("Example"));
+                assertTrue(refusal, !refusal.contains("would erase"));
+            }
+            assertNull(SpreadsheetRenameGuard.refusal("Example", "DataProcessor.Processor", List.of(), false,
+                candidateWithoutBlankKey -> { throw new AssertionError("No candidate should read a file"); }));
+            assertArrayEquals(before, Files.readAllBytes(template));
         }
     }
 
@@ -174,28 +242,47 @@ public class SpreadsheetRenameGuardTest
     public void onlyFilesWithinTheOwningProjectAreEligible() throws Exception
     {
         Path root = temporary.newFolder("project").toPath();
-        Path inside = Files.createFile(root.resolve("Template.mxlx"));
         Path outside = temporary.newFile("other.mxlx").toPath();
-        assertEquals(inside.toRealPath(), SpreadsheetRenameGuard.projectFile(root, inside));
-        assertNull(SpreadsheetRenameGuard.projectFile(root, outside));
-        assertNull(SpreadsheetRenameGuard.projectFile(root, root));
+        assertEquals(ProjectSpreadsheetReader.Availability.UNVERIFIED,
+            ProjectSpreadsheetReader.read(root, outside, Set.of(RUSSIAN)).availability());
+        assertEquals(ProjectSpreadsheetReader.Availability.UNVERIFIED,
+            ProjectSpreadsheetReader.read(root, root, Set.of(RUSSIAN)).availability());
     }
 
     @Test
-    public void symbolicLinksAreNotFollowedEvenInsideTheProject() throws Exception
+    public void unattachedAndHealthyWorkbooksNeverResolveTheSourceFile()
     {
-        Path root = temporary.newFolder("project").toPath();
-        Path outside = temporary.newFolder("outside").toPath();
-        Files.createFile(outside.resolve("Template.mxlx"));
-        Path link = root.resolve("TemplateLink");
-        try
-        {
-            Files.createSymbolicLink(link, outside);
-        }
-        catch (IOException | UnsupportedOperationException | SecurityException e)
-        {
-            Assume.assumeNoException(e);
-        }
-        assertNull(SpreadsheetRenameGuard.projectFile(root, link.resolve("Template.mxlx")));
+        var project = mock(IProject.class);
+        var tx = mock(IBmTransaction.class);
+        var generator = mock(ITopObjectFqnGenerator.class);
+        var owner = mock(DataProcessor.class, withSettings().extraInterfaces(IBmObject.class));
+        var template = mock(Template.class);
+        var workbook = mock(SpreadsheetDocument.class, withSettings().extraInterfaces(IBmObject.class));
+        var settings = MoxelFactory.eINSTANCE.createLanguageSettings();
+        var language = MoxelFactory.eINSTANCE.createLanguageInfo();
+        language.setLanguageId("ru");
+        language.setLanguageCode("Русский");
+        language.setDescription("Русский");
+        settings.getLanguages().add(language);
+
+        String fqn = "DataProcessor.Processor.Template.Invoice.Template";
+        when(((IBmObject)owner).bmIsTop()).thenReturn(true);
+        when(owner.getTemplates()).thenReturn(new BasicEList<>(List.of(template)));
+        when(template.getTemplateType()).thenReturn(TemplateType.SPREADSHEET_DOCUMENT);
+        when(generator.generateExternalPropertyFqn(template, MdClassPackage.Literals.BASIC_TEMPLATE__TEMPLATE))
+            .thenReturn(fqn);
+        when(((IBmObject)workbook).bmIsTop()).thenReturn(true);
+        when(((IBmObject)workbook).bmGetNamespace()).thenReturn(mock(IBmNamespace.class));
+        when(workbook.getLanguageSettings()).thenReturn(settings);
+        when(tx.getTopObjectByFqn(fqn)).thenReturn(null, (IBmObject)workbook);
+
+        var unattached = SpreadsheetRenameGuard.candidates(project, owner, tx, generator);
+        var healthy = SpreadsheetRenameGuard.candidates(project, owner, tx, generator);
+        assertTrue(unattached.isEmpty());
+        assertTrue(healthy.isEmpty());
+        verify(template, never()).getTemplate();
+        // With no candidate there is no call into the saved-header reader.
+        assertNull(SpreadsheetRenameGuard.refusal("Example", "DataProcessor.Processor", healthy, false,
+            candidate -> { throw new AssertionError("Healthy rename must not ask for saved evidence"); }));
     }
 }

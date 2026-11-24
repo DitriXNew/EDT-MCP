@@ -5,9 +5,6 @@ package com.ditrix.edt.mcp.server.utils;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.nio.file.Files;
-import java.nio.file.LinkOption;
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
@@ -25,6 +22,8 @@ import org.eclipse.core.runtime.Platform;
 import org.eclipse.emf.ecore.EObject;
 
 import com._1c.g5.v8.bm.core.IBmObject;
+import com._1c.g5.v8.bm.core.IBmTransaction;
+import com._1c.g5.v8.dt.core.naming.ITopObjectFqnGenerator;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicTemplate;
 import com._1c.g5.v8.dt.metadata.mdclass.DataProcessor;
 import com._1c.g5.v8.dt.metadata.mdclass.ExternalDataProcessor;
@@ -50,7 +49,7 @@ public final class SpreadsheetRenameGuard
     {
     }
 
-    private record Candidate(String templateName, IFile file, Set<LanguageKey> blank)
+    record Candidate(String templateName, IFile file, Set<LanguageKey> blank)
     {
     }
 
@@ -67,9 +66,14 @@ public final class SpreadsheetRenameGuard
         {
             return null;
         }
-        List<Candidate> candidates = ReadToolExecution.readOnHost(project, "Read saved spreadsheet language risk", //$NON-NLS-1$
-            () -> candidates(project, owner, BasicTemplate::getTemplate));
-        String baseRefusal = refusal(project, ownerFqn, candidates, false);
+        var activator = Activator.getDefault();
+        var generator = activator == null ? null : activator.getTopObjectFqnGenerator();
+        String task = "Read spreadsheet language risk"; //$NON-NLS-1$
+        List<Candidate> candidates = generator == null ? List.of()
+            : ReadToolExecution.readModel(project, task, model -> BmTransactions.read(model, task,
+                (tx, monitor) -> candidates(project, owner, tx, generator)));
+        String baseRefusal = refusal(project.getName(), ownerFqn, candidates, false,
+            SpreadsheetRenameGuard::secureEvidence);
         if (baseRefusal != null || groups == 1 || !(owner instanceof DataProcessor))
         {
             return baseRefusal;
@@ -78,7 +82,6 @@ public final class SpreadsheetRenameGuard
         {
             return SpreadsheetRenameOwners.changedScope();
         }
-        var generator = Activator.getDefault().getTopObjectFqnGenerator();
         if (generator == null)
         {
             return SpreadsheetRenameOwners.changedScope();
@@ -97,19 +100,14 @@ public final class SpreadsheetRenameGuard
                     {
                         return null;
                     }
-                    // Inspect an already attached workbook by its native BM address. Do not
-                    // materialize an external property through a potentially file-backed getter.
-                    return candidates(counterpart.project(), affectedOwner, template -> {
-                        String contentFqn = generator.generateExternalPropertyFqn(template,
-                            MdClassPackage.Literals.BASIC_TEMPLATE__TEMPLATE);
-                        return contentFqn == null ? null : tx.getTopObjectByFqn(contentFqn);
-                    });
+                    return candidates(counterpart.project(), affectedOwner, tx, generator);
                 });
             if (extension == null)
             {
                 return SpreadsheetRenameOwners.changedScope();
             }
-            String extensionRefusal = refusal(counterpart.project(), ownerFqn, extension, true);
+            String extensionRefusal = refusal(counterpart.project().getName(), ownerFqn, extension, true,
+                SpreadsheetRenameGuard::secureEvidence);
             if (extensionRefusal != null)
             {
                 return extensionRefusal;
@@ -118,30 +116,30 @@ public final class SpreadsheetRenameGuard
         return null;
     }
 
-    private static String refusal(IProject project, String ownerFqn, List<Candidate> candidates, boolean extension)
+    static String refusal(String projectName, String ownerFqn, List<Candidate> candidates, boolean extension,
+        Function<Candidate, ProjectSpreadsheetReader.Evidence> reader)
     {
         for (Candidate candidate : candidates)
         {
-            var evidence = secureEvidence(candidate);
-            if (extension && !evidence.safeReaderAvailable())
+            var evidence = reader.apply(candidate);
+            if (evidence.availability() == ProjectSpreadsheetReader.Availability.UNSUPPORTED_PROVIDER
+                || (extension && !evidence.safeReaderAvailable()))
             {
                 return "EDT has a blank language description in spreadsheet template '" //$NON-NLS-1$
-                    + candidate.templateName() + "' in extension project '" + project.getName() //$NON-NLS-1$
+                    + candidate.templateName() + (extension ? "' in extension project '" : "' in project '") //$NON-NLS-1$ //$NON-NLS-2$
+                    + projectName
                     + "', and its saved description cannot be verified safely. Nothing was renamed. " //$NON-NLS-1$
-                    + "Preserve unsaved edits, close the affected editor and reload the template from " //$NON-NLS-1$
-                    + "disk or set the missing language synonym before retrying."; //$NON-NLS-1$
+                    + "Preserve unsaved edits. Close the affected editor and reload the template from disk, " //$NON-NLS-1$
+                    + "or give the language a synonym in the active editing language and reopen the template " //$NON-NLS-1$
+                    + "before retrying."; //$NON-NLS-1$
             }
-            // On filesystem providers without descriptor-relative support (including Windows),
-            // keep the already-addressed owner's existing scope. Never use this fallback to read
-            // files in the additionally affected extension projects.
-            LanguageKey lost = evidence.availability() == ProjectSpreadsheetReader.Availability.UNSUPPORTED_PROVIDER
-                ? savedDescription(candidate) : evidence.loss();
+            LanguageKey lost = evidence.loss();
             if (lost != null)
             {
                 return "Renaming '" + MetadataTypeUtils.toCanonicalEnglishFqn(ownerFqn) //$NON-NLS-1$
                     + "' would erase the saved language description for '" + lost.id() //$NON-NLS-1$
                     + "' in spreadsheet template '" + candidate.templateName() //$NON-NLS-1$
-                    + "' in project '" + project.getName() + "'. Nothing was renamed. Preserve any unsaved " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "' in project '" + projectName + "'. Nothing was renamed. Preserve any unsaved " //$NON-NLS-1$ //$NON-NLS-2$
                     + "edits, close the affected template " //$NON-NLS-1$
                     + "editor and reload the template from disk before retrying. EDT may otherwise keep " //$NON-NLS-1$
                     + "clearing the description unless that language has a synonym in the active editing language."; //$NON-NLS-1$
@@ -151,8 +149,8 @@ public final class SpreadsheetRenameGuard
     }
 
     /** Only the addressed owner's attached spreadsheets; never extend the scan to the project. */
-    private static List<Candidate> candidates(IProject project, MdObject owner,
-        Function<BasicTemplate, EObject> content)
+    static List<Candidate> candidates(IProject project, MdObject owner, IBmTransaction tx,
+        ITopObjectFqnGenerator generator)
     {
         if (!(owner instanceof IBmObject bmOwner) || !bmOwner.bmIsTop())
         {
@@ -164,7 +162,7 @@ public final class SpreadsheetRenameGuard
         for (BasicTemplate template : templates)
         {
             if (template.getTemplateType() != TemplateType.SPREADSHEET_DOCUMENT
-                || !(content.apply(template) instanceof SpreadsheetDocument book)
+                || !(attachedWorkbook(tx, generator, template) instanceof SpreadsheetDocument book)
                 || !(book instanceof IBmObject bmBook) || !bmBook.bmIsTop() || bmBook.bmGetNamespace() == null
                 || book.getLanguageSettings() == null)
             {
@@ -189,6 +187,14 @@ public final class SpreadsheetRenameGuard
             }
         }
         return candidates;
+    }
+
+    /** Look up registered BM data only; the external property's getter can resolve its source. */
+    private static EObject attachedWorkbook(IBmTransaction tx, ITopObjectFqnGenerator generator,
+        BasicTemplate template)
+    {
+        String fqn = generator.generateExternalPropertyFqn(template, MdClassPackage.Literals.BASIC_TEMPLATE__TEMPLATE);
+        return fqn == null ? null : tx.getTopObjectByFqn(fqn);
     }
 
     /**
@@ -239,58 +245,6 @@ public final class SpreadsheetRenameGuard
         }
         return ProjectSpreadsheetReader.read(file.getProject().getLocation().toFile().toPath(),
             file.getLocation().toFile().toPath(), candidate.blank());
-    }
-
-    private static LanguageKey savedDescription(Candidate candidate)
-    {
-        IFile file = candidate.file();
-        if (file.getLocation() == null || file.getProject().getLocation() == null)
-        {
-            return null;
-        }
-        try
-        {
-            Path source = projectFile(file.getProject().getLocation().toFile().toPath(),
-                file.getLocation().toFile().toPath());
-            if (source == null)
-            {
-                return null;
-            }
-            try (InputStream input = Files.newInputStream(source, LinkOption.NOFOLLOW_LINKS))
-            {
-                return lostDescription(input, candidate.blank());
-            }
-        }
-        catch (IOException | XMLStreamException e)
-        {
-            // A linked, unreadable or unrecognized header cannot establish the reported loss.
-            // Leave EDT's ordinary rename path in charge; no disk repair is attempted here.
-            return null;
-        }
-    }
-
-    /** Never traverse a linked resource or filesystem symlink below the configured project root. */
-    static Path projectFile(Path root, Path file) throws IOException
-    {
-        Path absoluteRoot = root.toAbsolutePath().normalize();
-        Path absoluteFile = file.toAbsolutePath().normalize();
-        if (!absoluteFile.startsWith(absoluteRoot))
-        {
-            return null;
-        }
-        Path realRoot = absoluteRoot.toRealPath();
-        Path source = realRoot;
-        for (Path component : absoluteRoot.relativize(absoluteFile))
-        {
-            source = source.resolve(component);
-            if (Files.isSymbolicLink(source))
-            {
-                return null;
-            }
-        }
-        Path realSource = source.toRealPath();
-        return realSource.startsWith(realRoot) && Files.isRegularFile(realSource, LinkOption.NOFOLLOW_LINKS)
-            ? realSource : null;
     }
 
     /** Verify only the language header. In particular, never load the rest of a large workbook. */

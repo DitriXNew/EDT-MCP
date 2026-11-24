@@ -14,6 +14,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Supplier;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.IProgressMonitor;
@@ -24,8 +25,10 @@ import org.eclipse.ltk.core.refactoring.NullChange;
 import org.junit.Test;
 
 import com._1c.g5.v8.dt.md.refactoring.core.IMdRefactoringService;
+import com._1c.g5.v8.dt.metadata.mdclass.DataProcessor;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.refactoring.core.IRefactoring;
+import com.ditrix.edt.mcp.server.HostKind;
 
 /**
  * Issue #975, review round 1. A preview's Xtext passes may hand work to EDT's UI thread, and a BM
@@ -97,7 +100,9 @@ public class MetadataRenamePreviewReadBoundaryTest
             }
         };
         List<IRefactoring> refactorings = refactorings();
-        String preview = service.createMdClassRename(null, "CommonModule.Old", "New", target(), false,
+        DataProcessor target = mock(DataProcessor.class);
+        when(target.getName()).thenReturn("Old");
+        String preview = service.createMdClassRename(null, "DataProcessor.Old", "New", target, false,
             DisableRequest.parse(null), null, 0, new RenameProgress(), mdService(refactorings));
 
         Method render = MetadataRenameService.class.getDeclaredMethod("renderPreview", String.class, String.class,
@@ -105,8 +110,39 @@ public class MetadataRenamePreviewReadBoundaryTest
         render.setAccessible(true);
         // ... followed by the fixed mdclass note on the reference updates the rows cannot list (#994).
         assertEquals("The preview must be exactly the render of what the passes produced",
-            render.invoke(new MetadataRenameService(), "CommonModule.Old", "New", "Old", refactorings, 0,
+            render.invoke(new MetadataRenameService(), "DataProcessor.Old", "New", "Old", refactorings, 0,
                 Map.of(), List.of()) + MetadataRenameService.crossReferenceNote(), preview);
+        verify(target, never()).getTemplates();
+        verify(refactorings.get(0), never()).perform();
+    }
+
+    @Test
+    public void testSpreadsheetGuardRefusalNeverStartsTheNativeRename() throws Exception
+    {
+        Method apply = MetadataRenameService.class.getDeclaredMethod("performRename", IProject.class, String.class,
+            String.class, Collection.class, DisableRequest.class, String.class, RenameProgress.class, String.class,
+            Supplier.class);
+        apply.setAccessible(true);
+        List<IRefactoring> groups = refactorings();
+        RenameProgress progress = new RenameProgress();
+        Supplier<String> refusal = () -> "Saved workbook description could not be verified. Nothing was renamed.";
+        // Keep this apply-boundary unit test independent of the SWT consent dialog. The host-specific
+        // spreadsheet-evidence decisions are covered in SpreadsheetRenameGuardTest.
+        String property = "eclipse.application";
+        String original = System.setProperty(property, HostKind.APPLICATION_ID);
+        try
+        {
+            String result = (String)apply.invoke(new MetadataRenameService(), null, "DataProcessor.Old", "New",
+                groups, DisableRequest.parse(null), null, progress, "metadata object", refusal);
+            assertTrue(result, result.contains(refusal.get()));
+            assertEquals(RenameProgress.Phase.AWAITING_CONSENT, progress.getPhase());
+            verify(groups.get(0), never()).perform();
+        }
+        finally
+        {
+            if (original == null) System.clearProperty(property);
+            else System.setProperty(property, original);
+        }
     }
 
     @Test

@@ -17,7 +17,7 @@ import javax.xml.stream.XMLStreamException;
 
 import com.ditrix.edt.mcp.server.utils.SpreadsheetRenameGuard.LanguageKey;
 
-/** Descriptor-relative reader for the additional spreadsheet files in a rename cascade. */
+/** Descriptor-relative reader for saved spreadsheet headers in a rename. */
 final class ProjectSpreadsheetReader
 {
     private static final int MAX_PATH_DEPTH = 128;
@@ -59,9 +59,13 @@ final class ProjectSpreadsheetReader
             // A securely opened but unsupported header does not establish a description loss.
             return new Evidence(Availability.SECURE, null);
         }
-        catch (IOException | UnsupportedOperationException e)
+        catch (UnsupportedOperationException e)
         {
-            // Do not downgrade to a separate path-based check/open for extra projects.
+            return new Evidence(Availability.UNSUPPORTED_PROVIDER, null);
+        }
+        catch (IOException e)
+        {
+            // Do not downgrade to a separate path-based check/open.
             return new Evidence(Availability.UNVERIFIED, null);
         }
     }
