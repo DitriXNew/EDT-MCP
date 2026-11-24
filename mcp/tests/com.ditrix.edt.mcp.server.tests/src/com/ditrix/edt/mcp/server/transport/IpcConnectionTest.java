@@ -15,6 +15,27 @@ import com.google.gson.*;
 
 public class IpcConnectionTest extends StdioTestSupport
 {
+    @Test public void aNewRequestOnAnOpenPeerDoesNotExtendTheDrain() throws Exception
+    {
+        var frames = new CopyOnWriteArrayList<String>();
+        var drained = new CountDownLatch(1);
+        try (var lifetime = new com.ditrix.edt.mcp.server.HeadlessLifetime(java.time.Duration.ZERO, () -> { });
+             var running = lifetime.tool();
+             var connection = new IpcConnection(new com.ditrix.edt.mcp.server.McpServer(),
+                 new McpProtocolHandler(), frames::add, null, () -> { }, lifetime))
+        {
+            connection.accept(init(1, false)); connection.accept(initialized());
+            lifetime.requestShutdown(drained::countDown);
+            connection.accept(call(2, "test_shutdown"));
+            assertEquals(2, frames.size());
+            var reply = JsonParser.parseString(frames.get(1)).getAsJsonObject();
+            assertEquals(2, reply.get("id").getAsInt());
+            assertEquals("Headless EDT is shutting down", reply.getAsJsonObject("error").get("message").getAsString());
+            running.close();
+            assertEquals(0, drained.getCount());
+        }
+    }
+
     @Test public void aStalledResponseReleasesTheDrainLeaseAfterDetaching() throws Exception
     {
         var deadlines = Executors.newSingleThreadScheduledExecutor();

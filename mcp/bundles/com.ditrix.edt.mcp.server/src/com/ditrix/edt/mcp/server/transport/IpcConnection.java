@@ -30,6 +30,7 @@ import com.google.gson.JsonElement;
 public final class IpcConnection implements AutoCloseable
 {
     private final McpServer server;
+    private final HeadlessLifetime lifetime;
     private final McpProtocolHandler dispatcher;
     private final Consumer<String> sink;
     /** Closes the peer; used when a bounded send cannot make room. */
@@ -64,7 +65,14 @@ public final class IpcConnection implements AutoCloseable
     public IpcConnection(McpServer server, McpProtocolHandler dispatcher, Consumer<String> sink,
         Boolean plainTextMode, Runnable detach)
     {
+        this(server, dispatcher, sink, plainTextMode, detach, currentLifetime());
+    }
+
+    IpcConnection(McpServer server, McpProtocolHandler dispatcher, Consumer<String> sink,
+        Boolean plainTextMode, Runnable detach, HeadlessLifetime lifetime)
+    {
         this.server = server;
+        this.lifetime = lifetime;
         this.dispatcher = dispatcher; this.sink = sink; this.detach = detach;
         this.executor = new InterruptibleToolExecutor(server, dispatcher);
         this.plainTextMode = plainTextMode;
@@ -124,48 +132,57 @@ public final class IpcConnection implements AutoCloseable
         String response = dispatcher.processRequest(frame, request, start, capabilities);
         if (response != null && !id.isJsonNull()) { send(response); }
     }
-
     private void startToolCall(String frame, JsonRpcRequest request, long start, JsonElement id)
     {
+        // Admission is top-level and atomic with the drain. Only admitted requests can
+        // hold a lease through response delivery; refusing a new call must not extend shutdown.
+        var written = lifetime == null ? null : lifetime.tool();
+        if (lifetime != null && written == null)
+        {
+            if (!id.isJsonNull()) { send(StdioBootstrap.error(id, -32603, "Headless EDT is shutting down")); }
+            return;
+        }
         ClientCapabilities client = capabilities;
         Thread waiter = new Thread(() -> {
-            try
+            try (var lease = written)
             {
                 ToolCallResponder responder = new ToolCallResponder.Ipc(response -> { if (!id.isJsonNull()) { send(response); } });
                 String response;
-                // The request is finished only once its response has been written, not when the tool
-                // body returns. Without this outer lease the executor's own lease is the last one,
-                // and a drain starting at that moment stops the transport while this thread is
-                // still serializing - the caller sees an unknown outcome for work that completed.
-                try (var written = lifetimeLease())
-                {
-                    try { response = executor.execute(responder, frame, request, start, client); }
-                    catch (Exception e)
-                    { com.ditrix.edt.mcp.server.Activator.logError("IPC tool execution failed", e);
-                      response = StdioBootstrap.error(id, -32603, "EDT tool execution failed; its outcome may be unknown. Inspect EDT before retrying."); }
-                    if (response != null) { responder.send(response); }
-                }
+                try { response = executor.execute(responder, frame, request, start, client); }
+                catch (Exception e)
+                { Activator.logError("IPC tool execution failed", e);
+                  response = StdioBootstrap.error(id, -32603, "EDT tool execution failed; its outcome may be unknown. Inspect EDT before retrying."); }
+                if (response != null) { responder.send(response); }
             }
             catch (IOException | RuntimeException e) { close(); }
             finally { synchronized (requests) { requests.remove(Thread.currentThread()); } }
         }, "edt-mcp-ipc-request");
         waiter.setDaemon(true);
-        synchronized (requests)
-        { if (!closed) { requests.add(waiter); waiter.start(); } }
+        try
+        {
+            synchronized (requests)
+            {
+                if (!closed)
+                {
+                    requests.add(waiter);
+                    try { waiter.start(); }
+                    catch (RuntimeException | Error e) { requests.remove(waiter); throw e; }
+                    return;
+                }
+            }
+        }
+        catch (RuntimeException | Error e)
+        {
+            if (written != null) { written.close(); }
+            throw e;
+        }
+        if (written != null) { written.close(); }
     }
 
-    /**
-     * A lease covering one request end to end, or {@code null} when there is no headless lifetime.
-     * It is nested by definition: this thread is running a request that already holds one, and the
-     * drain waits for it, so the follow-up work of a running operation is admitted.
-     *
-     * @return the lease to close after the response is written, or null
-     */
-    private static HeadlessLifetime.Lease lifetimeLease()
+    private static HeadlessLifetime currentLifetime()
     {
         var activator = Activator.getDefault();
-        var lifetime = activator == null ? null : activator.getHeadlessLifetime();
-        return lifetime == null ? null : lifetime.nestedTool();
+        return activator == null ? null : activator.getHeadlessLifetime();
     }
 
     private void send(String response)
