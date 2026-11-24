@@ -16,6 +16,7 @@ import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Set;
 import java.util.Map;
 import java.util.Properties;
@@ -43,8 +44,12 @@ import com._1c.g5.v8.dt.core.filesystem.IProjectFileSystemSupport;
 import com._1c.g5.v8.dt.core.filesystem.IProjectFileSystemSupportProvider;
 import com._1c.g5.v8.dt.core.naming.ITopObjectFqnGenerator;
 import com._1c.g5.v8.dt.core.platform.IDtProject;
+import com._1c.g5.v8.dt.core.platform.IExtensionProject;
+import com._1c.g5.v8.dt.core.platform.IV8Project;
+import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
 import com._1c.g5.v8.dt.md.MdPlugin;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicTemplate;
+import com._1c.g5.v8.dt.metadata.mdclass.Language;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.TemplateType;
 import com._1c.g5.v8.dt.moxel.SpreadsheetDocument;
@@ -76,6 +81,49 @@ public final class TemplateContentSupport
 
     private TemplateContentSupport()
     {
+    }
+
+    /**
+     * Snapshot project language CODEs, with the default first. EDT's SheetFactory uses the same
+     * IV8Project language API when creating a spreadsheet. Extensions also need the base project's
+     * languages: a session can use one without that Language being adopted by the extension.
+     * Resolve the parent before entering the template's write transaction (different BM models).
+     *
+     * @param manager EDT's project manager, or null while unavailable
+     * @param project the project that owns the spreadsheet
+     * @return deduplicated language codes, or an empty list when none are available
+     */
+    public static List<String> spreadsheetLanguageCodes(IV8ProjectManager manager, IProject project)
+    {
+        IV8Project target = manager == null || project == null ? null : manager.getProject(project);
+        if (target == null)
+        {
+            return List.of();
+        }
+        IProject parent = target instanceof IExtensionProject extension ? extension.getParentProject() : null;
+        IV8Project base = parent == null ? null : manager.getProject(parent);
+
+        Set<String> codes = new LinkedHashSet<>();
+        addLanguageCode(codes, target.getDefaultLanguage());
+        if (base != null)
+        {
+            addLanguageCode(codes, base.getDefaultLanguage());
+        }
+        target.getLanguages().forEach(language -> addLanguageCode(codes, language));
+        if (base != null)
+        {
+            base.getLanguages().forEach(language -> addLanguageCode(codes, language));
+        }
+        return List.copyOf(codes);
+    }
+
+    private static void addLanguageCode(Set<String> codes, Language language)
+    {
+        String code = language == null ? null : language.getLanguageCode();
+        if (code != null && !code.isBlank())
+        {
+            codes.add(code);
+        }
     }
 
     /** Resolve enum names/literals first, then EDT's own Russian labels (spaces optional). */
