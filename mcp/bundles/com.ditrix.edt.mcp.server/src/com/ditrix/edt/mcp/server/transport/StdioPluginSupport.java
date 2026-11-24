@@ -10,10 +10,12 @@ import com.ditrix.edt.mcp.server.utils.Log;
 
 import java.io.IOException;
 import java.net.URL;
+import java.nio.file.AccessDeniedException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
@@ -37,7 +39,7 @@ public final class StdioPluginSupport
     // Whole-JAR fingerprints of inspected launchers: both read the sibling current pointer,
     // verify the hash-named runtime, and call StdioBootstrap.main(String[]). Trusting a manifest
     // or a class name alone would not prove this contract. Keep this list scoped to this ABI.
-    private static final Set<String> COMPATIBLE_ENTRY_HASHES = Set.of(
+    static final Set<String> COMPATIBLE_ENTRY_HASHES = Set.of(
         "26b2d4c1384cee32e8c5c56cf78b988b9b18a5ae79612d6558e8dbd4f92f3e6b", // v2.26.1
         "958937f8d1b548ce21698317ca0c17ef4a475e40a797de1dfeef72c6d19686f8"  // PR #4 base (a274801c)
     );
@@ -83,7 +85,48 @@ public final class StdioPluginSupport
     @FunctionalInterface
     interface RuntimeDelete { void delete(Path runtime) throws IOException; }
 
+    /** Replaces the fixed-name launcher. Injected so the refusal paths are testable on any OS. */
+    @FunctionalInterface
+    interface EntryReplace
+    {
+        /**
+         * @param destination the fixed-name launcher path
+         * @param bytes the launcher bytes to publish
+         * @return an access denial from the final atomic move, or null when the entry was replaced
+         * @throws IOException when staging or cleanup fails; the entry is then unchanged
+         */
+        AccessDeniedException replace(Path destination, byte[] bytes) throws IOException;
+    }
+
     static Path extractBootstrap(Path directory, byte[] runtime, byte[] entry, RuntimeDelete delete) throws IOException
+    { return extractBootstrap(directory, runtime, entry, delete, StdioPluginSupport::replaceEntry); }
+
+    /**
+     * Replaces the entry through a sibling staging file, so only the final move can be refused by a
+     * client holding the entry open. Staying out of {@link PrivatePaths} keeps the packaged launcher
+     * bytes stable: that class is compiled into the entry jar, and editing it would force every
+     * Windows client to replace an entry whose behaviour did not change.
+     */
+    private static AccessDeniedException replaceEntry(Path destination, byte[] bytes) throws IOException
+    {
+        Path staging = destination.resolveSibling(destination.getFileName() + ".installing");
+        PrivatePaths.noLinks(destination);
+        if (Files.exists(destination, LinkOption.NOFOLLOW_LINKS)) { PrivatePaths.verifyFile(destination); }
+        try
+        {
+            PrivatePaths.atomicWrite(staging, bytes);
+            try
+            {
+                Files.move(staging, destination, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+                return null;
+            }
+            catch (AccessDeniedException e) { return e; }
+        }
+        finally { Files.deleteIfExists(staging); }
+    }
+
+    static Path extractBootstrap(Path directory, byte[] runtime, byte[] entry, RuntimeDelete delete, EntryReplace replace)
+        throws IOException
     {
         Path destination = directory.resolve("edt-mcp-bootstrap.jar");
         try (var channel = PrivatePaths.lockFile(directory.resolve("extract.lock"));
@@ -106,7 +149,7 @@ public final class StdioPluginSupport
             {
                 publishRuntimePointer(directory, previous, current, delete);
                 if (identical) { return destination; }
-                var refusal = PrivatePaths.atomicWriteReportingMoveDenial(destination, entry);
+                var refusal = replace.replace(destination, entry);
                 if (refusal != null)
                 {
                     if (!Arrays.equals(existing, existingJar(destination)))
@@ -118,7 +161,7 @@ public final class StdioPluginSupport
                 }
                 return destination;
             }
-            var refusal = PrivatePaths.atomicWriteReportingMoveDenial(destination, entry);
+            var refusal = replace.replace(destination, entry);
             if (refusal != null)
             {
                 // Nothing was published, so three generations must survive: the staged runtime for

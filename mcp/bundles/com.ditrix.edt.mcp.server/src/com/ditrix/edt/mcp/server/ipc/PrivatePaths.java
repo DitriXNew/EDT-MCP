@@ -237,13 +237,6 @@ public final class PrivatePaths
 
     public static void atomicWrite(Path destination, byte[] bytes) throws IOException
     {
-        AccessDeniedException refusal = atomicWriteReportingMoveDenial(destination, bytes);
-        if (refusal != null) { throw refusal; }
-    }
-
-    /** Returns an access denial only from the atomic move, and only after staging cleanup succeeds. */
-    public static AccessDeniedException atomicWriteReportingMoveDenial(Path destination, byte[] bytes) throws IOException
-    {
         verifyDirectory(destination.getParent());
         noLinks(destination);
         if (Files.exists(destination, LinkOption.NOFOLLOW_LINKS)) { verifyFile(destination); }
@@ -251,12 +244,7 @@ public final class PrivatePaths
         try
         {
             Files.write(temporary, bytes);
-            try
-            {
-                Files.move(temporary, destination, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-                return null;
-            }
-            catch (AccessDeniedException e) { return e; }
+            Files.move(temporary, destination, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
         }
         finally { Files.deleteIfExists(temporary); }
     }

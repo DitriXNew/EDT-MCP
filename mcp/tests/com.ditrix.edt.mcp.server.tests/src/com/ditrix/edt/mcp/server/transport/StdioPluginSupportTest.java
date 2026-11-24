@@ -51,6 +51,70 @@ public class StdioPluginSupportTest extends StdioTestSupport
     private static Path extract(Path directory, byte[] runtime) throws IOException
     { return StdioPluginSupport.extractBootstrap(directory, runtime, ENTRY, Files::delete); }
 
+    /** The final entry move fails as it does on Windows with a connected client holding the jar. */
+    private static StdioPluginSupport.EntryReplace refusedMove()
+    { return (destination, bytes) -> new AccessDeniedException(destination.toString()); }
+
+    private static Path extractWithRefusal(Path directory, byte[] runtime, byte[] entry)
+        throws IOException
+    { return StdioPluginSupport.extractBootstrap(directory, runtime, entry, Files::delete, refusedMove()); }
+
+    private static String packagedEntryFingerprint() throws Exception
+    { return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(packagedEntry())); }
+
+    /**
+     * Ratchets the compatibility allowlist against the launcher this build ships. The entry bytes
+     * are reproducible, so a launcher change fails here until the decision is made explicitly:
+     * either the new entry is ABI-compatible with those already in the list and is added, or the
+     * change is an ABI break and the list deliberately stays as it is.
+     */
+    @Test public void theShippedLauncherIsEitherListedOrADeliberateAbiBreak() throws Exception
+    {
+        String fingerprint = packagedEntryFingerprint();
+        assertTrue("The launcher this build ships is not on COMPATIBLE_ENTRY_HASHES. If its ABI is"
+                + " unchanged, add " + fingerprint + " to the set; if this is a deliberate ABI break,"
+                + " leave the set alone and record why in docs/stdio.md.",
+            StdioPluginSupport.COMPATIBLE_ENTRY_HASHES.contains(fingerprint));
+    }
+
+    @Test public void aRefusedCompatibleSwapStillPublishesTheNewRuntime() throws Exception
+    {
+        Path directory = seeded();
+        Path entry = directory.resolve("edt-mcp-bootstrap.jar");
+        byte[] held = releasedEntry();
+        PrivatePaths.atomicWrite(entry, held);
+        assertEquals(entry, extractWithRefusal(directory, CURRENT, packagedEntry()));
+        assertEquals(runtimeName(CURRENT) + "\n", Files.readString(directory.resolve("current")));
+        assertArrayEquals(held, Files.readAllBytes(entry));
+        assertListing(directory, "current", "previous", "extract.lock", "edt-mcp-bootstrap.jar",
+            runtimeName(PREVIOUS), runtimeName(CURRENT));
+    }
+
+    @Test public void aRefusedIncompatibleSwapFailsClosedAndPublishesNothing() throws Exception
+    {
+        Path directory = seeded();
+        PrivatePaths.atomicWrite(directory.resolve("previous"),
+            (runtimeName(OLD) + "\n").getBytes(StandardCharsets.UTF_8));
+        Path entry = directory.resolve("edt-mcp-bootstrap.jar");
+        PrivatePaths.atomicWrite(entry, ENTRY);
+        assertThrows(IOException.class, () -> extractWithRefusal(directory, CURRENT, packagedEntry()));
+        assertEquals(runtimeName(PREVIOUS) + "\n", Files.readString(directory.resolve("current")));
+        assertEquals(runtimeName(OLD) + "\n", Files.readString(directory.resolve("previous")));
+        assertArrayEquals(ENTRY, Files.readAllBytes(entry));
+        assertListing(directory, "current", "previous", "extract.lock", "edt-mcp-bootstrap.jar",
+            runtimeName(OLD), runtimeName(PREVIOUS), runtimeName(CURRENT));
+    }
+
+    @Test public void aDanglingEntryIsRefusedWithoutPublishingThePointer() throws Exception
+    {
+        Path directory = seeded();
+        Path link = directory.resolve("edt-mcp-bootstrap.jar");
+        try { Files.createSymbolicLink(link, directory.resolve("missing-entry")); }
+        catch (IOException | UnsupportedOperationException e) { Assume.assumeNoException(e); }
+        assertThrows(IOException.class, () -> extractWithRefusal(directory, CURRENT, packagedEntry()));
+        assertEquals(runtimeName(PREVIOUS) + "\n", Files.readString(directory.resolve("current")));
+    }
+
     @Test public void removesOldRuntimeAfterPublishingCurrent() throws Exception
     {
         Path directory = seeded();
