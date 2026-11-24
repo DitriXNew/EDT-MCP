@@ -138,17 +138,28 @@ public class IpcConnectionTest extends StdioTestSupport
                 assertEquals(1, frames.size());
                 connection.accept("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/host_shutdown\",\"id\":7}");
                 assertEquals("A request with an id must not stop the host", 0, shutdowns.get());
+                awaitFrames(frames, 2);
+                assertEquals("An id is answered rather than left waiting", 2, frames.size());
+                var refusal = JsonParser.parseString(frames.get(1)).getAsJsonObject();
+                assertEquals(7, refusal.get("id").getAsInt());
+                assertTrue(refusal.has("error"));
                 connection.accept(SHUTDOWN);
-                assertEquals("No reply before cleanup", 1, frames.size());
+                awaitFrames(frames, 3);
+                assertEquals("The decision is the first thing the host sends", 3, frames.size());
+                assertEquals(McpConstants.METHOD_HOST_SHUTDOWN_ACCEPTED,
+                    JsonParser.parseString(frames.get(2)).getAsJsonObject().get("method").getAsString());
                 assertEquals(1, shutdowns.get());
-                // A repeat while the host is already stopping must not start a second cycle, and an
-                // id on it must not be answered either: the method is a notification, not a request.
-                connection.accept("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/host_shutdown\",\"id\":7}");
-                assertEquals("A repeat is a no-op, not a second closing cycle", 1, shutdowns.get());
-                assertEquals("An id on it must not produce a reply", 1, frames.size());
+                // A repeat while the host is already stopping must not start a second cycle; it is
+                // still answered as accepted, because the process really is going down.
+                connection.accept(SHUTDOWN);
+                awaitFrames(frames, 4);
+                assertEquals("A repeat is not a second closing cycle", 1, shutdowns.get());
+                assertEquals(McpConstants.METHOD_HOST_SHUTDOWN_ACCEPTED,
+                    JsonParser.parseString(frames.get(3)).getAsJsonObject().get("method").getAsString());
                 receipt.get().accept(true);
-                assertEquals(2, frames.size());
-                var message = JsonParser.parseString(frames.get(1)).getAsJsonObject();
+                awaitFrames(frames, 5);
+                assertEquals(5, frames.size());
+                var message = JsonParser.parseString(frames.get(4)).getAsJsonObject();
                 assertFalse(message.has("id"));
                 assertEquals("notifications/host_shutdown_complete", message.get("method").getAsString());
                 assertTrue(message.getAsJsonObject("params").get("success").getAsBoolean());
@@ -176,8 +187,10 @@ public class IpcConnectionTest extends StdioTestSupport
             var release = new java.util.concurrent.CountDownLatch(1);
             // The first frame (the initialize reply) passes; everything after it is stuck, which
             // is what a client that stopped reading looks like from the host side.
+            // Frame 1 is the initialize reply, frame 2 the accepted decision; everything after
+            // that is stuck, which is what a client that stopped reading looks like from the host.
             java.util.function.Consumer<String> sink = json -> {
-                if (sends.incrementAndGet() > 1)
+                if (sends.incrementAndGet() > 2)
                 {
                     held.countDown();
                     try { release.await(); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
@@ -223,11 +236,14 @@ public class IpcConnectionTest extends StdioTestSupport
             {
                 connection.accept(init(1, false)); connection.accept(initialized());
                 connection.accept(SHUTDOWN);
-                assertEquals("A refused shutdown changes nothing on the wire", 1, frames.size());
-                connection.accept(call(2, "test_shutdown"));
                 awaitFrames(frames, 2);
-                assertEquals(2, frames.size());
-                var result = JsonParser.parseString(frames.get(1)).getAsJsonObject().getAsJsonObject("result");
+                assertEquals("A refused shutdown is answered", 2, frames.size());
+                assertEquals(McpConstants.METHOD_HOST_SHUTDOWN_REFUSED,
+                    JsonParser.parseString(frames.get(1)).getAsJsonObject().get("method").getAsString());
+                connection.accept(call(2, "test_shutdown"));
+                awaitFrames(frames, 3);
+                assertEquals(3, frames.size());
+                var result = JsonParser.parseString(frames.get(2)).getAsJsonObject().getAsJsonObject("result");
                 assertEquals("{\"value\":\"alive\"}",
                     result.getAsJsonObject("structuredContent").toString());
             }
@@ -253,6 +269,9 @@ public class IpcConnectionTest extends StdioTestSupport
                 connection.accept(init(1, false)); connection.accept(initialized());
                 connection.accept(SHUTDOWN);
                 assertEquals(1, shutdowns.get());
+                awaitFrames(frames, 2);
+                assertEquals(McpConstants.METHOD_HOST_SHUTDOWN_ACCEPTED,
+                    JsonParser.parseString(frames.get(1)).getAsJsonObject().get("method").getAsString());
             }
         }
         finally { registry.replaceAll(saved); }

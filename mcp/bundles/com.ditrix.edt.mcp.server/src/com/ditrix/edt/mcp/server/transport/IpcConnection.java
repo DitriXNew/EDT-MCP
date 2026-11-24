@@ -37,6 +37,13 @@ public final class IpcConnection implements AutoCloseable
     private final Boolean plainTextMode;
     /** How long a client gets to take the shutdown receipt before its socket is closed. */
     private static final long RECEIPT_TIMEOUT_MILLIS = 5000;
+
+    /** A shutdown notification frame; {@code params} is null for the plain accepted/refused ones. */
+    private static String receipt(String method, String params)
+    {
+        return "{\"jsonrpc\":\"2.0\",\"method\":\"" + method + "\""
+            + (params == null ? "" : ",\"params\":{" + params + "}") + "}";
+    }
     private final Set<Thread> requests = new HashSet<>();
     private volatile boolean closed;
     private ClientCapabilities capabilities = ClientCapabilities.ABSENT;
@@ -90,12 +97,24 @@ public final class IpcConnection implements AutoCloseable
         }
         else if (McpConstants.METHOD_HOST_SHUTDOWN.equals(request.getMethod()))
         {
-            // A notification: no response frame, and the connection's handshake secret plus this
-            // gate are the whole authorization. A host with no shutdown channel logs the refusal
-            // and keeps running.
+            // The connection's handshake secret plus this gate are the whole authorization. The
+            // answer is immediate: "accepted" means this host is going down and the caller must
+            // wait for the exit, "refused" means it keeps running and must NOT be killed.
             if (!tree.has("id")) {
-                server.requestHostShutdown(success -> sendBounded("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/host_shutdown_complete\",\"params\":{\"success\":"
-                    + success + "}}"));
+                // Answer before starting: the accepted receipt must reach the client before the
+                // host begins closing, and the refused one tells it the process keeps running.
+                boolean accepted = server.hostShutdownArmed();
+                sendBounded(receipt(accepted ? McpConstants.METHOD_HOST_SHUTDOWN_ACCEPTED
+                    : McpConstants.METHOD_HOST_SHUTDOWN_REFUSED, null));
+                if (accepted) { server.requestHostShutdown(success -> sendBounded(receipt(
+                    McpConstants.METHOD_HOST_SHUTDOWN_COMPLETE, "\"success\":" + success))); }
+            }
+            else
+            {
+                // A request with an id expects a response, and an unanswered id leaves the
+                // client waiting forever. Answer it, without starting anything.
+                send(StdioBootstrap.error(id, -32600,
+                    McpConstants.METHOD_HOST_SHUTDOWN + " is a notification; send it without an id."));
             }
             return;
         }

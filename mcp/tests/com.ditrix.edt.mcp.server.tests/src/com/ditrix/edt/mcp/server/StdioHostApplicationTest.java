@@ -23,9 +23,9 @@ import org.junit.Test;
 public class StdioHostApplicationTest
 {
     /**
-     * Minimal context: only {@link #applicationRunning()} is ever called on it, and a Mockito jar
-     * is not part of this fragment's target platform - the interface has nine methods, so a fake
-     * is cheaper than a mock library that is not there.
+     * Minimal context: only {@link #applicationRunning()} is ever called on it. A fake is used
+     * rather than a mock because the interface has nine methods and none of the other eight is
+     * exercised here, not because Mockito is unavailable - the workspace tests below use it.
      */
     private static class Context implements IApplicationContext {
         boolean running;
@@ -48,12 +48,12 @@ public class StdioHostApplicationTest
         boolean ipc = true;
         boolean stopOnCore = true;
         StdioHostApplication app;
-        java.util.function.Consumer<java.util.function.Consumer<Boolean>> shutdown;
+        com.ditrix.edt.mcp.server.McpServer.HostShutdown shutdown;
         final java.util.concurrent.CountDownLatch coreStarted = new java.util.concurrent.CountDownLatch(1);
         private void step(String name) { calls.add(name); if (name.equals(failAt)) { throw new IllegalStateException(name); } }
         public boolean lockWorkspace() { step("lock"); return lock; }
         public void initialize() { step("initialize"); }
-        public void armHostShutdown(java.util.function.Consumer<java.util.function.Consumer<Boolean>> action) { step("arm"); shutdown = action; }
+        public void armHostShutdown(com.ditrix.edt.mcp.server.McpServer.HostShutdown action) { step("arm"); shutdown = action; }
         public void startCore(HeadlessLifetime lifetime) { step("core"); coreStarted.countDown(); if (stopOnCore) { app.stop(); } }
         public boolean ipcRunning() { step("ipc"); return ipc; }
         public void stopContexts() { step("stop"); }

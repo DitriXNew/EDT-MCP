@@ -45,11 +45,38 @@ public final class HeadlessLifetime implements AutoCloseable
     }
 
     public synchronized Lease connect() { return acquire(true); }
+
+    /**
+     * Admits a new top-level tool call. Refused once the drain has begun.
+     *
+     * @return the lease, or {@code null} when the call arrived after the drain started
+     */
     public synchronized Lease tool() { return acquire(false); }
 
-    private Lease acquire(boolean client)
+    /**
+     * Admits tool work started by an operation that is already running - the follow-up a tool
+     * schedules after its own commit. While any lease is held the drain is still waiting for the
+     * work in flight, so this nested work must be admitted or the operation fails halfway; once
+     * every lease is released the drain completes and nothing further is admitted.
+     *
+     * @return the lease, or {@code null} when no operation is in flight
+     */
+    public synchronized Lease nestedTool()
     {
-        if (stopping) { return null; }
+        // Normally a nested lease is just a lease. It only needs the drain exception once the
+        // shutdown has begun, and then only while an operation is still in flight - the work it is
+        // finishing. With nothing in flight there is nothing for it to belong to.
+        if (!stopping) { return acquire(false); }
+        return tools == 0 ? null : acquire(false, true);
+    }
+
+    private Lease acquire(boolean client) { return acquire(client, false); }
+
+    private Lease acquire(boolean client, boolean nested)
+    {
+        // New work is refused once the drain began; a nested lease is the work the drain is
+        // waiting for, so it is admitted while an operation is still in flight.
+        if (stopping && (!nested || tools == 0)) { return null; }
         cancel();
         if (client) { clients++; } else { tools++; }
         return new Lease() {
@@ -71,7 +98,10 @@ public final class HeadlessLifetime implements AutoCloseable
         };
     }
 
-    /** Stop admitting connections and operations, but leave existing sockets open for completion. */
+    /**
+     * Stop admitting connections and new top-level operations, but let the operations already
+     * running finish - including the nested leases they take for their own follow-up work.
+     */
     public void requestShutdown(Runnable drained)
     {
         synchronized (this) {

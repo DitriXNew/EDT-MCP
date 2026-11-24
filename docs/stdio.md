@@ -49,9 +49,11 @@ The stdio drivers share 22 windowed response pins through `tests/e2e/read_host_c
 
 An idle timeout is not a control channel: a wrapper that has to release a workspace cannot wait 30 minutes, and killing the JVM leaves the workspace lock held and the model unsaved. A client can therefore ask for the same clean close the idle timer performs, with `notifications/host_shutdown` - a plugin extension to MCP, not a protocol method.
 
-An initialized IPC client can send this notification without an `id`. The host stops admitting new operations and waits for active tools and tracked background jobs to finish before closing the project contexts, saving the workspace and releasing its lock. There is no JSON-RPC response. After cleanup, the host sends a separate `notifications/host_shutdown_complete` notification with `params.success` to the requesting connection and then closes the transport. Repeated requests do not start another shutdown.
+An initialized IPC client can send this notification without an `id`. The host answers immediately with `notifications/host_shutdown_accepted` when it will shut down, or `notifications/host_shutdown_refused` when it will not, and only then begins closing: the decision must reach the client before the teardown it describes. An `id` on the method gets a JSON-RPC error rather than being left unanswered, because the method is a notification.
 
-Only the headless application arms the channel. The windowed IDE leaves it empty, refuses the notification with a log entry, and keeps the session - a client must never be able to close the user's IDE. The channel requires a live connection, so a client that has already disconnected cannot ask for anything; a wrapper that needs a guarantee keeps a bounded kill as its reserve.
+After `accepted` the host stops admitting new operations and waits for active tools and tracked background jobs to finish before closing the project contexts, saving the workspace and releasing its lock. Work that a *running* operation schedules for itself - the follow-up a tool posts after its own commit - is still admitted, or the operation would be left half-done. When cleanup ends, the host sends `notifications/host_shutdown_complete` with `params.success` to the requesting connection and then closes the transport. Repeated requests do not start another shutdown, and each is answered as accepted while the first one owns the completion.
+
+Only the headless application arms the channel. The windowed IDE leaves it empty and answers `refused` - a client must never be able to close the user's IDE, and `refused` is a distinct answer precisely so that a wrapper never kills a host that answered it. The channel requires a live connection, so a client that has already disconnected cannot ask for anything; a wrapper that needs a guarantee keeps a bounded kill as its reserve.
 
 The sender is `com.ditrix.edt.mcp.server.ipc.HostShutdownClient` on the shipped runtime jar - the bootstrap already owns the framing and the handshake secret, so a shell script does not implement the protocol:
 
@@ -60,7 +62,14 @@ java -cp <private root>/bootstrap/<install hash>/<sha256>.jar \
      com.ditrix.edt.mcp.server.ipc.HostShutdownClient -data <workspace> [-timeout <seconds>]
 ```
 
-The CLI uses one timeout for the IPC exchange and process exit. Exit `0` requires both a successful cleanup notification and exit of the original process; an EOF or a vanished process alone is not success. Exit `1` means the shutdown could not be confirmed, including failed cleanup or an older host that does not recognize the notification. Exit `2` means no live host was found. `-install` is accepted and ignored. Full workspace save counts as successful only when Eclipse reports OK. A warning, any other non-OK status, or an exception is logged and leaves shutdown unconfirmed, even if the process exits.
+The CLI treats the answer and the exit as two separate budgets: the decision arrives immediately, and the wait for the process exit then has the full `-timeout`. The exit codes are distinct on purpose:
+
+- **`0`** - the host accepted and its process exited. Only this says the workspace was closed cleanly.
+- **`1`** - accepted, but the process did not exit within the budget, or the state could not be determined. A failed full save also leaves the cleanup unconfirmed. A bounded force-kill is the caller's reserve.
+- **`2`** - nothing to stop: no live host is registered for the workspace.
+- **`3`** - the host answered `refused`. It is still running deliberately, so a wrapper must **not** kill it.
+
+An older host that answers the completion notification without a decision is understood as before. `-install` is accepted and ignored. Full workspace save counts as successful only when Eclipse reports OK. A warning, any other non-OK status, or an exception is logged and leaves shutdown unconfirmed, even if the process exits.
 
 A headless host exits cleanly after 30 minutes with no connected client and no running MCP tool or tracked background job, stopping project contexts and saving the workspace. Set the host JVM property `-Dedt.mcp.headlessIdleMinutes=<minutes>` to change the interval; `0` disables it. The timer restarts when the last client and last tool finish. A disconnected client's tool retains its lease until the operation actually finishes, even if its response waiter has detached. Windowed EDT continues to stay open until the user closes it.
 

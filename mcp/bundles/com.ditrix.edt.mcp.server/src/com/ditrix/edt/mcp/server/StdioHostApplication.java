@@ -23,7 +23,7 @@ public class StdioHostApplication implements IApplication
          *
          * @param shutdown accepts a callback to receive the result of workspace cleanup
          */
-        void armHostShutdown(Consumer<Consumer<Boolean>> shutdown);
+        void armHostShutdown(McpServer.HostShutdown shutdown);
         default void stopTransport() { }
         void startCore(HeadlessLifetime lifetime) throws Exception;
         boolean ipcRunning();

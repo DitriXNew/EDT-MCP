@@ -61,17 +61,38 @@ public class HostShutdownClientTest
         private final CountDownLatch shutdown = new CountDownLatch(1);
 
         FakeHost(EndpointRegistry registry, Boolean initializes, Boolean receipt) throws Exception
+        { this(registry, initializes, receipt, true); }
+
+        FakeHost(EndpointRegistry registry, Boolean initializes, Boolean receipt, boolean accepted) throws Exception
+        { this(registry, initializes, receipt, accepted, null); }
+
+        /**
+         * @param process the process the endpoint names, so the exit wait has something to observe;
+         *            null names this test JVM, which never exits
+         */
+        FakeHost(EndpointRegistry registry, Boolean initializes, Boolean receipt, boolean accepted, Process process) throws Exception
         {
             Path socket = registry.directory().resolve("s-client-test");
+            long pid = process == null ? ProcessHandle.current().pid() : process.pid();
+            String start = process == null
+                ? ProcessHandle.current().info().startInstant().orElseThrow().toString()
+                : process.info().startInstant().orElseThrow().toString();
             registry.publish(new EndpointRegistry.Endpoint(registry.workspace().toString(), "client-test",
-                ProcessHandle.current().pid(), ProcessHandle.current().info().startInstant().orElseThrow().toString(),
-                "2.26.1", EndpointRegistry.IPC_VERSION, socket.toString(), "test-secret"));
+                pid, start, "2.26.1", EndpointRegistry.IPC_VERSION, socket.toString(), "test-secret"));
             server = ServerSocketChannel.open(StandardProtocolFamily.UNIX);
             server.bind(UnixDomainSocketAddress.of(socket));
-            worker.execute(() -> serve(registry, initializes, receipt));
+            worker.execute(() -> serve(registry, initializes, receipt, accepted));
         }
 
-        private void serve(EndpointRegistry registry, Boolean initializes, Boolean receipt)
+        /** The host's decision frame: accepted means it is closing, refused means it keeps running. */
+        private static String decision(boolean accepted)
+        {
+            return accepted
+                ? "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/host_shutdown_accepted\"}"
+                : "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/host_shutdown_refused\"}";
+        }
+
+        private void serve(EndpointRegistry registry, Boolean initializes, Boolean receipt, boolean accepted)
         {
             try (var channel = server.accept(); var socket = new JsonFrames.Socket(channel))
             {
@@ -90,7 +111,9 @@ public class HostShutdownClientTest
                     }
                     if (SHUTDOWN_METHOD.equals(method)) {
                         shutdown.countDown();
-                        if (receipt == null) { return; }
+                        // The decision comes first, exactly as the real host sends it.
+                        socket.write(decision(accepted));
+                        if (!accepted || receipt == null) { return; }
                         socket.write("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/tools/list_changed\"}");
                         socket.write("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/host_shutdown_complete\",\"params\":{\"success\":" + receipt + "}}");
                     }
@@ -119,12 +142,12 @@ public class HostShutdownClientTest
         ByteArrayOutputStream messages = new ByteArrayOutputStream();
         try (var host = new FakeHost(registry, true, true))
         {
-            // Exit code 1: this FakeHost never exits, which is exactly the "did not stop" outcome -
-            // and it is what a host running a plugin older than the notification reports too.
+            // Exit code 1: this FakeHost accepts but never exits, which is the "did not stop"
+            // outcome - the state the caller may still force-kill.
             assertEquals(HostShutdownClient.NOT_STOPPED,
                 HostShutdownClient.stop(registry.directory(), registry.workspace(), 500, sink(messages)));
             assertTrue(host.sawShutdown());
-            assertTrue(text(messages), text(messages).contains("did not close"));
+            assertTrue(text(messages), text(messages).contains("still running"));
         }
     }
 
@@ -234,6 +257,72 @@ public class HostShutdownClientTest
         assertEquals(HostShutdownClient.NOT_STOPPED,
             HostShutdownClient.stop(file.resolve("child"), registry.workspace(), 500, sink(messages)));
         assertTrue(text(messages), text(messages).contains("unknown"));
+    }
+
+    /** A child that stays alive long enough to be asked, then exits on its own. */
+    public static final class SleepThenExit
+    {
+        public static void main(String[] args) throws Exception { Thread.sleep(Long.parseLong(args[0])); }
+    }
+
+    private static Process spawnShortLivedChild(long millis) throws Exception
+    {
+        Path java = Path.of(System.getProperty("java.home"), "bin",
+            System.getProperty("os.name").startsWith("Windows") ? "java.exe" : "java");
+        Assume.assumeTrue("A java launcher is required to observe a real exit", Files.isExecutable(java));
+        String classpath = Path.of(SleepThenExit.class.getProtectionDomain().getCodeSource().getLocation().toURI())
+            .toString();
+        return new ProcessBuilder(java.toString(), "-cp", classpath, SleepThenExit.class.getName(),
+            Long.toString(millis)).redirectErrorStream(true).start();
+    }
+
+    @Test public void aHostThatAcceptsAndExitsIsReportedAsStopped() throws Exception
+    {
+        // The STOPPED branch: the host accepts, and the process it named really goes away. This is
+        // the only exit code that says the workspace was closed cleanly.
+        var registry = registry();
+        var messages = new ByteArrayOutputStream();
+        Process child = spawnShortLivedChild(2000);
+        try
+        {
+            try (var host = new FakeHost(registry, true, true, true, child))
+            {
+                assertEquals(HostShutdownClient.STOPPED,
+                    HostShutdownClient.stop(registry.directory(), registry.workspace(), 10000, sink(messages)));
+                assertTrue(host.sawShutdown());
+                assertEquals("A clean stop says nothing on stderr", "", text(messages));
+            }
+        }
+        finally { child.destroyForcibly(); child.waitFor(); }
+    }
+
+    @Test public void aHostThatRefusesIsNotReportedAsStoppedAndMustNotBeKilled() throws Exception
+    {
+        // An interactive EDT answers "refused" and keeps running. Reporting NOT_STOPPED here would
+        // let a wrapper kill the user's IDE, which is the one thing the contract must prevent.
+        var registry = registry();
+        var messages = new ByteArrayOutputStream();
+        try (var host = new FakeHost(registry, true, null, false))
+        {
+            assertEquals(HostShutdownClient.REFUSED,
+                HostShutdownClient.stop(registry.directory(), registry.workspace(), 1000, sink(messages)));
+            assertTrue(text(messages), text(messages).contains("refused to shut down"));
+            assertTrue(text(messages), text(messages).contains("do not kill it"));
+        }
+    }
+
+
+    @Test public void anAcceptedRequestThatNeverExitsIsNotSuccess() throws Exception
+    {
+        // Accepted means "wait for the exit", not "stopped": this host answers but never closes.
+        var registry = registry();
+        var messages = new ByteArrayOutputStream();
+        try (var host = new FakeHost(registry, true, null, true))
+        {
+            assertEquals(HostShutdownClient.NOT_STOPPED,
+                HostShutdownClient.stop(registry.directory(), registry.workspace(), 1000, sink(messages)));
+            assertTrue(text(messages), text(messages).contains("still running"));
+        }
     }
 
     @Test public void aWorkspaceLockedByAHostWithoutAnEndpointIsNotReportedAsNoHost() throws Exception
@@ -471,7 +560,7 @@ public class HostShutdownClientTest
                 assertEquals(HostShutdownClient.NOT_STOPPED,
                     HostShutdownClient.stop(registry.directory(), registry.workspace(), 1000, sink(messages)));
                 assertTrue(host.methods.contains(SHUTDOWN_METHOD));
-                assertTrue(text(messages), text(messages).contains("receipt was missing or reported failure"));
+                assertTrue(text(messages), text(messages).contains("still running"));
             }
         }
     }

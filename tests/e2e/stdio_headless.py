@@ -51,6 +51,51 @@ def call(client, name, arguments):
     return response["result"]
 
 
+def run_command_stop(java, install, root):
+    """The external stop command against its own real host: the wrapper's exact call.
+
+    A second host and workspace, because the first one has already saved and stopped. Exit 0 is the
+    only code that says the workspace was closed cleanly, so a kill or a timeout must not pass.
+    """
+    workspace = root / "command-stop-workspace"
+    workspace.mkdir()
+    log = root / "command-stop.log"
+    environment = host_environment(root / "project")
+    platform_home = root / "command-stop-home"
+    platform_home.mkdir()
+    environment["HOME"] = str(platform_home)
+    with log.open("wb") as output:
+        host = subprocess.Popen(launch_command(java, install, workspace), env=environment,
+                                stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.STDOUT)
+        try:
+            deadline = time.monotonic() + int(os.environ.get("E2E_PROJECT_READY_TIMEOUT", "1200"))
+            while True:
+                if host.poll() is not None:
+                    raise AssertionError("Command-stop host exited before IPC; inspect " + str(log))
+                try:
+                    jar, _ = discover(workspace)
+                    break
+                except (AssertionError, OSError):
+                    if time.monotonic() >= deadline:
+                        raise AssertionError("Command-stop host did not publish IPC; inspect " + str(log)) from None
+                    time.sleep(1)
+            runtime = Path(jar).parent / (Path(jar).parent / "current").read_text(encoding="utf-8").strip()
+            stop = subprocess.run(
+                [str(java), "-cp", str(runtime), "com.ditrix.edt.mcp.server.ipc.HostShutdownClient",
+                 "-data", str(workspace), "-timeout", "180"],
+                capture_output=True, text=True, timeout=300)
+            assert stop.returncode == 0, (
+                "The host must accept the stop command and exit cleanly: exit " + str(stop.returncode)
+                + " stderr=" + stop.stderr.strip())
+            assert host.wait(timeout=180) == 0, "An accepted stop must be a clean exit, not a kill"
+            command_log = (workspace / ".metadata/.log").read_text(encoding="utf-8", errors="replace")
+            assert "EDT MCP headless workspace saved" in command_log, "The stop command must save the workspace"
+        finally:
+            if host.poll() is None:
+                host.kill()
+                host.wait(timeout=60)
+
+
 def main():
     if os.name != "posix":
         raise AssertionError("This acceptance starts a Linux host directly; Windows cold start is a separate live check")
@@ -160,7 +205,8 @@ def main():
             assert "EDT MCP headless host failed" not in workspace_log
             assert "Failed to auto-start MCP Server" not in workspace_log
             assert "MCP Server auto-started on port" not in workspace_log
-            print("stdio headless: real BSL/BM reads, confirmed writes checked on disk, read-only preset bypass, UI refusal, pure stdout, idle save PASS")
+            run_command_stop(java, install, root)
+            print("stdio headless: real BSL/BM reads, confirmed writes checked on disk, read-only preset bypass, UI refusal, pure stdout, idle save, command stop with clean save PASS")
         finally:
             if client is not None:
                 client.close()

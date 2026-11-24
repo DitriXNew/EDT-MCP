@@ -111,6 +111,30 @@ public class HeadlessLifetimeTest
         }
     }
 
+    @Test public void theDrainLetsAnInFlightOperationFinishItsOwnFollowUp() {
+        // The work a running tool schedules after its commit is what the drain is waiting for:
+        // refusing it would leave the operation half-done. New top-level work is still refused.
+        Clock clock = new Clock(); AtomicInteger drained = new AtomicInteger();
+        try (var lifetime = new HeadlessLifetime(IDLE, clock, () -> fail("Idle fired during shutdown"));
+             var tool = lifetime.tool()) {
+            lifetime.requestShutdown(drained::incrementAndGet);
+            assertNull("New top-level work is refused", lifetime.tool());
+            try (var nested = lifetime.nestedTool()) { assertNotNull("Follow-up work must be admitted", nested); }
+            assertEquals("The drain waits for the outer lease", 0, drained.get());
+            tool.close();
+            assertEquals("The drain completes once the operation ends", 1, drained.get());
+            assertNull("Nothing is admitted after the drain", lifetime.nestedTool());
+        }
+    }
+
+    @Test public void aNestedLeaseWithoutShutdownIsAnOrdinaryLease() {
+        Clock clock = new Clock();
+        try (var lifetime = new HeadlessLifetime(IDLE, clock, () -> fail("Idle fired"))) {
+            try (var nested = lifetime.nestedTool()) { assertNotNull(nested); }
+            assertEquals("A finished nested lease re-arms the idle timer", 2, clock.tasks.size());
+        }
+    }
+
     @Test public void closeDisarmsQueuedExpiry() {
         Clock clock = new Clock();
         var lifetime = new HeadlessLifetime(IDLE, clock, () -> fail("Closed"));

@@ -9,19 +9,17 @@ import java.io.IOException;
 import java.io.PrintStream;
 import java.net.StandardProtocolFamily;
 import java.net.UnixDomainSocketAddress;
-import java.nio.channels.FileChannel;
-import java.nio.channels.FileLock;
 import java.nio.channels.SocketChannel;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
 import java.nio.file.LinkOption;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import com.ditrix.edt.mcp.server.protocol.McpConstants;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
@@ -39,10 +37,12 @@ import com.google.gson.JsonParser;
  * the JVM.
  * <h2>Exit codes</h2>
  * <ul>
- * <li>{@value #STOPPED} - the request was delivered and the host exited.</li>
- * <li>{@value #NOT_STOPPED} - nothing confirmed the stop within the timeout; the caller decides
- * whether to force-kill, and a host running an older plugin that ignores the notification lands
- * here.</li>
+ * <li>{@value #STOPPED} - the host accepted the request and exited.</li>
+ * <li>{@value #REFUSED} - the host answered that it will not shut down. It keeps running, and
+ * killing it is wrong: this is an interactive EDT, or a host that does not implement the
+ * notification.</li>
+ * <li>{@value #NOT_STOPPED} - the host accepted but did not exit, or the answer never arrived, so
+ * the state is unknown. A bounded force-kill is the caller's reserve.</li>
  * <li>{@value #ABSENT} - there was nothing to stop. Not an error: the caller may start the host
  * next.</li>
  * </ul>
@@ -60,18 +60,21 @@ public final class HostShutdownClient
     /** The host confirmed the request and exited. */
     public static final int STOPPED = 0;
     /**
-     * The stop was not confirmed: no receipt, the host did not exit, or the registry could not be
+     * The stop was not confirmed: the host accepted but did not exit, or the registry could not be
      * read so the host state is unknown. The caller may force-kill.
      */
     public static final int NOT_STOPPED = 1;
+
+    /**
+     * The host answered that it will not shut down. It is still running deliberately - an
+     * interactive EDT, or one that ignores the notification - so a wrapper must NOT kill it.
+     */
+    public static final int REFUSED = 3;
     /** No host is registered for this workspace: the registry and its record do not exist. */
     public static final int ABSENT = 2;
 
     /** Seconds to wait for the process to go away unless {@code -timeout} overrides it. */
     static final int DEFAULT_TIMEOUT_SECONDS = 20;
-
-    /** A startup claim older than this cannot describe a start still in flight. */
-    private static final long CLAIM_FRESH_SECONDS = 180;
 
     /** How often the exit is re-checked; the wait is short because the host is already dying. */
     private static final long POLL_MILLIS = 50;
@@ -205,139 +208,31 @@ public final class HostShutdownClient
      */
     static boolean startupOrTeardownInFlight(EndpointRegistry registry)
     {
-        Path claim = registry.claimPath();
-        BasicFileAttributes attributes;
+        // One shared probe: the stop command and StartupCoordinator read the same claim and the
+        // same workspace lock, so they cannot disagree about whether a workspace is occupied.
         try
         {
-            // Probe without following: Files.exists answers false both for an absent claim and for
-            // one whose state cannot be determined, and an unreadable claim must stay unknown.
-            attributes = Files.readAttributes(claim, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
-        }
-        catch (NoSuchFileException e)
-        {
-            // No claim: the workspace lock decides below.
-            attributes = null;
-        }
-        catch (IOException | RuntimeException e)
-        {
-            // A claim whose state cannot be probed is not a missing claim.
-            return true;
-        }
-        if (attributes != null)
-        {
-            try
-            {
-                // A live process outranks the age cutoff: a host slower than the cutoff to reach
-                // lockWorkspace() is still starting, exactly as StartupCoordinator reads it.
-                if (claimNamesALiveProcess(claim)) { return true; }
-            }
-            catch (IOException e)
-            {
-                // The claim was found without following it, so a read that still fails - a dangling
-                // link, a denied read - means it exists but cannot be resolved. That is unknown.
-                return true;
-            }
-            if (attributes.lastModifiedTime().toInstant().plusSeconds(CLAIM_FRESH_SECONDS)
-                .isAfter(java.time.Instant.now()))
+            var claim = registry.readStartupClaim();
+            if (claim != null && (claim.namesALiveProcess() || claim.isRecent(java.time.Instant.now())))
             {
                 return true;
             }
         }
-        Path lock = registry.workspace().resolve(".metadata/.lock");
-        try (FileChannel channel = FileChannel.open(lock, StandardOpenOption.WRITE))
-        {
-            try (FileLock held = channel.tryLock()) { return held == null; }
-        }
-        catch (java.nio.channels.OverlappingFileLockException e) { return true; }
         catch (IOException e)
         {
-            // Only a proven absence clears the workspace. Files.exists returns false both for an
-            // absent file and for one whose state cannot be determined, so an unreadable lock - an
-            // unsearchable parent, a denying ACL - must leave the state unknown.
-            return !provablyMissing(lock);
+            // A claim that exists and cannot be resolved is not a missing claim.
+            return true;
         }
+        // FREE and HELD both answer; only an unreadable lock leaves the workspace unknown.
+        return registry.workspaceLockState() != EndpointRegistry.LockState.FREE;
     }
+
 
     /**
-     * True when a startup claim names a process that is still alive, whatever the claim's age.
-     * A claim that exists and cannot be read is reported as unknown by the caller, which is why a
-     * read failure is rethrown rather than answered here.
-     *
-     * @param claim the startup claim written by the bootstrap before it launched a host
-     * @return whether the claimed process identity still matches a live process
-     * @throws IOException when the claim exists but cannot be read; the state is then unknown
-     */
-    private static boolean claimNamesALiveProcess(Path claim) throws IOException
-    {
-        String body = Files.readString(claim);
-        JsonObject parsed;
-        try { parsed = JsonParser.parseString(body).getAsJsonObject(); }
-        catch (RuntimeException e)
-        {
-            // A readable claim that is not a JSON object is corrupt, not evidence of a host: it
-            // must fall through to the age and lock checks, or one bad file would block every
-            // stop forever.
-            return false;
-        }
-        try
-        {
-            if (!parsed.has("process") || !parsed.get("process").isJsonObject()) { return false; }
-            JsonObject process = parsed.getAsJsonObject("process");
-            // Strict shapes: Gson's getters coerce, so a claim that encodes pid as "1234" would
-            // otherwise match a live process and stall every stop. A wrongly typed field is as
-            // uninformative as a missing one and must fall through to the lock.
-            Long pid = exactPid(process);
-            if (pid == null || !isJsonString(process, "startTime")) { return false; }
-            return EndpointRegistry.sameProcess(pid, process.get("startTime").getAsString());
-        }
-        catch (RuntimeException e)
-        {
-            // Field values of the wrong shape: as uninformative as a missing field.
-            return false;
-        }
-    }
-
-    /**
-     * The claim's pid as an exact nonnegative integer, or null when the token is not one. The
-     * token is checked as written because Gson coerces on read: a fractional {@code 3491.5} would
-     * otherwise truncate to a live process and hold every stop at unknown.
-     *
-     * @param process the claim's process object
-     * @return the pid, or null when the member is missing or is not an exact integer token
-     */
-    private static Long exactPid(JsonObject process)
-    {
-        if (!process.has("pid") || !process.get("pid").isJsonPrimitive()
-            || !process.getAsJsonPrimitive("pid").isNumber())
-        {
-            return null;
-        }
-        String token = process.get("pid").getAsString();
-        if (!token.matches("0|[1-9][0-9]{0,18}")) { return null; }
-        try { return Long.parseLong(token); }
-        catch (NumberFormatException e) { return null; }
-    }
-
-    private static boolean isJsonString(JsonObject object, String member)
-    {
-        return object.has(member) && object.get(member).isJsonPrimitive()
-            && object.getAsJsonPrimitive(member).isString();
-    }
-
-    /** True only when the path is proven not to exist; an undeterminable state is not absence. */
-    private static boolean provablyMissing(Path path)
-    {
-        try
-        {
-            Files.readAttributes(path, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
-            return false;
-        }
-        catch (NoSuchFileException e) { return provablyAbsent(path, LinkOption.NOFOLLOW_LINKS); }
-        catch (IOException | SecurityException e) { return false; }
-    }
-
-    /**
-     * Delivers the shutdown request for one workspace and waits for its host to exit.
+     * Delivers the shutdown request for one workspace and waits for its host to exit. This is the
+     * programmatic entry point: {@link #run(String[], PrintStream)} resolves the per-user registry
+     * directory from the arguments and calls this, and a caller that already knows the directory
+     * can call it directly.
      *
      * @param ipc the per-user IPC registry directory the host published its endpoint into
      * @param workspace the workspace directory, as the host was started with
@@ -345,7 +240,7 @@ public final class HostShutdownClient
      * @param err where a non-zero outcome is explained
      * @return the exit code
      */
-    static int stop(Path ipc, Path workspace, long timeoutMillis, PrintStream err)
+    public static int stop(Path ipc, Path workspace, long timeoutMillis, PrintStream err)
     {
         int registryState = checkDirectory(ipc, "MCP endpoint registry", err, LinkOption.NOFOLLOW_LINKS);
         if (registryState != STOPPED) { return registryState; }
@@ -410,10 +305,31 @@ public final class HostShutdownClient
             }
             socket.write("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}");
             socket.write("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/host_shutdown\"}");
-            String receipt;
-            do { receipt = socket.read(); }
-            while (receipt != null && !isShutdownReceipt(receipt) && isUnrelatedNotification(receipt));
-            if (!isShutdownReceipt(receipt))
+            // The first answer is the decision: accepted means the host is closing, refused means it
+            // keeps running on purpose. Neither is a timeout, so neither has to wait one out.
+            String decision = readDecision(socket);
+            if (decision == null)
+            {
+                err.println("edt-mcp-shutdown: the host did not answer the shutdown request; the host state is unknown.");
+                return NOT_STOPPED;
+            }
+            if (decision.equals(McpConstants.METHOD_HOST_SHUTDOWN_REFUSED))
+            {
+                err.println("edt-mcp-shutdown: the host of " + workspace
+                    + " refused to shut down and is still running; do not kill it.");
+                return REFUSED;
+            }
+            if (decision.equals(McpConstants.METHOD_HOST_SHUTDOWN_ACCEPTED))
+            {
+                // Accepted: wait for the process exit, whose budget is separate from the answer.
+                // The completion notification is informative, not the gate - the process is.
+                if (exitedBy(endpoint, deadline)) { return STOPPED; }
+                err.println("edt-mcp-shutdown: the host accepted the request but PID " + endpoint.pid()
+                    + " is still running; the host may still be saving.");
+                return NOT_STOPPED;
+            }
+            // A host running an older plugin answers the completion receipt without a decision.
+            if (!isShutdownReceipt(decision))
             {
                 err.println("edt-mcp-shutdown: shutdown receipt was missing or reported failure.");
                 return NOT_STOPPED;
@@ -428,6 +344,41 @@ public final class HostShutdownClient
             return NOT_STOPPED;
         }
         finally { closer.shutdownNow(); }
+    }
+
+    /**
+     * Reads frames until the host's decision arrives, skipping unrelated notifications.
+     *
+     * @param socket the connected peer
+     * @return the accepted or refused method name, or a non-decision frame; null on end of stream
+     * @throws IOException when the peer fails
+     */
+    private static String readDecision(JsonFrames.Socket socket) throws IOException
+    {
+        String frame;
+        do
+        {
+            frame = socket.read();
+            if (frame == null) { return null; }
+            if (McpConstants.METHOD_HOST_SHUTDOWN_ACCEPTED.equals(methodOf(frame))
+                || McpConstants.METHOD_HOST_SHUTDOWN_REFUSED.equals(methodOf(frame)))
+            {
+                return methodOf(frame);
+            }
+        }
+        while (isUnrelatedNotification(frame));
+        return frame;
+    }
+
+    /** The {@code method} of a framed notification, or null when the frame is not one. */
+    static String methodOf(String frame)
+    {
+        try
+        {
+            JsonObject object = JsonParser.parseString(frame).getAsJsonObject();
+            return object.has("method") ? object.get("method").getAsString() : null;
+        }
+        catch (RuntimeException e) { return null; }
     }
 
     static boolean isInitializeSuccess(String frame)

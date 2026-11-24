@@ -227,6 +227,26 @@ public class EndpointRegistryTest extends StdioTestSupport
         assertThrows(IOException.class, registry::read);
     }
 
+    @Test public void anUndeterminableRecordThrowsRatherThanReportingNoHost() throws Exception
+    {
+        // The record path exists without following it, but its target does not: the state cannot be
+        // determined, and answering null would tell a caller "no host" when a host may be running.
+        var registry = registry();
+        Path record = registry.recordPath();
+        Path missing = registry.directory().resolve("missing-record");
+        try { Files.createSymbolicLink(record, missing); }
+        catch (IOException | UnsupportedOperationException e) { Assume.assumeNoException(e); }
+        IOException failure = assertThrows(IOException.class, registry::read);
+        assertFalse("A record that cannot be read is not an absent record",
+            failure.getMessage() == null || failure.getMessage().isBlank());
+    }
+
+    @Test public void anAbsentRecordStillReadsAsNoHost() throws Exception
+    {
+        // The other half of the same rule: nothing there really is nothing there.
+        assertNull(registry().read());
+    }
+
     @Test public void malformedRecordNeverExposesItsContentsThroughAnException() throws Exception
     {
         var registry = registry();

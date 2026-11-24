@@ -8,16 +8,20 @@ package com.ditrix.edt.mcp.server.ipc;
 import java.io.IOException;
 import java.nio.channels.FileChannel;
 import java.nio.channels.FileLock;
+import java.nio.channels.OverlappingFileLockException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.security.MessageDigest;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.HexFormat;
-import java.nio.charset.StandardCharsets;
 
 import com.google.gson.Gson;
+import com.google.gson.JsonObject;
 
 /** Private, per-workspace discovery. All record replacement/removal holds the same OS file lock. */
 public final class EndpointRegistry
@@ -153,6 +157,114 @@ public final class EndpointRegistry
     public static boolean live(Endpoint endpoint)
     {
         return sameProcess(endpoint.pid(), endpoint.startTime());
+    }
+
+    /** How long after it was requested a startup claim still describes a start in flight. */
+    public static final Duration CLAIM_WINDOW = Duration.ofSeconds(180);
+
+    /**
+     * The durable startup claim as the bootstrap wrote it. Both the coordinator and the stop
+     * command read occupancy from this one shape, so they cannot disagree about what a claim says.
+     */
+    public record StartupClaim(Instant requested, Long pid, String startTime)
+    {
+        /** Whether the claim is inside {@link #CLAIM_WINDOW} of its own requested time. */
+        public boolean isRecent(Instant now) { return requested != null && requested.plus(CLAIM_WINDOW).isAfter(now); }
+
+        /** Whether the claim names a process that is still alive. */
+        public boolean namesALiveProcess() { return pid != null && startTime != null && sameProcess(pid, startTime); }
+    }
+
+    /** Whether another process currently holds the workspace lock. */
+    public enum LockState
+    {
+        /** The lock was taken and released by this probe: nothing owns the workspace. */
+        FREE,
+        /** A process holds the lock. */
+        HELD,
+        /** The lock could not be probed: its state is unknown, which is not the same as free. */
+        UNKNOWN
+    }
+
+    /**
+     * Reads the startup claim, or {@code null} when the workspace has none or its claim is
+     * uninformative. Three states are told apart:
+     * <ul>
+     * <li><b>no claim</b> and <b>a readable but corrupt claim</b> return {@code null}, so the
+     * caller falls through to the workspace lock, which is the authoritative signal.</li>
+     * <li><b>a claim that exists and cannot be read</b> - a dangling link, a denied read - throws:
+     * it proves nothing either way and must stay unknown, not become an invitation to start.</li>
+     * </ul>
+     *
+     * @return the claim, or null when there is none or it carries no usable fields
+     * @throws IOException when a claim exists and cannot be resolved
+     */
+    public StartupClaim readStartupClaim() throws IOException
+    {
+        Path claim = claimPath();
+        try { Files.readAttributes(claim, java.nio.file.attribute.BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS); }
+        catch (NoSuchFileException e) { return null; }
+        catch (IOException | SecurityException e) { throw new IOException("Cannot probe the EDT startup claim", e); }
+        String body;
+        try { body = Files.readString(claim); }
+        catch (IOException | RuntimeException e) { throw new IOException("Cannot read the EDT startup claim", e); }
+        JsonObject parsed;
+        try { parsed = JSON.fromJson(body, JsonObject.class); }
+        catch (RuntimeException e) { return null; }
+        if (parsed == null) { return null; }
+        Instant requested = null;
+        try
+        {
+            if (parsed.has("requested") && parsed.get("requested").isJsonPrimitive()
+                && parsed.getAsJsonPrimitive("requested").isString())
+            {
+                requested = Instant.parse(parsed.get("requested").getAsString());
+            }
+        }
+        catch (RuntimeException e) { requested = null; }
+        JsonObject process = parsed.has("process") && parsed.get("process").isJsonObject()
+            ? parsed.getAsJsonObject("process") : null;
+        if (process == null) { return new StartupClaim(requested, null, null); }
+        // Strict shapes: Gson coerces, so a pid written as a string or a fractional number would
+        // otherwise match a live process and hold every occupancy answer at unknown.
+        Long pid = exactPid(process);
+        String start = process.has("startTime") && process.get("startTime").isJsonPrimitive()
+            && process.getAsJsonPrimitive("startTime").isString()
+            ? process.get("startTime").getAsString() : null;
+        return new StartupClaim(requested, pid, start);
+    }
+
+    /** The claim's pid as an exact nonnegative integer, or null when the token is not one. */
+    private static Long exactPid(JsonObject process)
+    {
+        if (!process.has("pid") || !process.get("pid").isJsonPrimitive()
+            || !process.getAsJsonPrimitive("pid").isNumber())
+        {
+            return null;
+        }
+        String token = process.get("pid").getAsString();
+        if (!token.matches("0|[1-9][0-9]{0,18}")) { return null; }
+        try { return Long.parseLong(token); }
+        catch (NumberFormatException e) { return null; }
+    }
+
+    /**
+     * Probes the workspace lock. The lock file is opened for writing and locked: taking the lock
+     * proves no other process holds it, and an absent file proves nothing holds it either. Any
+     * other failure - an unsearchable parent, a denying ACL - is unknown, never free.
+     *
+     * @return whether a process still holds the workspace lock
+     */
+    public LockState workspaceLockState()
+    {
+        Path lock = workspace.resolve(".metadata/.lock");
+        try (FileChannel channel = FileChannel.open(lock, StandardOpenOption.WRITE))
+        {
+            try (FileLock held = channel.tryLock()) { return held == null ? LockState.HELD : LockState.FREE; }
+        }
+        catch (OverlappingFileLockException e) { return LockState.HELD; }
+        catch (NoSuchFileException e) { return LockState.FREE; }
+        catch (IOException e) { return LockState.UNKNOWN; }
     }
 
     public static boolean sameProcess(long pid, String startTime)

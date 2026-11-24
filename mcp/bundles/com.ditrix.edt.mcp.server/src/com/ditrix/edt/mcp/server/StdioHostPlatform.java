@@ -31,7 +31,7 @@ final class StdioHostPlatform implements StdioHostApplication.Runtime
         ServiceInitialization.startInitialization();
         ServiceInitialization.join();
     }
-    @Override public void armHostShutdown(Consumer<Consumer<Boolean>> shutdown) {
+    @Override public void armHostShutdown(McpServer.HostShutdown shutdown) {
         // The immersive host is the only one allowed to accept the request; the windowed EDT
         // leaves the channel empty and logs the refusal. A host whose plugin is not active keeps
         // running without a channel rather than failing to start over one optional request.
