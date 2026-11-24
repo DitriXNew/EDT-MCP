@@ -53,6 +53,16 @@ public final class SpreadsheetRenameGuard
     {
     }
 
+    record OwnerScan(List<Candidate> candidates, boolean generatorMissing)
+    {
+        String refusal(String projectName, String ownerFqn, boolean extension)
+        {
+            return generatorMissing ? unavailableNames(projectName, ownerFqn)
+                : SpreadsheetRenameGuard.refusal(projectName, ownerFqn, candidates, extension,
+                    SpreadsheetRenameGuard::secureEvidence);
+        }
+    }
+
     /**
      * Read the model and the saved header, never update either. The native moxel editor can clear
      * descriptions in memory during initialization when a synonym for the editing language is
@@ -67,22 +77,20 @@ public final class SpreadsheetRenameGuard
             return null;
         }
         var activator = Activator.getDefault();
-        var generator = activator == null ? null : activator.getTopObjectFqnGenerator();
+        if (activator == null)
+        {
+            return unavailableNames(project.getName(), ownerFqn);
+        }
+        var generator = activator.getTopObjectFqnGenerator();
         String task = "Read spreadsheet language risk"; //$NON-NLS-1$
-        List<Candidate> candidates = generator == null ? List.of()
-            : ReadToolExecution.readModel(project, task, model -> BmTransactions.read(model, task,
-                (tx, monitor) -> candidates(project, owner, tx, generator)));
-        String baseRefusal = refusal(project.getName(), ownerFqn, candidates, false,
-            SpreadsheetRenameGuard::secureEvidence);
+        OwnerScan base = ReadToolExecution.readModel(project, task, model -> BmTransactions.read(model, task,
+            (tx, monitor) -> scanOwner(project, owner, tx, generator)));
+        String baseRefusal = base.refusal(project.getName(), ownerFqn, false);
         if (baseRefusal != null || groups == 1 || !(owner instanceof DataProcessor))
         {
             return baseRefusal;
         }
         if (planned == null || !planned.covers(SpreadsheetRenameOwners.capture(project, owner), groups))
-        {
-            return SpreadsheetRenameOwners.changedScope();
-        }
-        if (generator == null)
         {
             return SpreadsheetRenameOwners.changedScope();
         }
@@ -93,27 +101,61 @@ public final class SpreadsheetRenameGuard
             {
                 return SpreadsheetRenameOwners.changedScope();
             }
-            List<Candidate> extension = BmTransactions.read(model.getModel(), "Read extension spreadsheet language risk", //$NON-NLS-1$
+            OwnerScan extension = BmTransactions.read(model.getModel(), "Read extension spreadsheet language risk", //$NON-NLS-1$
                 (tx, monitor) -> {
                     DataProcessor affectedOwner = counterpart.resolve(tx);
                     if (affectedOwner == null)
                     {
                         return null;
                     }
-                    return candidates(counterpart.project(), affectedOwner, tx, generator);
+                    return scanOwner(counterpart.project(), affectedOwner, tx, generator);
                 });
             if (extension == null)
             {
                 return SpreadsheetRenameOwners.changedScope();
             }
-            String extensionRefusal = refusal(counterpart.project().getName(), ownerFqn, extension, true,
-                SpreadsheetRenameGuard::secureEvidence);
+            String extensionRefusal = extension.refusal(counterpart.project().getName(), ownerFqn, true);
             if (extensionRefusal != null)
             {
                 return extensionRefusal;
             }
         }
         return null;
+    }
+
+    private static String unavailableNames(String projectName, String ownerFqn)
+    {
+        return "Cannot verify the spreadsheet language descriptions for '" //$NON-NLS-1$
+            + MetadataTypeUtils.toCanonicalEnglishFqn(ownerFqn) + "' in project '" + projectName //$NON-NLS-1$
+            + "' because EDT's template naming service is unavailable. Nothing was renamed. " //$NON-NLS-1$
+            + "Wait for EDT to finish loading and retry."; //$NON-NLS-1$
+    }
+
+    static OwnerScan scanOwner(IProject project, MdObject owner, IBmTransaction tx,
+        ITopObjectFqnGenerator generator)
+    {
+        if (generator != null)
+        {
+            return new OwnerScan(candidates(project, owner, tx, generator), false);
+        }
+        // Without names we cannot distinguish a loaded workbook from an unloaded one. Only
+        // owners with an actual spreadsheet template need this lookup; do not scan other owners.
+        boolean hasSpreadsheet = ownedTemplates(owner).stream()
+            .anyMatch(template -> template.getTemplateType() == TemplateType.SPREADSHEET_DOCUMENT);
+        return new OwnerScan(List.of(), hasSpreadsheet);
+    }
+
+    private static List<? extends BasicTemplate> ownedTemplates(MdObject owner)
+    {
+        if (owner instanceof DataProcessor processor)
+        {
+            return processor.getTemplates();
+        }
+        if (owner instanceof ExternalDataProcessor processor)
+        {
+            return processor.getTemplates();
+        }
+        return List.of();
     }
 
     static String refusal(String projectName, String ownerFqn, List<Candidate> candidates, boolean extension,
@@ -156,10 +198,8 @@ public final class SpreadsheetRenameGuard
         {
             return List.of();
         }
-        List<? extends BasicTemplate> templates = owner instanceof DataProcessor processor
-            ? processor.getTemplates() : ((ExternalDataProcessor)owner).getTemplates();
         List<Candidate> candidates = new ArrayList<>();
-        for (BasicTemplate template : templates)
+        for (BasicTemplate template : ownedTemplates(owner))
         {
             if (template.getTemplateType() != TemplateType.SPREADSHEET_DOCUMENT
                 || !(attachedWorkbook(tx, generator, template) instanceof SpreadsheetDocument book)

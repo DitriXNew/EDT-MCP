@@ -1366,9 +1366,14 @@ public class RenameMetadataObjectTool implements IMcpTool
                 + " before retrying."; //$NON-NLS-1$
         case AWAITING_CONSENT:
             return "The rename was at the destructive-operation consent gate, so nothing had been " //$NON-NLS-1$
-                + "rewritten - but an answer arriving later still starts it. Set " //$NON-NLS-1$
+                + "rewritten - but an answer arriving later can still let it start. Set " //$NON-NLS-1$
                 + "EDT_MCP_DESTRUCTIVE_CONSENT=allow for unattended use, and check the target's " //$NON-NLS-1$
                 + "name with " + inspector + " before retrying."; //$NON-NLS-1$ //$NON-NLS-2$
+        case CHECKING_SAFETY:
+            return "Consent was granted and EDT was checking whether it was safe to apply the " //$NON-NLS-1$
+                + "rename. The cascade had not started rewriting the model, but this call is not " //$NON-NLS-1$
+                + "cancelled and may still apply if the check succeeds. Check the target's name with " //$NON-NLS-1$
+                + inspector + " before retrying."; //$NON-NLS-1$
         case APPLYING:
             return "The rename had passed the consent gate into its apply phase, so the " //$NON-NLS-1$
                 + "configuration may be PARTIALLY renamed - do not treat it as unchanged. Inspect " //$NON-NLS-1$

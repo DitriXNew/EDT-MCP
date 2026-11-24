@@ -3170,8 +3170,8 @@ public class MetadataRenameService
             return ToolResult.error(hashError).toJson();
         }
 
-        // Destructive-operation consent gate: the LAST check before the cascade rename mutates the
-        // model (rewriting every reference across BSL, forms and metadata). Built from the refactorings
+        // Destructive-operation consent gate: authorize the requested cascade rename before its
+        // final safety check and before rewriting references. Built from the refactorings
         // the tool already resolved; on ALLOW the behaviour is byte-identical, on REJECT nothing is
         // mutated. This runs inside the tool's UI-thread syncExec scope, so the dialog (when armed)
         // opens directly. Headless / env-bypass / non-ASK never block.
@@ -3202,6 +3202,7 @@ public class MetadataRenameService
 
         // Check the current model and saved file after consent, on the same UI call before
         // any native rename operation has been performed.
+        progress.enter(RenameProgress.Phase.CHECKING_SAFETY);
         String guardRefusal = beforeApply.get();
         if (guardRefusal != null)
         {

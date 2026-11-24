@@ -37,7 +37,9 @@ import com._1c.g5.v8.bm.core.IBmNamespace;
 import com._1c.g5.v8.bm.core.IBmObject;
 import com._1c.g5.v8.bm.core.IBmTransaction;
 import com._1c.g5.v8.dt.core.naming.ITopObjectFqnGenerator;
+import com._1c.g5.v8.dt.metadata.mdclass.Catalog;
 import com._1c.g5.v8.dt.metadata.mdclass.DataProcessor;
+import com._1c.g5.v8.dt.metadata.mdclass.ExternalDataProcessor;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.Template;
 import com._1c.g5.v8.dt.metadata.mdclass.TemplateType;
@@ -247,6 +249,45 @@ public class SpreadsheetRenameGuardTest
             ProjectSpreadsheetReader.read(root, outside, Set.of(RUSSIAN)).availability());
         assertEquals(ProjectSpreadsheetReader.Availability.UNVERIFIED,
             ProjectSpreadsheetReader.read(root, root, Set.of(RUSSIAN)).availability());
+    }
+
+    @Test
+    public void missingGeneratorRefusesOwnedSpreadsheetForBothOwnerKinds()
+    {
+        var processor = mock(DataProcessor.class);
+        var external = mock(ExternalDataProcessor.class);
+        var template = mock(Template.class);
+        when(template.getTemplateType()).thenReturn(TemplateType.SPREADSHEET_DOCUMENT);
+        when(processor.getTemplates()).thenReturn(new BasicEList<>(List.of(template)));
+        when(external.getTemplates()).thenReturn(new BasicEList<>(List.of(template)));
+
+        for (var owner : List.of(processor, external))
+        {
+            // No attempt to look up an attached workbook or read a source file without the service.
+            var scan = SpreadsheetRenameGuard.scanOwner(null, owner, null, null);
+            for (boolean extension : List.of(false, true))
+            {
+                String refusal = scan.refusal("Example", "DataProcessor.Processor", extension);
+                assertTrue(refusal, refusal.contains("template naming service is unavailable"));
+                assertTrue(refusal, refusal.contains("Nothing was renamed"));
+            }
+        }
+        verify(template, never()).getTemplate();
+    }
+
+    @Test
+    public void missingGeneratorDoesNotRefuseOtherOwnersOrNonSpreadsheetTemplates()
+    {
+        var processor = mock(DataProcessor.class);
+        var template = mock(Template.class);
+        when(template.getTemplateType()).thenReturn(TemplateType.TEXT_DOCUMENT);
+        when(processor.getTemplates()).thenReturn(new BasicEList<>(List.of(template)));
+        for (var owner : List.of(processor, mock(Catalog.class)))
+        {
+            assertNull(SpreadsheetRenameGuard.scanOwner(null, owner, null, null)
+                .refusal("Example", "DataProcessor.Processor", false));
+        }
+        verify(template, never()).getTemplate();
     }
 
     @Test

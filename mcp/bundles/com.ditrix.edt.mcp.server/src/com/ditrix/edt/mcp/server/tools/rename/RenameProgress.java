@@ -47,9 +47,14 @@ public final class RenameProgress
         PREPARING,
         /**
          * Inside the destructive-operation consent gate, and nowhere wider. Nothing rewritten — but
-         * the decision can arrive later and start the rename after the caller gave up.
+         * a later decision can allow the rename to start after the caller gave up.
          */
         AWAITING_CONSENT,
+        /**
+         * Consent was granted; the final read-only safety check is still running. The cascade
+         * has not entered its apply phase but may run if the check succeeds.
+         */
+        CHECKING_SAFETY,
         /**
          * Past the consent gate and authorised to rewrite: the apply loop is running or about to.
          * A call that stops waiting here can leave the configuration PARTIALLY renamed.

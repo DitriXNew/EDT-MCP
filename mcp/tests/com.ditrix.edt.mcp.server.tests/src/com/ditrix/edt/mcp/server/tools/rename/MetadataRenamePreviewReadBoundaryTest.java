@@ -125,7 +125,11 @@ public class MetadataRenamePreviewReadBoundaryTest
         apply.setAccessible(true);
         List<IRefactoring> groups = refactorings();
         RenameProgress progress = new RenameProgress();
-        Supplier<String> refusal = () -> "Saved workbook description could not be verified. Nothing was renamed.";
+        String reason = "Saved workbook description could not be verified. Nothing was renamed.";
+        Supplier<String> refusal = () -> {
+            assertEquals(RenameProgress.Phase.CHECKING_SAFETY, progress.getPhase());
+            return reason;
+        };
         // Keep this apply-boundary unit test independent of the SWT consent dialog. The host-specific
         // spreadsheet-evidence decisions are covered in SpreadsheetRenameGuardTest.
         String property = "eclipse.application";
@@ -134,8 +138,8 @@ public class MetadataRenamePreviewReadBoundaryTest
         {
             String result = (String)apply.invoke(new MetadataRenameService(), null, "DataProcessor.Old", "New",
                 groups, DisableRequest.parse(null), null, progress, "metadata object", refusal);
-            assertTrue(result, result.contains(refusal.get()));
-            assertEquals(RenameProgress.Phase.AWAITING_CONSENT, progress.getPhase());
+            assertTrue(result, result.contains(reason));
+            assertEquals(RenameProgress.Phase.CHECKING_SAFETY, progress.getPhase());
             verify(groups.get(0), never()).perform();
         }
         finally
