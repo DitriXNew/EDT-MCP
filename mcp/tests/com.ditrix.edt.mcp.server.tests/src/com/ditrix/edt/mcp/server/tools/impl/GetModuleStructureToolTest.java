@@ -89,7 +89,9 @@ public class GetModuleStructureToolTest
         assertTrue(BslMethodRecovery.isParseUnverified(module.eResource()));
         var diagnostic = BslMethodRecovery.firstSyntaxIssue(module.eResource());
         assertEquals(9, diagnostic.line());
-        assertTrue(diagnostic.message(), diagnostic.message().contains("#EndRegion"));
+        // EDT localizes this parser diagnostic, so accept either supported spelling.
+        assertTrue(diagnostic.message(),
+            diagnostic.message().contains("#EndRegion") || diagnostic.message().contains("#КонецОбласти")); //$NON-NLS-1$
 
         String result = new GetModuleStructureTool().formatStructure("Module.bsl", module, source, false, false, false);
         assertTrue(result, result.contains("EDT model methods: 4. Saved text declarations: 6."));
