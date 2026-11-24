@@ -1,7 +1,7 @@
 ## Methods
 
 - `help`: return this guide. No project, FQN or payload is needed.
-- `modify`: edit an existing SpreadsheetDocument or TextDocument. Supply `projectName`, `fqn` and the `template` object. Use the English or Russian type/kind tokens and the programmatic object name, not its synonym.
+- `modify`: edit an existing SpreadsheetDocument or TextDocument. Supply `projectName`, `fqn` and the `template` object. Use the English or Russian type/kind tokens and the programmatic object name, not its synonym. The former `modify_metadata` singular `template` payload now belongs here.
 
 Create and delete the template object with `create_metadata` and `delete_metadata`; rename it with `rename_metadata_object`. Edit its content here. Binary, graphical and DCS content are not supported by this tool; use `dcs` for data composition schemas. Vendor locks and extension restrictions still apply.
 
@@ -18,7 +18,11 @@ The `template` object takes any of these arrays (all optional; an omitted array 
   - `borderColor` (all four sides), `backColor`, `textColor` - a colour: `{red, green, blue}`, `'Style.<Name>'` (`Palette.`, `Web.`, `Windows.`) or `{style:'<Name>'}`; `'auto'` unsets it (inherits). A style / palette name the platform also has means the platform colour, as EDT reads the template back. If the platform catalogue cannot be checked, the write is refused rather than guessing a configuration colour.
   - Cells **MERGE by default**: sent properties change, omitted ones keep their values; `replace:true` resets omitted content and formatting. Non-empty `text` / `parameter` clears the other; `text:""` / `parameter:""` clears just that one (`{row:1,col:0,parameter:""}` unbinds, keeping formatting).
 - `merges` - `[{fromRow, fromCol, toRow, toCol}]`: a merged cell range.
-- `areas` - `[{name, fromRow, fromCol, toRow, toCol}]`: a NAMED area for BSL `ПолучитьОбласть("<name>")` / `Вывести`.
+- `areas` - a named area for BSL `ПолучитьОбласть("<name>")` / `Вывести`:
+  - `{name, type:'Rows', fromRow, toRow}` covers whole rows and uses the first row's column layout.
+  - `{name, type:'Columns', fromCol, toCol}` covers whole columns in the default column layout.
+  - `{name, type:'Rectangle', fromRow, fromCol, toRow, toCol}` covers a cell rectangle. Omit `type` for the existing rectangle behavior.
+  - For `Rows` and `Columns`, omit the opposite-axis coordinates. All ranges are inclusive.
 - `columnWidths` - `[{col, width?, autoWidthCalculation?, widthWeightFactor?}]`, at least one sizing member: a fixed positive `width`; `autoWidthCalculation:true` lets the platform compute it (a `width` beside it is the minimum); `widthWeightFactor` - the column's share of free width, REFUSED without `autoWidthCalculation:true` (only auto-width columns read it). The two auto members need 1C:Enterprise **8.3.10+** (`Runtime-Version`); below that they are refused, not silently dropped.
 - `rowHeights` - `[{row, height}]`.
 - `unmerges` - `[{fromRow, fromCol, toRow, toCol}]`: removes every merge touching the range; as in EDT's Unmerge, each freed cell takes the merged cell's format, borders kept only on the outer edge, even when the row, column or document has inherited borders (a covered cell with its own text or parameter keeps its fill kind; with no top-left cell the cells stay as they are).

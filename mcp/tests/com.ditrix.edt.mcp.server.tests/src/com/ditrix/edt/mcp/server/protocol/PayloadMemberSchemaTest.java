@@ -115,8 +115,12 @@ public class PayloadMemberSchemaTest
         }
         assertMembers(items(member(template, "merges")), Set.of("fromRow", "fromCol", "toRow", "toCol"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
             Set.of("fromRow", "fromCol", "toRow", "toCol"), true); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-        assertMembers(items(member(template, "areas")), Set.of("name", "fromRow", "fromCol", "toRow", "toCol"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
-            Set.of("name", "fromRow", "fromCol", "toRow", "toCol"), true); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+        JsonObject areas = items(member(template, "areas")); //$NON-NLS-1$
+        assertMembers(areas, Set.of("name", "type", "fromRow", "fromCol", "toRow", "toCol"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+            Set.of("name"), true); //$NON-NLS-1$
+        Set<String> areaTypes = new LinkedHashSet<>();
+        member(areas, "type").getAsJsonArray("enum").forEach(n -> areaTypes.add(n.getAsString())); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(Set.of("Rows", "Columns", "Rectangle"), areaTypes); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         JsonObject columns = items(member(template, "columnWidths")); //$NON-NLS-1$
         assertMembers(columns, Set.of("col", "width", "autoWidthCalculation", "widthWeightFactor"), Set.of("col"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
             false);
@@ -259,6 +263,8 @@ public class PayloadMemberSchemaTest
             + "\"areas\":[{\"name\":\"Header\",\"fromRow\":0,\"fromCol\":0,\"toRow\":0,\"toCol\":1}]," //$NON-NLS-1$
             + "\"columnWidths\":[{\"col\":0,\"autoWidthCalculation\":\"1\",\"widthWeightFactor\":2}]," //$NON-NLS-1$
             + "\"rowHeights\":[{\"row\":0,\"height\":20}]}}"); //$NON-NLS-1$
+        assertAccepted("template_content", "{\"template\":{\"areas\":[{\"name\":\"Header\",\"type\":\"Rows\",\"fromRow\":0,\"toRow\":2}," //$NON-NLS-1$
+            + "{\"name\":\"Side\",\"type\":\"Columns\",\"fromCol\":1,\"toCol\":3}]}}"); //$NON-NLS-1$
         assertAccepted("template_content", "{\"template\":{\"cells\":[{\"row\":0,\"col\":0,\"borders\":\"Solid\"," //$NON-NLS-1$ //$NON-NLS-2$
             + "\"backColor\":{\"red\":1,\"green\":2,\"blue\":3},\"textColor\":\"Web.Red\"," //$NON-NLS-1$
             + "\"borderColor\":\"auto\"},{\"row\":1,\"col\":0,\"borders\":{\"left\":{\"style\":\"Double\",\"width\":2}}}]," //$NON-NLS-1$

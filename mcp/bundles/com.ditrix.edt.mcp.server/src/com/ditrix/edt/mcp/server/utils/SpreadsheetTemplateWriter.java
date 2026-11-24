@@ -33,6 +33,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.moxel.Cell;
 import com._1c.g5.v8.dt.moxel.Column;
 import com._1c.g5.v8.dt.moxel.Columns;
+import com._1c.g5.v8.dt.moxel.ColumnsArea;
 import com._1c.g5.v8.dt.moxel.Format;
 import com._1c.g5.v8.dt.moxel.Merge;
 import com._1c.g5.v8.dt.moxel.MoxelFactory;
@@ -41,6 +42,7 @@ import com._1c.g5.v8.dt.moxel.NamedItemCells;
 import com._1c.g5.v8.dt.moxel.Rect;
 import com._1c.g5.v8.dt.moxel.RectArea;
 import com._1c.g5.v8.dt.moxel.Row;
+import com._1c.g5.v8.dt.moxel.RowsArea;
 import com._1c.g5.v8.dt.moxel.SpreadsheetDocument;
 import com._1c.g5.v8.dt.moxel.content.CellLine;
 import com._1c.g5.v8.dt.moxel.content.CellLineStyle;
@@ -87,8 +89,8 @@ import com.google.gson.JsonPrimitive;
  * {@code (x=leftColumn, y=topRow, width=rightColumn-leftColumn, height=bottomRow-topRow)} - the
  * width/height are DELTAS (last minus first), the same encoding EDT's own
  * {@code SheetFactory.createRect} uses.</li>
- * <li>A named area is a {@link NamedItemCells} over a {@link RectArea} (same delta {@link Rect}),
- * registered in {@link SpreadsheetDocument#getNamedItems()} keyed by its name.</li>
+ * <li>A named area is a {@link NamedItemCells} over a {@link RowsArea}, {@link ColumnsArea}, or
+ * {@link RectArea} (same delta {@link Rect}), registered in {@link SpreadsheetDocument#getNamedItems()} keyed by its name.</li>
  * <li>A column width / row height lives on a {@link Format} ({@link Format#setWidth(int)} /
  * {@link Format#setHeight(int)}) referenced by the column's / row's {@code formatIndex}.</li>
  * <li>Every {@link Format} attribute is UNSETTABLE, so "absent" and "set to the default value" are
@@ -155,6 +157,7 @@ public final class SpreadsheetTemplateWriter
     private static final String KEY_FROM_COL = "fromCol"; //$NON-NLS-1$
     private static final String KEY_TO_ROW = "toRow"; //$NON-NLS-1$
     private static final String KEY_TO_COL = "toCol"; //$NON-NLS-1$
+    private static final String KEY_TYPE = "type"; //$NON-NLS-1$
     private static final String KEY_NAME = "name"; //$NON-NLS-1$
     private static final String KEY_WIDTH = "width"; //$NON-NLS-1$
     private static final String KEY_HEIGHT = "height"; //$NON-NLS-1$
@@ -670,16 +673,44 @@ public final class SpreadsheetTemplateWriter
         document.getMerges().add(merge);
     }
 
-    /**
-     * Registers a named cell area: a {@link NamedItemCells} over a {@link RectArea} (same delta
-     * {@link Rect} as a merge), keyed by its name in {@link SpreadsheetDocument#getNamedItems()}.
-     */
+    /** Registers a typed moxel cell area under its name, matching EDT's row/column selection model. */
     private static void applyArea(SpreadsheetDocument document, AreaPlan plan)
     {
-        RectArea rectArea = MoxelFactory.eINSTANCE.createRectArea();
-        rectArea.setPosition(rect(plan.fromRow, plan.fromCol, plan.toRow, plan.toCol));
         NamedItemCells namedItem = MoxelFactory.eINSTANCE.createNamedItemCells();
-        namedItem.setArea(rectArea);
+        switch (plan.type)
+        {
+            case ROWS:
+            {
+                RowsArea area = MoxelFactory.eINSTANCE.createRowsArea();
+                area.setBegin(plan.fromRow);
+                area.setEnd(plan.toRow);
+                // EDT's row selection uses the column band of its first (normalized) row.
+                Row first = document.getRows().get(Integer.valueOf(plan.fromRow));
+                Columns band = first == null ? null : first.getColumns();
+                area.setColumns(band == null ? ensureColumns(document) : band);
+                namedItem.setArea(area);
+                break;
+            }
+            case COLUMNS:
+            {
+                ColumnsArea area = MoxelFactory.eINSTANCE.createColumnsArea();
+                area.setBegin(plan.fromCol);
+                area.setEnd(plan.toCol);
+                // No row is supplied, so use the default column band.
+                area.setColumns(ensureColumns(document));
+                namedItem.setArea(area);
+                break;
+            }
+            case RECTANGLE:
+            {
+                RectArea area = MoxelFactory.eINSTANCE.createRectArea();
+                area.setPosition(rect(plan.fromRow, plan.fromCol, plan.toRow, plan.toCol));
+                namedItem.setArea(area);
+                break;
+            }
+            default:
+                throw new IllegalStateException("Unsupported named area type: " + plan.type); //$NON-NLS-1$
+        }
         document.getNamedItems().put(plan.name, namedItem);
     }
 
@@ -1868,14 +1899,63 @@ public final class SpreadsheetTemplateWriter
             {
                 return "A named area (" + where + ") needs a non-empty 'name'."; //$NON-NLS-1$ //$NON-NLS-2$
             }
-            RegionResult region = parseRegion(entry, where);
-            if (region.error != null)
+            JsonElement typeToken = entry.get(KEY_TYPE);
+            AreaType type = typeToken == null || typeToken.isJsonNull() ? AreaType.RECTANGLE
+                : typeToken.isJsonPrimitive() && typeToken.getAsJsonPrimitive().isString()
+                    ? AreaType.fromToken(typeToken.getAsString()) : null;
+            if (type == null)
             {
-                return region.error;
+                return "A named area (" + where + ") needs type Rows, Columns, or Rectangle."; //$NON-NLS-1$ //$NON-NLS-2$
             }
-            plan.areas.add(new AreaPlan(name, region.fromRow, region.fromCol, region.toRow, region.toCol));
+            if (type == AreaType.RECTANGLE)
+            {
+                RegionResult region = parseRegion(entry, where);
+                if (region.error != null)
+                {
+                    return region.error;
+                }
+                if (region.toRow == Integer.MAX_VALUE || region.toCol == Integer.MAX_VALUE)
+                {
+                    return areaExtentError(where);
+                }
+                plan.areas.add(new AreaPlan(name, type, region.fromRow, region.fromCol, region.toRow, region.toCol));
+                continue;
+            }
+
+            boolean rows = type == AreaType.ROWS;
+            String fromKey = rows ? KEY_FROM_ROW : KEY_FROM_COL;
+            String toKey = rows ? KEY_TO_ROW : KEY_TO_COL;
+            String unusedFrom = rows ? KEY_FROM_COL : KEY_FROM_ROW;
+            String unusedTo = rows ? KEY_TO_COL : KEY_TO_ROW;
+            if (has(entry, unusedFrom) || has(entry, unusedTo))
+            {
+                return "A named area (" + where + ") of type " + type.token + " must omit '" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    + unusedFrom + "' and '" + unusedTo + "'."; //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            Integer from = nonNegative(entry, fromKey);
+            Integer to = nonNegative(entry, toKey);
+            if (from == null || to == null)
+            {
+                return indexError(where, from == null ? fromKey : toKey);
+            }
+            if (to.intValue() < from.intValue())
+            {
+                return "A named area (" + where + ") must have " + toKey + " >= " + fromKey + "."; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            }
+            if (to.intValue() == Integer.MAX_VALUE)
+            {
+                return areaExtentError(where);
+            }
+            // An unused axis does not grow the spreadsheet's extent.
+            plan.areas.add(rows ? new AreaPlan(name, type, from, -1, to, -1)
+                : new AreaPlan(name, type, -1, from, -1, to));
         }
         return null;
+    }
+
+    private static String areaExtentError(String where)
+    {
+        return "A named area (" + where + ") has an index too large for the spreadsheet extent."; //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     private static String parseColumnWidths(JsonObject spec, Plan plan, Version projectVersion)
@@ -2517,17 +2597,43 @@ public final class SpreadsheetTemplateWriter
     }
 
     /** A validated named area (a name + inclusive corners). */
+    private enum AreaType
+    {
+        ROWS("Rows"), COLUMNS("Columns"), RECTANGLE("Rectangle"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        final String token;
+
+        AreaType(String token)
+        {
+            this.token = token;
+        }
+
+        static AreaType fromToken(String token)
+        {
+            for (AreaType type : values())
+            {
+                if (type.token.equalsIgnoreCase(token))
+                {
+                    return type;
+                }
+            }
+            return null;
+        }
+    }
+
     static final class AreaPlan
     {
         final String name;
+        final AreaType type;
         final int fromRow;
         final int fromCol;
         final int toRow;
         final int toCol;
 
-        AreaPlan(String name, int fromRow, int fromCol, int toRow, int toCol)
+        AreaPlan(String name, AreaType type, int fromRow, int fromCol, int toRow, int toCol)
         {
             this.name = name;
+            this.type = type;
             this.fromRow = fromRow;
             this.fromCol = fromCol;
             this.toRow = toRow;
