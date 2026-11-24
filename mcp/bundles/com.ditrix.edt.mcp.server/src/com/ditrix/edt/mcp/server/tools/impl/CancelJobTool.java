@@ -7,6 +7,7 @@
 package com.ditrix.edt.mcp.server.tools.impl;
 
 import java.util.Map;
+import java.util.function.Supplier;
 
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
@@ -14,6 +15,7 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobRenderer;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobs;
+import com.ditrix.edt.mcp.server.utils.QueryValidationJobs;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobs.CancellationOutcome;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobs.CancellationResult;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobs.JobSnapshot;
@@ -27,15 +29,27 @@ public class CancelJobTool implements IMcpTool
     private static final String KEY_CONFIRM = "confirm"; //$NON-NLS-1$
 
     private final BackgroundJobs jobs;
+    private final Supplier<QueryValidationJobs> queryJobs;
 
     public CancelJobTool()
     {
-        this(BackgroundJobs.shared());
+        this(BackgroundJobs.shared(), QueryValidationJobs::shared);
     }
 
     CancelJobTool(BackgroundJobs jobs)
     {
+        this(jobs, () -> null);
+    }
+
+    CancelJobTool(BackgroundJobs jobs, QueryValidationJobs queryJobs)
+    {
+        this(jobs, () -> queryJobs);
+    }
+
+    private CancelJobTool(BackgroundJobs jobs, Supplier<QueryValidationJobs> queryJobs)
+    {
         this.jobs = jobs;
+        this.queryJobs = queryJobs;
     }
 
     @Override
@@ -89,10 +103,15 @@ public class CancelJobTool implements IMcpTool
                 + "id returned by the tool that started the job.").toJson(); //$NON-NLS-1$
         }
 
+        var validations = queryJobs.get();
         boolean confirm = JsonUtils.extractBooleanArgument(params, KEY_CONFIRM, false);
         if (!confirm)
         {
             JobSnapshot snapshot = jobs.get(jobId);
+            if (snapshot == null && validations != null)
+            {
+                snapshot = validations.await(jobId, 0);
+            }
             if (snapshot == null)
             {
                 return unknownJobError(jobId);
@@ -111,6 +130,10 @@ public class CancelJobTool implements IMcpTool
         }
 
         CancellationResult cancellation = jobs.cancel(jobId);
+        if (cancellation == null && validations != null)
+        {
+            cancellation = validations.cancel(jobId);
+        }
         if (cancellation == null)
         {
             return unknownJobError(jobId);

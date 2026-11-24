@@ -47,6 +47,7 @@ import com.ditrix.edt.mcp.server.bridge.EdtMcpBridge;
 import com.ditrix.edt.mcp.server.bridge.IEdtMcpBridge;
 import com.ditrix.edt.mcp.server.history.McpCallHistoryFileLog;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobs;
+import com.ditrix.edt.mcp.server.utils.QueryValidationJobs;
 import com.ditrix.edt.mcp.server.utils.FormAttributeDeletion;
 import com.ditrix.edt.mcp.server.utils.Log;
 import com.ditrix.edt.mcp.server.utils.NativeRenderModeProbe;
@@ -97,6 +98,7 @@ public class Activator extends AbstractUIPlugin
     public void start(BundleContext context) throws Exception
     {
         super.start(context);
+        QueryValidationJobs.startShared();
         if (HostKind.current() == HostKind.WINDOWED) { NativeRenderModeProbe.captureStartupModes(); }
         plugin = this; // NOSONAR Eclipse singleton/Activator init pattern; method cannot be static
         mcpServer = new McpServer();
@@ -188,6 +190,7 @@ public class Activator extends AbstractUIPlugin
 
         // Cancel Workmate conversations and stop their non-UI worker/deadline threads
         // before the bundle's services and class loader are torn down.
+        QueryValidationJobs.shutdownShared();
         BackgroundJobs.shutdownShared();
 
         if (mcpServer != null && mcpServer.isRunning())

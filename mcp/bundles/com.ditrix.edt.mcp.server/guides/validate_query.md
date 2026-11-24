@@ -51,8 +51,11 @@ Module mode returns `queries`, `skipped`, `foundCount`, and `skippedCount`. Each
 ## Timeout and cancellation
 
 The read tool waits up to 30 seconds for the entire call, including all literals in module mode.
-If it cannot finish, it returns an error, not a validation verdict. Follow the job ID in the error
-with `get_job_status`; outstanding work also appears in `get_server_status.runningJobs`.
+Query validation has its own bounded worker pool, separate from other MCP background jobs.
+An ordinary completed validation does not create a job record. If the caller reaches its deadline
+or is interrupted (including by a delivered interrupt response) while validation is active, the outstanding
+work appears in `get_server_status.runningJobs`. A timeout response is an error, not a validation
+verdict; if it includes a job ID, track that same ID with `get_job_status`.
 `cancel_job` with that ID and `confirm=true` requests cancellation. The deadline requests it
 automatically. Cancellation is cooperative: EDT can still hold a read transaction until its native
 callback exits. While the job is `running`, do not assume the lock has been released or start another

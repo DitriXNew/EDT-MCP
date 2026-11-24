@@ -33,6 +33,7 @@ import com.ditrix.edt.mcp.server.transport.HttpTransport;
 import com.ditrix.edt.mcp.server.transport.StdioPluginSupport;
 import com.ditrix.edt.mcp.server.transport.TransportStatus;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobs;
+import com.ditrix.edt.mcp.server.utils.QueryValidationJobs;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobs.JobSnapshot;
 import com.ditrix.edt.mcp.server.utils.CheckDescriptionLoader;
 import com.ditrix.edt.mcp.server.utils.NativeRenderModeProbe;
@@ -78,7 +79,9 @@ public class GetServerStatusTool implements IMcpTool
         // The caller's own call is left out: it is running by definition, and listing it would
         // make every answer report one call more than the server was busy with.
         this(httpServer, ipcRunning, () -> InFlightToolCalls.report(InFlightToolCalls.current()),
-            () -> BackgroundJobs.shared().running());
+            () -> java.util.stream.Stream.concat(BackgroundJobs.shared().running().stream(),
+                QueryValidationJobs.shared().running().stream())
+                .sorted(java.util.Comparator.comparingLong(JobSnapshot::getStartedAtMs)).toList());
     }
 
     GetServerStatusTool(Supplier<McpServer> httpServer, BooleanSupplier ipcRunning,

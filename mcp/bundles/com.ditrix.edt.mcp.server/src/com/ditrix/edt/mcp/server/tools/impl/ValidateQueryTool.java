@@ -13,7 +13,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 
 import org.eclipse.core.resources.IFile;
@@ -25,12 +25,13 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
-import com.ditrix.edt.mcp.server.utils.BackgroundJobs;
-import com.ditrix.edt.mcp.server.utils.BackgroundJobs.Status;
+import com.ditrix.edt.mcp.server.Activator;
+import com.ditrix.edt.mcp.server.ActiveToolCall;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
 import com.ditrix.edt.mcp.server.utils.ModuleQueryExtractor;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.QueryValidationService;
+import com.ditrix.edt.mcp.server.utils.QueryValidationJobs;
 
 /**
  * Tool to validate 1C:Enterprise query language (QL) text in the context of a project.
@@ -39,7 +40,7 @@ import com.ditrix.edt.mcp.server.utils.QueryValidationService;
  */
 public class ValidateQueryTool implements IMcpTool
 {
-    public static final String NAME = "validate_query"; //$NON-NLS-1$
+    public static final String NAME = QueryValidationJobs.TOOL;
     
     private static final long TIMEOUT_MS = TimeUnit.SECONDS.toMillis(30);
     private static final String PROJECT_NAME = "projectName"; //$NON-NLS-1$
@@ -157,89 +158,51 @@ public class ValidateQueryTool implements IMcpTool
             return ToolResult.error("Project is closed: " + projectName).toJson(); //$NON-NLS-1$
         }
 
-        return validateWithDeadline(BackgroundJobs.shared(), TIMEOUT_MS, ctx.project().getName(),
-            cancel -> hasModule ? doValidateModule(ctx.project(), modulePath, method, dcsMode, cancel)
+        var activator = Activator.getDefault();
+        var server = activator == null ? null : activator.getMcpServer();
+        ActiveToolCall call = server == null ? null : server.getExecutingToolCall();
+        return validateWithDeadline(QueryValidationJobs.shared(), TIMEOUT_MS, ctx.project().getName(),
+            () -> call != null && call.isResponseDelivered(), cancel -> hasModule ? doValidateModule(ctx.project(), modulePath, method, dcsMode, cancel)
                 : doValidateQuery(ctx.project(), queryText, dcsMode, cancel));
     }
 
     /** Waits for the whole tool, not for each literal separately. Writer preflight stays synchronous. */
-    static String validateWithDeadline(BackgroundJobs jobs, long timeoutMs, String projectName,
-        Function<CancelIndicator, String> work)
+    static String validateWithDeadline(QueryValidationJobs jobs, long timeoutMs, String projectName,
+        BooleanSupplier responseDelivered, Function<CancelIndicator, String> work)
     {
-        // Keep the diagnostic payload scoped to its original request. The job exposes lifecycle
-        // and project name only; other clients polling the shared registry cannot get query results.
-        AtomicReference<String> response = new AtomicReference<>();
-        BackgroundJobs.JobSnapshot started;
         try
         {
-            // Reserve one slot for other tools: native code that ignores polling can keep its
-            // validation slot indefinitely, including after the client has received a timeout.
-            started = jobs.startCooperatively(NAME, timeoutMs, Math.max(1, jobs.getWorkerThreads() - 1),
-                projectProgress(projectName), progress -> {
-                    CancelIndicator cancel = () -> progress.isCancellationRequested()
-                        || progress.remainingMillis() == 0L || Thread.currentThread().isInterrupted();
-                    if (!cancel.isCanceled())
-                    {
-                        String result = work.apply(cancel);
-                        if (!cancel.isCanceled())
-                        {
-                            response.set(result);
-                        }
-                    }
-                    return null;
-                });
+            QueryValidationJobs.Result result = jobs.run(projectName, timeoutMs, responseDelivered, work);
+            if (result.response() != null)
+            {
+                return result.response();
+            }
+            if (result.jobId() != null)
+            {
+                return ToolResult.error("Query validation did not finish in time or was interrupted. " //$NON-NLS-1$
+                    + "Cancellation was requested, but EDT may still hold a read lock until the worker exits. " //$NON-NLS-1$
+                    + "Check get_job_status for jobId '" + result.jobId() + "' before retrying.").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            return ToolResult.error("Query validation did not return a result before timeout or cancellation.").toJson(); //$NON-NLS-1$
         }
         catch (RejectedExecutionException e)
-        {
-            return ToolResult.error("Could not start query validation: " + e.getMessage()).toJson(); //$NON-NLS-1$
-        }
-        if (started == null)
         {
             return ToolResult.error("No query validation slot is available. Check runningJobs in " //$NON-NLS-1$
                 + "get_server_status before retrying.").toJson(); //$NON-NLS-1$
         }
-
-        var settled = jobs.await(started.getId(), Math.max(1L, timeoutMs - started.getElapsedMs()));
-        if (settled != null && settled.getStatus() == Status.DONE && response.get() != null)
+        catch (RuntimeException e)
         {
-            return response.get();
+            return ToolResult.error("Native query validation failed: " + e.getMessage()).toJson(); //$NON-NLS-1$
         }
-        if (settled != null && settled.getStatus() == Status.FAILED)
-        {
-            return ToolResult.error("Native query validation failed: " + settled.getErrorMessage()).toJson(); //$NON-NLS-1$
-        }
-        if (settled != null && settled.getStatus() == Status.RUNNING)
-        {
-            // The wait can end just before the deadline callback, or because the caller was
-            // interrupted. Request cancellation now as well; it is idempotent.
-            var cancellation = jobs.cancel(started.getId());
-            if (cancellation != null && cancellation.getSnapshot().getStatus() == Status.RUNNING)
-            {
-                return ToolResult.error("Query validation did not finish in time or was interrupted. " //$NON-NLS-1$
-                    + "Cancellation was requested, but EDT may still hold a read lock until the worker exits. " //$NON-NLS-1$
-                    + "Check get_job_status for jobId '" + started.getId() + "' before retrying.").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
-            }
-        }
-        return ToolResult.error("Query validation did not return a result before timeout or cancellation. " //$NON-NLS-1$
-            + "Check get_job_status for jobId '" + started.getId() + "'.").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
-    static String projectProgress(String projectName)
+    /** This is a same-project candidate, not verified ownership of the Configuration lock. */
+    static String activeValidationHint(QueryValidationJobs jobs, String projectName)
     {
-        return "Validate queries in project '" + projectName + "'."; //$NON-NLS-1$ //$NON-NLS-2$
-    }
-
-    /**
-     * Provides a candidate for a lock diagnosis, not proof of ownership. The BM error remains
-     * authoritative; a queued validation or one reading a different resource could coexist.
-     */
-    static String activeValidationHint(BackgroundJobs jobs, String projectName)
-    {
-        return jobs.running().stream().filter(j -> NAME.equals(j.getOwningTool())
-            && j.getProgress().stream().anyMatch(p -> projectProgress(projectName).equals(p.getMessage())))
-            .findFirst().map(j -> "\nA validate_query job for this project is still active (started " //$NON-NLS-1$
-                + Instant.ofEpochMilli(j.getStartedAtMs()) + "). It may be holding a read lock. " //$NON-NLS-1$
-                + "Check get_job_status for jobId '" + j.getId() + "' before retrying.").orElse(""); //$NON-NLS-1$
+        var job = jobs.runningForProject(projectName);
+        return job == null ? "" : "\nA validate_query job for this project is still active (started " //$NON-NLS-1$ //$NON-NLS-2$
+            + Instant.ofEpochMilli(job.getStartedAtMs()) + "). It may be holding a read lock. " //$NON-NLS-1$
+            + "Check get_job_status for jobId '" + job.getId() + "' before retrying."; //$NON-NLS-1$
     }
 
     String doValidateQuery(IProject project, String queryText, boolean dcsMode, CancelIndicator cancel)

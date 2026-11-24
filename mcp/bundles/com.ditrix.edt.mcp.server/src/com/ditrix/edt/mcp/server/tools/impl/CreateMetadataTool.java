@@ -69,7 +69,7 @@ import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
 import com.ditrix.edt.mcp.server.tools.base.WriteScope;
-import com.ditrix.edt.mcp.server.utils.BackgroundJobs;
+import com.ditrix.edt.mcp.server.utils.QueryValidationJobs;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.MetadataWriteServices;
 import com.ditrix.edt.mcp.server.utils.BmModelResolver;
@@ -1495,10 +1495,13 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             {
                 Activator.logError("Error creating metadata object", e); //$NON-NLS-1$
                 String message = unwrapCauseMessage(e);
+                // Diagnose only the reported top-level Configuration write. Nested/member and
+                // refactoring operations may use different BM resources or project scopes;
+                // their call sites cannot safely attribute a read lock by message text alone.
                 if (message != null && message.contains("failed to lock resource") //$NON-NLS-1$
                     && message.contains("\"Configuration\"") && message.contains("for writing")) //$NON-NLS-1$ //$NON-NLS-2$
                 {
-                    message += ValidateQueryTool.activeValidationHint(BackgroundJobs.shared(), req.project.getName());
+                    message += ValidateQueryTool.activeValidationHint(QueryValidationJobs.shared(), req.project.getName());
                 }
                 return ToolResult.error("Failed to create object: " + message).toJson(); //$NON-NLS-1$
             }
