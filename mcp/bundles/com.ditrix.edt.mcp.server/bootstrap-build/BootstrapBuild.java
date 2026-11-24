@@ -56,7 +56,7 @@ public final class BootstrapBuild
             add(jar, "META-INF/NOTICE-gson.txt", ("Gson\nCopyright 2008 Google Inc.\n"
                 + "https://github.com/google/gson\nLicensed under Apache License 2.0; see LICENSE-gson.txt.\n")
                 .getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            add(jar, "META-INF/LICENSE-edt-mcp.txt", Files.readAllBytes(Path.of(args[4])));
+            add(jar, "META-INF/LICENSE-edt-mcp.txt", lf(Files.readAllBytes(Path.of(args[4]))));
             // The bootstrap carries Gson inside its jar. It never loads Eclipse or OSGi.
             Path gson = Path.of(Gson.class.getProtectionDomain().getCodeSource().getLocation().toURI());
             try (ZipFile dependency = new ZipFile(gson.toFile()))
@@ -86,10 +86,31 @@ public final class BootstrapBuild
                     { add(jar, classes.relativize(path).toString().replace('\\', '/'), Files.readAllBytes(path)); }
                 }
             }
-            add(jar, "META-INF/LICENSE-edt-mcp.txt", Files.readAllBytes(Path.of(args[4])));
+            add(jar, "META-INF/LICENSE-edt-mcp.txt", lf(Files.readAllBytes(Path.of(args[4]))));
         }
         System.out.println("Embedded bootstrap generated from " + McpToolRegistry.getInstance().getToolCount() + " registered tools");
     }
+    /**
+     * The same text with LF endings: a CRLF pair and a lone CR both become LF. The entry jar is
+     * meant to be reproducible, and a Windows checkout (core.autocrlf) would otherwise produce
+     * different bytes for the same launcher - which the compatibility allowlist reads as a
+     * different ABI.
+     */
+    private static byte[] lf(byte[] bytes)
+    {
+        ByteArrayOutputStream out = new ByteArrayOutputStream(bytes.length);
+        for (int i = 0; i < bytes.length; i++)
+        {
+            if (bytes[i] == '\r')
+            {
+                if (i + 1 < bytes.length && bytes[i + 1] == '\n') { continue; }
+                out.write('\n');
+            }
+            else { out.write(bytes[i]); }
+        }
+        return out.toByteArray();
+    }
+
     private static void add(JarOutputStream jar, String name, byte[] bytes) throws IOException
     { JarEntry entry = new JarEntry(name); entry.setTime(0); jar.putNextEntry(entry); jar.write(bytes); jar.closeEntry(); }
     private static void addManifest(JarOutputStream jar, Manifest manifest) throws IOException

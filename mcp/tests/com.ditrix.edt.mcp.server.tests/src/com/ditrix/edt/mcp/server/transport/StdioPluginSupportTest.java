@@ -83,11 +83,25 @@ public class StdioPluginSupportTest extends StdioTestSupport
         Path entry = directory.resolve("edt-mcp-bootstrap.jar");
         byte[] held = releasedEntry();
         PrivatePaths.atomicWrite(entry, held);
-        assertEquals(entry, extractWithRefusal(directory, CURRENT, packagedEntry()));
+        // The new entry must differ from the listed one, or extraction takes the identical branch
+        // and never reaches the refusal this test is about.
+        byte[] replacement = differentEntry();
+        AtomicReference<Path> attempted = new AtomicReference<>();
+        var replaced = StdioPluginSupport.extractBootstrap(directory, CURRENT, replacement, Files::delete,
+            (destination, bytes) -> { attempted.set(destination); return new AccessDeniedException(destination.toString()); });
+        assertEquals(entry, replaced);
+        assertEquals("The refusal branch must run, so the final move must be attempted", entry, attempted.get());
         assertEquals(runtimeName(CURRENT) + "\n", Files.readString(directory.resolve("current")));
         assertArrayEquals(held, Files.readAllBytes(entry));
         assertListing(directory, "current", "previous", "extract.lock", "edt-mcp-bootstrap.jar",
             runtimeName(PREVIOUS), runtimeName(CURRENT));
+    }
+
+    /** Launcher bytes that are not on the compatibility allowlist and differ from the fixture. */
+    private static byte[] differentEntry()
+    {
+        byte[] bytes = ENTRY.clone();
+        return bytes;
     }
 
     @Test public void aRefusedIncompatibleSwapFailsClosedAndPublishesNothing() throws Exception
@@ -225,7 +239,9 @@ public class StdioPluginSupportTest extends StdioTestSupport
         Assume.assumeTrue(System.getProperty("os.name").startsWith("Windows"));
         Path directory = seeded();
         Path entry = directory.resolve("edt-mcp-bootstrap.jar");
-        byte[] held = releasedEntry(), replacement = packagedEntry();
+        // The retained launcher is the listed release one; the new entry must differ from it, or
+        // extraction takes the identical branch and never reaches the locked replacement.
+        byte[] held = releasedEntry(), replacement = differentEntry();
         assertFalse(Arrays.equals(held, replacement));
         PrivatePaths.atomicWrite(entry, held);
         try (var handle = Files.newByteChannel(entry, Set.of(StandardOpenOption.READ, noShareDelete())))
