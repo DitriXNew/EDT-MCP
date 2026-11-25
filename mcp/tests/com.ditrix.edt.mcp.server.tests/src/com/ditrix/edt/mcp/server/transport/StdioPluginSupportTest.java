@@ -61,9 +61,9 @@ public class StdioPluginSupportTest extends StdioTestSupport
             Files.readString(directory.resolve("current")));
         assertEquals(legacyName + "\n", Files.readString(directory.resolve("previous")));
         assertArrayEquals(PREVIOUS, Files.readAllBytes(directory.resolve(legacyName)));
+        // Another ABI namespace is not this release's business: neither repointed nor cleaned.
         assertEquals(otherAbi + "\n", Files.readString(directory.resolve("current-abi-2")));
         assertArrayEquals(PREVIOUS, Files.readAllBytes(directory.resolve(otherAbi)));
-        assertEquals(runtimeName(CURRENT) + "\n", Files.readString(directory.resolve("current")));
     }
 
     @Test public void aLockedLegacyEntryKeepsItsRuntimeAndCanBeReplacedAfterClosing() throws Exception
