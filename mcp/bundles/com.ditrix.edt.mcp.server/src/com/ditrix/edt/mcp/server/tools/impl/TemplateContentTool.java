@@ -87,9 +87,10 @@ public class TemplateContentTool extends AbstractMetadataWriteTool
         + ",\"toRow\":" + INDEX_SCHEMA + ",\"toCol\":" + INDEX_SCHEMA //$NON-NLS-1$ //$NON-NLS-2$
         + "},\"required\":[\"fromRow\",\"fromCol\",\"toRow\",\"toCol\"],\"additionalProperties\":false}}," //$NON-NLS-1$
         + "\"areas\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{" //$NON-NLS-1$
-        + "\"name\":{\"type\":\"string\"},\"fromRow\":" + INDEX_SCHEMA + ",\"fromCol\":" + INDEX_SCHEMA //$NON-NLS-1$ //$NON-NLS-2$
+        + "\"name\":{\"type\":\"string\"},\"type\":{\"type\":\"string\",\"enum\":[\"Rows\",\"Columns\",\"Rectangle\"]}," //$NON-NLS-1$
+        + "\"fromRow\":" + INDEX_SCHEMA + ",\"fromCol\":" + INDEX_SCHEMA //$NON-NLS-1$ //$NON-NLS-2$
         + ",\"toRow\":" + INDEX_SCHEMA + ",\"toCol\":" + INDEX_SCHEMA //$NON-NLS-1$ //$NON-NLS-2$
-        + "},\"required\":[\"name\",\"fromRow\",\"fromCol\",\"toRow\",\"toCol\"],\"additionalProperties\":false}}," //$NON-NLS-1$
+        + "},\"required\":[\"name\"],\"additionalProperties\":false}}," //$NON-NLS-1$
         + "\"columnWidths\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{" //$NON-NLS-1$
         + "\"col\":" + INDEX_SCHEMA + ",\"width\":{\"type\":\"integer\",\"minimum\":1},\"autoWidthCalculation\":{}," //$NON-NLS-1$ //$NON-NLS-2$
         + "\"widthWeightFactor\":" + INDEX_SCHEMA + "},\"required\":[\"col\"]}}," //$NON-NLS-1$ //$NON-NLS-2$
@@ -141,7 +142,9 @@ public class TemplateContentTool extends AbstractMetadataWriteTool
                 + "borders? ('Solid' or {style, width? 1..3}, or {left?, top?, right?, bottom?} of those), " //$NON-NLS-1$
                 + "borderColor? / backColor? / textColor? ({red, green, blue}, 'Web.Red', 'Style.<Name>', " //$NON-NLS-1$
                 + "'auto')}]; merges [{fromRow, " //$NON-NLS-1$
-                + "fromCol, toRow, toCol}]; areas [{name, fromRow, fromCol, toRow, toCol}]; columnWidths " //$NON-NLS-1$
+                + "fromCol, toRow, toCol}]; areas [{name, type?, fromRow?, fromCol?, toRow?, toCol?}]: " //$NON-NLS-1$
+                + "Rectangle (default) needs all four indices; Rows needs only fromRow/toRow; Columns needs only " //$NON-NLS-1$
+                + "fromCol/toCol; columnWidths " //$NON-NLS-1$
                 + "[{col, width?, autoWidthCalculation?, widthWeightFactor? (only with " //$NON-NLS-1$
                 + "autoWidthCalculation:true)}]; rowHeights [{row, height}]; unmerges [{fromRow, fromCol, " //$NON-NLS-1$
                 + "toRow, toCol}] drops every merge touching the range; removeAreas [name]; renameAreas " //$NON-NLS-1$
@@ -320,8 +323,15 @@ public class TemplateContentTool extends AbstractMetadataWriteTool
         SpreadsheetTemplateWriter.Result result;
         try
         {
+            // An extension can have no local Language objects yet. Resolve the project and base
+            // language snapshot before acquiring the template's write lock.
+            List<String> languageCodes = containsSpreadsheetText(templateSpec)
+                ? TemplateContentSupport.spreadsheetLanguageCodes(Activator.getDefault().getV8ProjectManager(),
+                    ctx.project)
+                : List.of();
             result = BmTransactions.write(writeCtx.bmModel, "ModifyTemplateContent", //$NON-NLS-1$
-                (tx, pm) -> applyTemplateSpec(ctx, tx, writeCtx, normFqn, templateSpec, contentFqnHolder));
+                (tx, pm) -> applyTemplateSpec(ctx, tx, writeCtx, normFqn, templateSpec, contentFqnHolder,
+                    languageCodes));
         }
         catch (TemplateWriteException e)
         {
@@ -349,6 +359,25 @@ public class TemplateContentTool extends AbstractMetadataWriteTool
         }
         boolean persisted = BmTransactions.forceExportToDisk(ctx.project, exportFqns);
         return buildTemplateResult(normFqn, result, persisted);
+    }
+
+    /** Parameter-only and formatting-only edits do not need to consult project languages. */
+    private static boolean containsSpreadsheetText(JsonObject spec)
+    {
+        JsonElement cells = spec.get("cells"); //$NON-NLS-1$
+        if (cells != null && cells.isJsonArray())
+        {
+            for (JsonElement cell : cells.getAsJsonArray())
+            {
+                JsonElement text = cell.isJsonObject() ? cell.getAsJsonObject().get("text") : null; //$NON-NLS-1$
+                if (text != null && text.isJsonPrimitive()
+                    && text.getAsJsonPrimitive().isString() && !text.getAsString().isEmpty())
+                {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     /** Write file-backed text inside a BM boundary with rollback for the file write. */
@@ -543,7 +572,7 @@ public class TemplateContentTool extends AbstractMetadataWriteTool
      */
     private SpreadsheetTemplateWriter.Result applyTemplateSpec(ProjectContext ctx, IBmTransaction tx,
         TemplateWriteContext writeCtx, String normFqn, JsonObject templateSpec,
-        String[] contentFqnHolder)
+        String[] contentFqnHolder, List<String> languageCodes)
     {
         Object inTx = tx.getObjectById(writeCtx.templateBmId);
         if (!(inTx instanceof BasicTemplate))
@@ -573,7 +602,8 @@ public class TemplateContentTool extends AbstractMetadataWriteTool
         // reference to it); an external-objects project offers platform colours only.
         SpreadsheetTemplateWriter.Result applied = SpreadsheetTemplateWriter.apply(doc, templateSpec,
             writeCtx.projectVersion, SpreadsheetTemplateWriter.projectColors(writeCtx.externalObjects ? null
-                : () -> (Configuration)tx.getTopObjectByFqn("Configuration"), writeCtx.projectVersion)); //$NON-NLS-1$
+                : () -> (Configuration)tx.getTopObjectByFqn("Configuration"), writeCtx.projectVersion), //$NON-NLS-1$
+            languageCodes);
         if (applied.hasError())
         {
             // Roll the whole write back so a validation failure leaves nothing on disk.

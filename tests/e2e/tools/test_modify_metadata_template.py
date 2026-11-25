@@ -103,24 +103,17 @@ def _png_ok(r):
         return False
 
 
-# The v1 template writer stores a cell's LITERAL text under the platform's language-NEUTRAL key "#"
-# (SheetFactory.DEFAULT_LANGUAGE) so it renders for EVERY viewing language: the moxel text reader
-# resolves content.get(currentLanguage) then falls back to content.get("#"). On disk that neutral
-# entry serializes as a <v8:item> whose <v8:lang> is "#". A bare `text in doc` is NOT enough — the
-# substring is present no matter which <v8:lang> key stores the text (the shipped fixtures key their
-# cell text under "en"), so a regression that keyed authored text under "en"/"" would render BLANK yet
-# still pass the substring gate. This pins the text to the neutral "#" item — the deterministic half
-# of the render proof; actual pixel visibility is live-verified with get_template_screenshot.
-_NEUTRAL_TEXT_RE_TMPL = r"<v8:lang>#</v8:lang>\s*<v8:content>%s</v8:content>"
+# The neutral key is EDT's fallback; a concrete config language key is what
+# lets a 1C session read the same authored cell text (#1039).
+def _assert_text_under_language_key(doc, text, mxlx, code):
+    pattern = r"<v8:lang>%s</v8:lang>\s*<v8:content>%s</v8:content>" % (
+        re.escape(code), re.escape(text))
+    assert re.search(pattern, doc), (
+        "the authored cell text must be stored under %r in %s: %r" % (code, mxlx, doc[:1000]))
 
 
 def _assert_text_under_neutral_key(doc, text, mxlx):
-    """Fail unless the authored cell text is serialized under the language-neutral '#' key (the key that
-    renders for every viewing language), not under a specific language code like the fixtures' 'en'."""
-    pattern = re.compile(_NEUTRAL_TEXT_RE_TMPL % re.escape(text))
-    assert pattern.search(doc), (
-        "the authored cell text must be stored under the language-neutral '#' key (so it renders for "
-        "every viewing language), not under 'en'/'' like the fixtures, in %s: %r" % (mxlx, doc[:600]))
+    _assert_text_under_language_key(doc, text, mxlx, "#")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -164,11 +157,10 @@ def test_template_content_lands_in_mxlx_on_disk():
     # to its separate resource, not just committed in-memory.
     poll_diff_contains(text, ctx="the authored cell text must flush to the template's .mxlx on disk")
     doc = read_disk(mxlx)
-    # Not a bare `text in doc` (satisfied under ANY <v8:lang> key): pin the cell text to the
-    # language-NEUTRAL "#" item — the key that renders for every viewing language. Text keyed under
-    # "en"/"" (like the shipped fixtures) would still contain the substring yet render blank; this
-    # fails it. This is the on-disk half of the render proof (pixel visibility is live-verified).
+    # The fixture's configured language code is en (the object name is English).
+    # Requiring both keys catches a regression that only works in EDT rendering.
     _assert_text_under_neutral_key(doc, text, mxlx)
+    _assert_text_under_language_key(doc, text, mxlx, "en")
     assert parameter in doc, \
         "the parameter cell must land in the same .mxlx (%s): %r" % (mxlx, doc[:400])
     # A fresh empty template has NO <merge>, so its presence proves the authored merge wrote (anti-cheat).

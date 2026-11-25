@@ -152,12 +152,22 @@ def test_capture_owned_template_returns_nonempty_png():
     """Render the real fixture OBJECT-OWNED template Catalog.Catalog.Template.Invoice (a template
     that belongs to a Catalog, serialized inline in the owner's .mdo) and validate a non-empty
     PNG. This proves owned templates - not just common ones - render."""
-    r = call("get_template_screenshot", {
+    details = call("get_metadata_details", {
         "projectName": PROJECT,
-        "templatePath": "Catalog.Catalog.Template.Invoice",
+        "objectFqns": ["Catalog.Catalog"],
+        "full": True,
+        "language": "en",
     })
-    _assert_nonempty_png(r, "Catalog.Catalog.Template.Invoice")
-    assert_no_diff("a template screenshot read must not touch the project on disk")
+    assert_ok(details)
+    assert "### Templates\n" in details.text, details.text
+    row = next((line for line in details.text.splitlines()
+                if line.startswith("| Invoice | Invoice | SpreadsheetDocument | ")), None)
+    assert row is not None, details.text
+    fqn = row.split("|")[4].strip()
+    assert fqn == "Catalog.Catalog.Template.Invoice", row
+    r = call("get_template_screenshot", {"projectName": PROJECT, "templatePath": fqn})
+    _assert_nonempty_png(r, fqn)
+    assert_no_diff("discovering and rendering an owned template must not touch the project on disk")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
