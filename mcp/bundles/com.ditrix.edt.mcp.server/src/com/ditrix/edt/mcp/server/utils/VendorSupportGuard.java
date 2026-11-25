@@ -284,12 +284,25 @@ public final class VendorSupportGuard
      */
     public static String refusalForModuleFile(IProject project, MetadataScope scope, IFile file)
     {
+        return refusalForModuleFile(project, scope, file, false);
+    }
+
+    /** Checks an owned module resolved inside a supported source root, not necessarily src/. */
+    public static String refusalForSourceRelativeModuleFile(IProject project, MetadataScope scope, IFile file)
+    {
+        return refusalForModuleFile(project, scope, file, true);
+    }
+
+    private static String refusalForModuleFile(IProject project, MetadataScope scope, IFile file,
+        boolean sourceRelative)
+    {
         if (scope == null || scope.isExternalObjects())
         {
             return null;
         }
         EObject module = file.exists() ? BslModuleUtils.loadModule(file) : null;
-        return refusalForModule(project, scope, file.getProjectRelativePath().toString(), module);
+        String path = sourceRelative ? BslModuleUtils.sourceRelativePath(file) : file.getProjectRelativePath().toString();
+        return refusalForModule(project, scope, path, module);
     }
 
     /**

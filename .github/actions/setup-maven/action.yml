@@ -10,12 +10,43 @@ runs:
   steps:
     - shell: bash
       run: |
+        set -euo pipefail
+
         VERSION=3.9.16
         SHA512=831a8591fe20c8243b1dbe7d71e3244f31d1665b0804b2e825e38cbbe5ce0cafb8338851f90780735568773e0a6cd07bbec107cda0b896b008b861075358b6f6
-        ARCHIVE="$RUNNER_TEMP/apache-maven-$VERSION-bin.tar.gz"
-        curl --fail --silent --show-error --location --retry 3 --output "$ARCHIVE" \
-          "https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/$VERSION/apache-maven-$VERSION-bin.tar.gz"
-        echo "$SHA512  $ARCHIVE" | sha512sum --check --strict
+        ARCHIVE_NAME="apache-maven-$VERSION-bin.tar.gz"
+        DOWNLOAD_DIR="$(mktemp -d "$RUNNER_TEMP/setup-maven.XXXXXXXX")"
+        trap 'rm -rf -- "$DOWNLOAD_DIR"' EXIT
+
+        download() {
+          curl --disable --proto '=https' --proto-redir '=https' \
+            --fail --silent --show-error --location --max-redirs 3 \
+            --connect-timeout 10 --max-time 30 --retry 3 --retry-max-time 45 \
+            --output "$2" "$1"
+        }
+
+        ARCHIVE="$DOWNLOAD_DIR/central.tar.gz"
+        if download "https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/$VERSION/$ARCHIVE_NAME" "$ARCHIVE"; then
+          :
+        else
+          CURL_STATUS=$?
+          # Retry from another source only for HTTP/transport failures (including 429,
+          # malformed server replies and proxy handshake errors), not local write failures.
+          case "$CURL_STATUS" in
+            5|6|7|8|16|18|22|28|35|47|52|55|56|60|92|95|96|97)
+              echo "Maven Central download failed (curl exit $CURL_STATUS); trying the Apache archive." >&2
+              ;;
+            *)
+              exit "$CURL_STATUS"
+              ;;
+          esac
+          # Use the release archive, not the rotating download CDN, for the fixed version.
+          ARCHIVE="$DOWNLOAD_DIR/apache.tar.gz"
+          download "https://archive.apache.org/dist/maven/maven-3/$VERSION/binaries/$ARCHIVE_NAME" "$ARCHIVE"
+        fi
+
+        # A successful download with a bad checksum is a hard failure, not a mirror fallback.
+        printf '%s  %s\n' "$SHA512" "$ARCHIVE" | sha512sum --check --strict
         tar -xzf "$ARCHIVE" -C "$RUNNER_TEMP"
-        echo "$RUNNER_TEMP/apache-maven-$VERSION/bin" >> "$GITHUB_PATH"
         "$RUNNER_TEMP/apache-maven-$VERSION/bin/mvn" --version
+        printf '%s\n' "$RUNNER_TEMP/apache-maven-$VERSION/bin" >> "$GITHUB_PATH"
