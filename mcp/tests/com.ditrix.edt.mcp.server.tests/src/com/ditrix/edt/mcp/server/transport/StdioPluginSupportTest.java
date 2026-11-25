@@ -13,6 +13,7 @@ import org.eclipse.core.runtime.IStatus;
 import org.eclipse.core.runtime.Platform;
 import org.junit.*;
 import org.osgi.framework.FrameworkUtil;
+import com.ditrix.edt.mcp.server.ipc.EndpointRegistry;
 import com.ditrix.edt.mcp.server.ipc.PrivatePaths;
 import com.ditrix.edt.mcp.server.utils.Log;
 
@@ -48,12 +49,10 @@ public class StdioPluginSupportTest extends StdioTestSupport
     {
         Path directory = seeded();
         String legacyName = runtimeName(PREVIOUS);
-        PrivatePaths.atomicWrite(directory.resolve(legacyName), PREVIOUS);
-        Files.writeString(directory.resolve("current"), legacyName + "\n");
-        Files.writeString(directory.resolve("previous"), "");
+        EndpointRegistry.atomicWrite(directory.resolve("previous"), "");
         String otherAbi = "abi-2-" + legacyName;
         PrivatePaths.atomicWrite(directory.resolve(otherAbi), PREVIOUS);
-        Files.writeString(directory.resolve("current-abi-2"), otherAbi + "\n");
+        EndpointRegistry.atomicWrite(directory.resolve("current-abi-2"), otherAbi + "\n");
 
         extract(directory, CURRENT);
         assertEquals("A preloaded legacy entry must discover the compatible update",
