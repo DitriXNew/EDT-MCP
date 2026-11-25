@@ -711,6 +711,18 @@ def test_the_extensions_own_defined_type_and_subscription_are_written_natively()
         if row is None or "CatalogObject." + _OWN_CATALOG not in row:
             raise AssertionError("the model's source is the extension's catalog; got %r" % (row,))
 
+        # #998: the handler string must surface in the reference scan for the extension's own common module.
+        fqn = "EventSubscription." + sub
+        module = "CommonModule.tests_MathHelper"
+        handler = module + ".Subtract"
+        assert_ok(_modify_ext(fqn, [{"name": "handler", "value": handler}]), "set the extension's handler")
+        _poll_ext(sub_mdo, "the handler must land on disk", needles=[handler])
+        wait_for_project_ready()
+        refs = call("find_references", {"projectName": TESTS_PROJECT, "objectFqn": module})
+        assert_ok(refs, "find references to the handler's common module")
+        assert_contains(refs.text, "- " + fqn + " - Handler",
+                        "the subscription must appear as an extension metadata reference")
+
     _restoring("the extension's own defined type and subscription", body)
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")

@@ -40,7 +40,9 @@ import com._1c.g5.v8.dt.mcore.FieldSource;
 import com._1c.g5.v8.dt.mcore.NamedElement;
 import com._1c.g5.v8.dt.mcore.TypeItem;
 import com._1c.g5.v8.dt.md.PredefinedItemUtil;
+import com._1c.g5.v8.dt.metadata.mdclass.CommonModule;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
+import com._1c.g5.v8.dt.metadata.mdclass.EventSubscription;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.PredefinedItem;
 import com._1c.g5.v8.dt.metadata.mdclass.util.MdClassUtil;
@@ -53,6 +55,7 @@ import com.ditrix.edt.mcp.server.utils.AdoptedReferenceTargets;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
 import com.ditrix.edt.mcp.server.utils.BslReferenceSearch;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
+import com.ditrix.edt.mcp.server.utils.MethodReferenceValidator;
 import com.ditrix.edt.mcp.server.utils.Pagination;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
@@ -120,7 +123,7 @@ public class MetadataReferenceService
 
         // Collect all references
         ReferenceCollector collector =
-            new ReferenceCollector(project, bmModel, (IBmObject)targetObject, bound.limit(), bound);
+            new ReferenceCollector(project, bmModel, (IBmObject)targetObject, bound.limit(), bound, config);
 
         try
         {
@@ -142,8 +145,8 @@ public class MetadataReferenceService
      * find_references} backbone), generalized to any {@link IBmObject} - not just a top {@link
      * MdObject} - so a caller can reuse the exact metadata+BSL scan for a NON-top object (e.g. a
      * {@code PredefinedItem}, a plain EMF containment on its owner Catalog/ChartOfCharacteristicTypes,
-     * not a top object itself - issue #293). When {@code target} is an {@link MdObject} the FULL
-     * 5-step collection runs, byte-identical to what {@link #findReferences} does for a top object;
+     * not a top object itself - issue #293). When {@code target} is an {@link MdObject} the same
+     * indexed collection steps run as for a top object;
      * for anything else only the two collectors that make sense for a non-MdObject target run: back
      * references ({@link IBmEngine#getBackReferences}) and BSL code references (the Xtext {@link
      * IReferenceFinder} scan) - the produced-types / predefined-items / field collectors all key off
@@ -707,6 +710,8 @@ public class MetadataReferenceService
         private final IBmObject target;
         /** Non-null exactly when {@code target instanceof MdObject} - see the class comment. */
         private final MdObject targetAsMdObject;
+        /** The selected project's configuration, used for string-valued metadata references. */
+        private final Configuration sourceConfiguration;
         private final int limit;
         /** Bounds the walk of a {@code find_references} search; unbounded for a strict scan. */
         final ReferenceSearchBound bound;
@@ -781,6 +786,12 @@ public class MetadataReferenceService
         ReferenceCollector(IProject sourceProject, IBmModel bmModel, IBmObject target, int limit,
             ReferenceSearchBound bound)
         {
+            this(sourceProject, bmModel, target, limit, bound, null);
+        }
+
+        ReferenceCollector(IProject sourceProject, IBmModel bmModel, IBmObject target, int limit,
+            ReferenceSearchBound bound, Configuration sourceConfiguration)
+        {
             super("Find references to " + safeTargetName(target)); //$NON-NLS-1$
             this.sourceProject = sourceProject;
             this.bmModel = bmModel;
@@ -788,6 +799,7 @@ public class MetadataReferenceService
             this.targetAsMdObject = (target instanceof MdObject) ? (MdObject)target : null;
             this.limit = limit;
             this.bound = bound;
+            this.sourceConfiguration = sourceConfiguration;
         }
 
         /**
@@ -887,7 +899,13 @@ public class MetadataReferenceService
                 }
             }
 
-            // 5. Collect BSL code references - applies to ANY IBmObject. MdObject targets add their
+            // 5. EventSubscription.handler is a string, not an indexed BM cross-reference.
+            if (!stopped() && sourceConfiguration != null && targetAsMdObject instanceof CommonModule module)
+            {
+                collectEventSubscriptionHandlers(module);
+            }
+
+            // 6. Collect BSL code references - applies to ANY IBmObject. MdObject targets add their
             // produced types; MdObject and PredefinedItem targets can add adopted-extension copies.
             if (!stopped())
             {
@@ -924,6 +942,32 @@ public class MetadataReferenceService
             references.add(ref);
             bound.recordCollected(references.size());
             return true;
+        }
+
+        private void collectEventSubscriptionHandlers(CommonModule module)
+        {
+            // Do not infer same-named modules in a different project from a string.
+            String moduleName = module.getName();
+            for (EventSubscription subscription : sourceConfiguration.getEventSubscriptions())
+            {
+                if (capReached())
+                {
+                    return;
+                }
+                String handler = subscription.getHandler();
+                if (handler == null || handler.isBlank())
+                {
+                    continue;
+                }
+                var parsed = MethodReferenceValidator.parse(handler, "handler", //$NON-NLS-1$
+                    "'CommonModule.Module.Method'", "CommonModule.Calc.Handle"); //$NON-NLS-1$ //$NON-NLS-2$
+                if (parsed.error == null && !parsed.methodName.isBlank()
+                    && parsed.moduleName.equalsIgnoreCase(moduleName) && subscription instanceof IBmObject source)
+                {
+                    addReference(new ReferenceInfo(getCategoryFromObject(source),
+                        "EventSubscription." + subscription.getName(), "Handler", source)); //$NON-NLS-1$ //$NON-NLS-2$
+                }
+            }
         }
 
         private void collectBackReferences(IBmEngine engine, IBmObject target)
