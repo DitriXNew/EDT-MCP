@@ -76,7 +76,10 @@ public class IpcConnectionTest extends StdioTestSupport
             // Another request cannot borrow the lease held by the paused IPC worker.
             fixture.finishTool.countDown();
             String response = fixture.dispatcher.processRequest(call(3, DrainFixture.TOOL));
-            assertTrue(response, response.contains("Headless EDT is shutting down"));
+            // Assert the machine-readable payload, not prose that depends on the JVM locale.
+            var refused = JsonParser.parseString(response).getAsJsonObject();
+            assertNotNull(response, refused.get("result"));
+            assertTrue(response, refused.getAsJsonObject("result").get("isError").getAsBoolean());
             assertEquals("unadmitted tool must not run", 1, fixture.executed.getCount());
         }
     }
