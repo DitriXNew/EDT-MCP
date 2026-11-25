@@ -71,6 +71,12 @@ def test_valid_query_against_fixture_catalog_is_clean():
     # a stale 'Done' placeholder).
     assert_contains(r.text, "valid", "success digest must reflect the result keys")
 
+    status = call("get_server_status", {})
+    assert_ok(status, "check running jobs after fast validation")
+    jobs = status.structured["runningJobs"]
+    assert isinstance(jobs, list), jobs
+    assert not any(job.get("tool") == "validate_query" for job in jobs), jobs
+
     assert_no_diff("validate_query is read-only; nothing may change on disk")
 
 

@@ -391,6 +391,114 @@ public class QueryValidationJobsTest
         }
     }
 
+    @Test
+    public void thirdOrdinaryCallCanCompleteWithoutPublishingAnyJobs() throws Exception
+    {
+        var callers = Executors.newFixedThreadPool(3);
+        var entered = new CountDownLatch(2);
+        var release = new CountDownLatch(1);
+        var thirdWaiting = new CountDownLatch(1);
+        try (var jobs = new QueryValidationJobs(2, 2))
+        {
+            var first = callers.submit(() -> jobs.run("Demo", WAIT_MS, () -> false, cancel -> {
+                entered.countDown();
+                awaitRelease(release);
+                return "first";
+            }));
+            var second = callers.submit(() -> jobs.run("Demo", WAIT_MS, () -> false, cancel -> {
+                entered.countDown();
+                awaitRelease(release);
+                return "second";
+            }));
+            try
+            {
+                assertTrue(entered.await(WAIT_MS, TimeUnit.MILLISECONDS));
+                var third = callers.submit(() -> jobs.run("Demo", WAIT_MS, () -> false, cancel -> "third",
+                    () -> {
+                        thirdWaiting.countDown();
+                        return null;
+                    }));
+                assertTrue(thirdWaiting.await(WAIT_MS, TimeUnit.MILLISECONDS));
+                assertThrows(java.util.concurrent.TimeoutException.class, () -> third.get(100, TimeUnit.MILLISECONDS));
+                assertTrue(jobs.running().isEmpty());
+                release.countDown();
+                assertEquals("first", first.get(WAIT_MS, TimeUnit.MILLISECONDS).response());
+                assertEquals("second", second.get(WAIT_MS, TimeUnit.MILLISECONDS).response());
+                assertEquals("third", third.get(WAIT_MS, TimeUnit.MILLISECONDS).response());
+                assertTrue(jobs.running().isEmpty());
+            }
+            finally
+            {
+                release.countDown();
+            }
+        }
+        finally
+        {
+            callers.shutdownNow();
+        }
+    }
+
+    @Test
+    public void concurrentAttachedCallsWaitAndAdmissionSharesTheOriginalDeadline() throws Exception
+    {
+        var callers = Executors.newFixedThreadPool(4);
+        var entered = new CountDownLatch(2);
+        var release = new CountDownLatch(1);
+        var now = new AtomicLong();
+        try (var jobs = new QueryValidationJobs(2, 2, now::get))
+        {
+            var first = callers.submit(() -> jobs.run("Demo", WAIT_MS, () -> false, cancel -> {
+                entered.countDown();
+                awaitRelease(release);
+                return "first";
+            }));
+            var second = callers.submit(() -> jobs.run("Demo", WAIT_MS, () -> false, cancel -> {
+                entered.countDown();
+                awaitRelease(release);
+                return "second";
+            }));
+            try
+            {
+                assertTrue(entered.await(WAIT_MS, TimeUnit.MILLISECONDS));
+                var waiting = new CountDownLatch(1);
+                var third = callers.submit(() -> jobs.run("Demo", 100, () -> false, cancel -> {
+                    now.set(TimeUnit.MILLISECONDS.toNanos(120));
+                    return "late";
+                }, () -> {
+                    waiting.countDown();
+                    return null;
+                }));
+                assertTrue(waiting.await(WAIT_MS, TimeUnit.MILLISECONDS));
+                var expiredWaiting = new CountDownLatch(1);
+                var expired = callers.submit(() -> jobs.run("Demo", 20, () -> false, cancel -> {
+                    fail("an expired waiter must not invoke validation");
+                    return null;
+                }, () -> {
+                    expiredWaiting.countDown();
+                    return null;
+                }));
+                assertTrue(expiredWaiting.await(WAIT_MS, TimeUnit.MILLISECONDS));
+                now.set(TimeUnit.MILLISECONDS.toNanos(75));
+                assertNull(expired.get(WAIT_MS, TimeUnit.MILLISECONDS).response());
+                assertFalse(third.isDone());
+                assertTrue(jobs.running().isEmpty());
+                release.countDown();
+                assertEquals("first", first.get(WAIT_MS, TimeUnit.MILLISECONDS).response());
+                assertEquals("second", second.get(WAIT_MS, TimeUnit.MILLISECONDS).response());
+                assertNull(third.get(WAIT_MS, TimeUnit.MILLISECONDS).response());
+                assertEquals("next", jobs.run("Demo", WAIT_MS, () -> false, cancel -> "next").response());
+            }
+            finally
+            {
+                release.countDown();
+            }
+        }
+        finally
+        {
+            callers.shutdownNow();
+        }
+    }
+
     private static String detachAndFinish(QueryValidationJobs jobs, java.util.concurrent.ExecutorService caller)
         throws Exception
     {

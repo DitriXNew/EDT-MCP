@@ -99,6 +99,11 @@ public class ValidateQueryDeadlineTest
                 assertNull(pending.getResult());
                 assertTrue(ValidateQueryTool.activeValidationHint(validations, "Demo").contains(id));
                 assertEquals("", ValidateQueryTool.activeValidationHint(validations, "Other"));
+                String lock = "failed to lock resource \"Configuration\" for writing";
+                assertTrue(CreateMetadataTool.describeCreateFailure(lock, "Demo", validations).contains(id));
+                assertEquals(lock, CreateMetadataTool.describeCreateFailure(lock, "Other", validations));
+                String unrelated = "failed to lock resource \"Catalog\" for writing";
+                assertEquals(unrelated, CreateMetadataTool.describeCreateFailure(unrelated, "Demo", validations));
                 assertTrue(new GetJobStatusTool(ordinary, validations).execute(
                     Map.of("jobId", id, "waitSeconds", "0")).contains("| status | running |"));
                 assertTrue(new CancelJobTool(ordinary, validations).execute(
@@ -107,7 +112,7 @@ public class ValidateQueryDeadlineTest
                     Map.of("jobId", id, "confirm", "true")).contains("worker has not exited"));
                 assertTrue(ValidateQueryTool.validateWithDeadline(validations, GUARD_MS, "Demo", () -> false,
                     ignored -> { fail("No slot may be released until native exit"); return null; })
-                    .contains("No query validation slot is available"));
+                    .contains("job IDs: " + id));
 
                 var next = ordinary.start("unrelated", GUARD_MS, "start", progress -> "independent");
                 assertEquals("independent", ordinary.await(next.getId(), GUARD_MS).getResult());
@@ -118,6 +123,47 @@ public class ValidateQueryDeadlineTest
                 assertNull(terminal.getResult());
                 assertTrue(validations.running().isEmpty());
                 assertEquals("", ValidateQueryTool.activeValidationHint(validations, "Demo"));
+            }
+            finally
+            {
+                release.countDown();
+            }
+        }
+        finally
+        {
+            caller.shutdownNow();
+        }
+    }
+
+    @Test
+    public void timedOutModuleReturnsOnlyPreviouslyCollectedResults() throws Exception
+    {
+        var caller = Executors.newSingleThreadExecutor();
+        var recorded = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        var delivered = new AtomicBoolean();
+        var partial = new ValidateQueryTool.ModuleProgress("Demo/Module.bsl", false);
+        try (var validations = new QueryValidationJobs(1, 2))
+        {
+            var response = caller.submit(() -> ValidateQueryTool.validateWithDeadline(validations, GUARD_MS,
+                "Demo", delivered::get, cancel -> {
+                    partial.addQuery(Map.of("line", 2, "valid", true));
+                    partial.addSkipped(Map.of("line", 3, "reason", "dynamic"));
+                    recorded.countDown();
+                    awaitCleanup(release);
+                    return ORIGINAL;
+                }, partial));
+            try
+            {
+                assertTrue(recorded.await(GUARD_MS, TimeUnit.MILLISECONDS));
+                delivered.set(true);
+                var result = com.google.gson.JsonParser.parseString(
+                    response.get(GUARD_MS, TimeUnit.MILLISECONDS)).getAsJsonObject();
+                assertFalse(result.get("success").getAsBoolean());
+                assertFalse(result.get("validationComplete").getAsBoolean());
+                assertEquals(1, result.getAsJsonArray("queries").size());
+                assertEquals(1, result.getAsJsonArray("skipped").size());
+                assertTrue(result.get("error").getAsString().contains(validations.running().get(0).getId()));
             }
             finally
             {

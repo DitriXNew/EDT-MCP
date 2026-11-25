@@ -50,7 +50,7 @@ Module mode returns `queries`, `skipped`, `foundCount`, and `skippedCount`. Each
 
 ## Timeout and cancellation
 
-The read tool waits up to 30 seconds for the entire call, including all literals in module mode.
+The read tool waits up to 30 seconds for the entire call, including waiting for an available worker and all literals in module mode. If detached validations occupy both workers, the error names their job IDs. A partial module response is marked incomplete and contains only the literals already processed.
 Query validation has its own bounded worker pool, separate from other MCP background jobs.
 An ordinary completed validation does not create a job record. If the caller reaches its deadline
 or is interrupted (including by a delivered interrupt response) while validation is active, the outstanding

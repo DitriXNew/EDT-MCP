@@ -56,6 +56,21 @@ public final class QueryValidationJobs implements AutoCloseable
 
     public record Result(String response, String jobId) { }
 
+    /** Only detached jobs are actionable through get_job_status. */
+    public static final class CapacityException extends RejectedExecutionException
+    {
+        private static final long serialVersionUID = 1L;
+        private final List<String> blockingJobIds;
+
+        CapacityException(List<String> blockingJobIds)
+        {
+            super("Query validation slots are held by detached work."); //$NON-NLS-1$
+            this.blockingJobIds = List.copyOf(blockingJobIds);
+        }
+
+        public List<String> blockingJobIds() { return blockingJobIds; }
+    }
+
     public QueryValidationJobs(int threadCount, int maxCompleted)
     {
         this(threadCount, maxCompleted, System::nanoTime);
@@ -158,43 +173,78 @@ public final class QueryValidationJobs implements AutoCloseable
         // The host lease can belong to an activation that has since been stopped. Do not
         // accept it into a later generation even if the same lane has already resumed.
         Lease lease = acquireLease.get();
-        Task task = new Task(projectName, startNanos, startMs, TimeUnit.MILLISECONDS.toNanos(timeoutMs), action,
-            lease);
+        final long budget = TimeUnit.MILLISECONDS.toNanos(timeoutMs);
+        Task task = new Task(projectName, startNanos, startMs, budget, action, lease);
+        boolean submitted = false;
         try
         {
             synchronized (this)
             {
-                if (closed || paused)
+                while (true)
                 {
-                    throw new RejectedExecutionException("Query validation is shutting down."); //$NON-NLS-1$
-                }
-                if (generation != expectedGeneration)
-                {
-                    throw new RejectedExecutionException("MCP restarted during query admission."); //$NON-NLS-1$
-                }
-                if (admitted.size() >= limit)
-                {
-                    throw new RejectedExecutionException("Query validation capacity is occupied."); //$NON-NLS-1$
-                }
-                admitted.add(task);
-                try
-                {
-                    workers.execute(task);
-                }
-                catch (RuntimeException | Error e)
-                {
-                    admitted.remove(task);
-                    throw e;
+                    if (closed || paused)
+                    {
+                        throw new RejectedExecutionException("Query validation is shutting down."); //$NON-NLS-1$
+                    }
+                    if (generation != expectedGeneration)
+                    {
+                        throw new RejectedExecutionException("MCP restarted during query admission."); //$NON-NLS-1$
+                    }
+                    if (Thread.currentThread().isInterrupted() || responseDelivered.getAsBoolean())
+                    {
+                        return new Result(null, null);
+                    }
+                    long remaining = budget - (nanoTime.getAsLong() - startNanos);
+                    if (admitted.size() < limit)
+                    {
+                        if (remaining <= 0)
+                        {
+                            return new Result(null, null);
+                        }
+                        admitted.add(task);
+                        try
+                        {
+                            workers.execute(task);
+                            submitted = true;
+                            break;
+                        }
+                        catch (RuntimeException | Error e)
+                        {
+                            admitted.remove(task);
+                            notifyAll();
+                            throw e;
+                        }
+                    }
+                    // Attached calls can finish and free capacity without creating a job. Only
+                    // report actionable IDs; a waiting caller never owns a slot or visible job.
+                    List<String> blockingIds = admitted.stream().filter(t -> t.published)
+                        .map(t -> t.id).toList();
+                    if (blockingIds.size() == limit)
+                    {
+                        throw new CapacityException(blockingIds);
+                    }
+                    if (remaining <= 0)
+                    {
+                        return new Result(null, null);
+                    }
+                    try
+                    {
+                        TimeUnit.NANOSECONDS.timedWait(this, Math.min(remaining, INTERRUPT_POLL_NANOS));
+                    }
+                    catch (InterruptedException e)
+                    {
+                        Thread.currentThread().interrupt();
+                        return new Result(null, null);
+                    }
                 }
             }
         }
-        catch (RuntimeException | Error e)
+        finally
         {
-            if (lease != null)
+            if (!submitted && lease != null)
             {
                 lease.close();
             }
-            throw e;
         }
         boolean interrupted = false;
         try
@@ -332,6 +382,7 @@ public final class QueryValidationJobs implements AutoCloseable
         {
             task.published = true;
             detached.put(task.id, task);
+            notifyAll();
         }
     }
 
