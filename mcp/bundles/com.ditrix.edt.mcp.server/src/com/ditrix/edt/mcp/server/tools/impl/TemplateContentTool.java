@@ -87,9 +87,10 @@ public class TemplateContentTool extends AbstractMetadataWriteTool
         + ",\"toRow\":" + INDEX_SCHEMA + ",\"toCol\":" + INDEX_SCHEMA //$NON-NLS-1$ //$NON-NLS-2$
         + "},\"required\":[\"fromRow\",\"fromCol\",\"toRow\",\"toCol\"],\"additionalProperties\":false}}," //$NON-NLS-1$
         + "\"areas\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{" //$NON-NLS-1$
-        + "\"name\":{\"type\":\"string\"},\"fromRow\":" + INDEX_SCHEMA + ",\"fromCol\":" + INDEX_SCHEMA //$NON-NLS-1$ //$NON-NLS-2$
+        + "\"name\":{\"type\":\"string\"},\"type\":{\"type\":\"string\",\"enum\":[\"Rows\",\"Columns\",\"Rectangle\"]}," //$NON-NLS-1$
+        + "\"fromRow\":" + INDEX_SCHEMA + ",\"fromCol\":" + INDEX_SCHEMA //$NON-NLS-1$ //$NON-NLS-2$
         + ",\"toRow\":" + INDEX_SCHEMA + ",\"toCol\":" + INDEX_SCHEMA //$NON-NLS-1$ //$NON-NLS-2$
-        + "},\"required\":[\"name\",\"fromRow\",\"fromCol\",\"toRow\",\"toCol\"],\"additionalProperties\":false}}," //$NON-NLS-1$
+        + "},\"required\":[\"name\"],\"additionalProperties\":false}}," //$NON-NLS-1$
         + "\"columnWidths\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{" //$NON-NLS-1$
         + "\"col\":" + INDEX_SCHEMA + ",\"width\":{\"type\":\"integer\",\"minimum\":1},\"autoWidthCalculation\":{}," //$NON-NLS-1$ //$NON-NLS-2$
         + "\"widthWeightFactor\":" + INDEX_SCHEMA + "},\"required\":[\"col\"]}}," //$NON-NLS-1$ //$NON-NLS-2$
@@ -141,7 +142,9 @@ public class TemplateContentTool extends AbstractMetadataWriteTool
                 + "borders? ('Solid' or {style, width? 1..3}, or {left?, top?, right?, bottom?} of those), " //$NON-NLS-1$
                 + "borderColor? / backColor? / textColor? ({red, green, blue}, 'Web.Red', 'Style.<Name>', " //$NON-NLS-1$
                 + "'auto')}]; merges [{fromRow, " //$NON-NLS-1$
-                + "fromCol, toRow, toCol}]; areas [{name, fromRow, fromCol, toRow, toCol}]; columnWidths " //$NON-NLS-1$
+                + "fromCol, toRow, toCol}]; areas [{name, type?, fromRow?, fromCol?, toRow?, toCol?}]: " //$NON-NLS-1$
+                + "Rectangle (default) needs all four indices; Rows needs only fromRow/toRow; Columns needs only " //$NON-NLS-1$
+                + "fromCol/toCol; columnWidths " //$NON-NLS-1$
                 + "[{col, width?, autoWidthCalculation?, widthWeightFactor? (only with " //$NON-NLS-1$
                 + "autoWidthCalculation:true)}]; rowHeights [{row, height}]; unmerges [{fromRow, fromCol, " //$NON-NLS-1$
                 + "toRow, toCol}] drops every merge touching the range; removeAreas [name]; renameAreas " //$NON-NLS-1$

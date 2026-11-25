@@ -26,6 +26,7 @@ FIXTURE TRUTH (TestConfiguration)
 
 import base64
 import re
+import xml.etree.ElementTree as ET
 
 from harness import (
     call,
@@ -287,6 +288,41 @@ def test_remove_and_rename_named_areas_on_disk():
     assert_error_quality(e, names=["E2EHeader1001", "E2ETitle1001"], suggests=["Existing areas"],
                          ctx="the model lists the renamed area, not the old names")
     assert "E2EFooter1001" not in e, "the removed area must not be listed as existing: %r" % (e,)
+
+
+@e2e_test(tool="template_content", kind="write-metadata")
+def test_named_area_types_are_persisted_and_invalid_axes_do_not_write():
+    fqn, mxlx = _seed_owned_template("E2ENamedAreaTypes1034")
+    args = {"method": "modify", "projectName": PROJECT, "fqn": fqn}
+    result = call("template_content", {**args, "template": {
+        "columnWidths": [{"col": 0, "width": 33}, {"col": 1, "width": 64}],
+        "areas": [
+            {"name": "Header1034", "type": "Rows", "fromRow": 0, "toRow": 2},
+            {"name": "Side1034", "type": "Columns", "fromCol": 1, "toCol": 3},
+            {"name": "OldStyle1034", "fromRow": 1, "toRow": 3, "fromCol": 0, "toCol": 2},
+        ],
+    }})
+    assert_ok(result, "author all three named area types")
+    assert _counts(result, "named area types")["areas"] == 3
+    saved = read_disk(mxlx)
+    doc = ET.fromstring(saved)
+    named = {item.findtext("{*}name"): item.find("{*}area") for item in doc.findall("{*}namedItem")}
+    for name, kind, coords in [
+        ("Header1034", "Rows", ("0", "2", "-1", "-1")),
+        ("Side1034", "Columns", ("-1", "-1", "1", "3")),
+        ("OldStyle1034", "Rectangle", ("1", "3", "0", "2")),
+    ]:
+        area = named[name]
+        assert area.findtext("{*}type") == kind
+        assert tuple(area.findtext("{*}" + key) for key in
+                     ("beginRow", "endRow", "beginColumn", "endColumn")) == coords
+
+    result = call("template_content", {**args, "template": {
+        "cells": [{"row": 0, "col": 0, "text": "Must not be written"}],
+        "areas": [{"name": "Bad1034", "type": "Rows", "fromRow": 0, "toRow": 2, "toCol": 1}],
+    }})
+    assert_error(result, "opposite-axis coordinates on a row area")
+    assert read_disk(mxlx) == saved, "invalid area parameters must not persist any part of the write"
 
 
 @e2e_test(tool="template_content", kind="write-metadata")
