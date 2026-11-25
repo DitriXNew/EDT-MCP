@@ -163,6 +163,39 @@ public class MetadataRenamePreviewReadBoundaryTest
     }
 
     @Test
+    public void testAPreviewStoppedDuringEdtsNativePassIsAStopNotAnError()
+    {
+        MetadataRenameService service = new MetadataRenameService();
+        IProgressMonitor monitor = new NullProgressMonitor();
+        service.useMonitor(monitor);
+        IMdRefactoringService mdService = mock(IMdRefactoringService.class);
+        // EDT's LTK createChange NPEs on fParticipants when its pass was cut short by the stop.
+        when(mdService.createMdObjectRenameRefactoring(any(), any())).thenAnswer(invocation -> {
+            monitor.setCanceled(true);
+            throw new NullPointerException("fParticipants");
+        });
+
+        assertThrows(OperationCanceledException.class, () -> service.createMdClassRename(null,
+            "CommonModule.Old", "New", target(), false, DisableRequest.parse(null), null, 0,
+            new RenameProgress(), mdService));
+    }
+
+    @Test
+    public void testAFailedNativePassThatWasNotStoppedIsReported()
+    {
+        MetadataRenameService service = new MetadataRenameService();
+        IMdRefactoringService mdService = mock(IMdRefactoringService.class);
+        when(mdService.createMdObjectRenameRefactoring(any(), any()))
+            .thenThrow(new NullPointerException("fParticipants"));
+        IProject project = mock(IProject.class);
+        when(project.getName()).thenReturn("Demo");
+
+        String result = service.createMdClassRename(project, "CommonModule.Old", "New", target(), false,
+            DisableRequest.parse(null), null, 0, new RenameProgress(), mdService);
+        assertTrue(result, result.contains("Could not prepare rename of 'CommonModule.Old'"));
+    }
+
+    @Test
     public void testAPreviewStoppedBeforeItStartsResolvesNothing()
     {
         assertThrows(OperationCanceledException.class, () -> new MetadataRenameService().rename(
