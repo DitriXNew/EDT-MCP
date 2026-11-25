@@ -80,12 +80,25 @@ public final class BackgroundJobRenderer
         }
         else if (job.getStatus() == BackgroundJobs.Status.CANCELLED)
         {
-            result.append("\n## Cancellation\n\n") //$NON-NLS-1$
-                .append(job.getResult() == null
-                    ? "The job was cancelled before its owning tool handed the work over." //$NON-NLS-1$
-                    : job.getResult());
+            result.append("\n## Cancellation\n\n").append(cancellationMessage(job)); //$NON-NLS-1$
         }
         return result.toString();
+    }
+
+    private static Object cancellationMessage(JobSnapshot job)
+    {
+        if (job.getResult() != null)
+        {
+            return job.getResult();
+        }
+        // Only started validators are published. No result means a late result is discarded,
+        // not that the work failed to start.
+        if (QueryValidationJobs.TOOL.equals(job.getOwningTool()))
+        {
+            return "The native EDT validation worker exited after cancellation was requested. " //$NON-NLS-1$
+                + "No validation result was retained."; //$NON-NLS-1$
+        }
+        return "The job was cancelled before its owning tool handed the work over."; //$NON-NLS-1$
     }
 
     private static void appendResult(StringBuilder target, Object rawResult,

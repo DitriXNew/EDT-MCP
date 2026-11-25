@@ -104,8 +104,9 @@ public class ValidateQueryDeadlineTest
                 assertEquals(lock, CreateMetadataTool.describeCreateFailure(lock, "Other", validations));
                 String unrelated = "failed to lock resource \"Catalog\" for writing";
                 assertEquals(unrelated, CreateMetadataTool.describeCreateFailure(unrelated, "Demo", validations));
-                assertTrue(new GetJobStatusTool(ordinary, validations).execute(
-                    Map.of("jobId", id, "waitSeconds", "0")).contains("| status | running |"));
+                var statusTool = new GetJobStatusTool(ordinary, validations);
+                var statusParams = Map.of("jobId", id, "waitSeconds", "0");
+                assertTrue(statusTool.execute(statusParams).contains("| status | running |"));
                 assertTrue(new CancelJobTool(ordinary, validations).execute(
                     Map.of("jobId", id)).contains("preview"));
                 assertTrue(new CancelJobTool(ordinary, validations).execute(
@@ -121,6 +122,12 @@ public class ValidateQueryDeadlineTest
                 assertEquals(id, terminal.getId());
                 assertEquals(Status.CANCELLED, terminal.getStatus());
                 assertNull(terminal.getResult());
+                String polled = statusTool.execute(statusParams);
+                assertTrue(polled.contains("| status | cancelled |"));
+                assertTrue(polled.contains("native EDT validation worker exited after cancellation was requested"));
+                assertTrue(polled.contains("No validation result was retained."));
+                assertFalse(polled.contains("before its owning tool handed the work over"));
+                assertFalse(polled.contains("\"validationState\""));
                 assertTrue(validations.running().isEmpty());
                 assertEquals("", ValidateQueryTool.activeValidationHint(validations, "Demo"));
             }
