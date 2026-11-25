@@ -85,6 +85,8 @@ tests/TestConfiguration/src/CommonModules/Error/Error.mdo:Error
 tests/TestConfiguration/src/CommonModules/OK/OK.mdo:OK
 tests/TestConfiguration/src/CommonModules/Вычисление/Вычисление.mdo:Вычисление
 tests/TestConfiguration/src/CommonTemplates/PrintForm/PrintForm.mdo:PrintForm
+tests/TestConfiguration/src/CommonTemplates/ReadParameters/ReadParameters.mdo:ReadParameters
+tests/TestConfiguration/src/CommonTemplates/ReadParameters/Template.mxlx:DetailDrawing
 tests/TestConfiguration/src/Configuration/Configuration.mdo:English
 tests/TestConfiguration/src/Configuration/Configuration.mdo:TestConfiguration
 tests/TestConfiguration/src/Documents/QueryOrder/QueryOrder.mdo:Items

@@ -374,7 +374,7 @@ public final class InputSchemaCompactor
             "serverCall", "privileged", "returnValuesReuse", "properties")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
         keep.put("modify_metadata", asSet("normalizeYo", "properties", "rights", "templates", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
             "roleProperties", "content", "commands")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-        keep.put("template_content", asSet("method", "fqn", "template")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        keep.put("template_content", asSet("method", "fqn", "template", "areaName", "offset", "limit")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$ //$NON-NLS-7$
         // A CONDITIONAL protocol the schema cannot express: expectedHash carries the
         // preview's contentHash and becomes REQUIRED once confirm=true is paired with a
         // non-empty disableIndices. Without it the selective confirm is simply rejected.

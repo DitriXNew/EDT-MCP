@@ -33,8 +33,11 @@ import com.ditrix.edt.mcp.server.tools.base.WriteScope;
 import com.ditrix.edt.mcp.server.utils.BmModelResolver;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
+import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.Refusals;
+import com.ditrix.edt.mcp.server.utils.ReadToolExecution;
+import com.ditrix.edt.mcp.server.utils.SpreadsheetTemplateReader;
 import com.ditrix.edt.mcp.server.utils.SpreadsheetTemplateWriter;
 import com.ditrix.edt.mcp.server.utils.TemplateContentSupport;
 import com.ditrix.edt.mcp.server.utils.VendorSupportGuard;
@@ -43,7 +46,7 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
-/** Edits the file-backed text or spreadsheet content of an existing metadata template. */
+/** Reads spreadsheet content or edits the content of an existing metadata template. */
 public class TemplateContentTool extends AbstractMetadataWriteTool
 {
     public static final String NAME = "template_content";
@@ -54,6 +57,10 @@ public class TemplateContentTool extends AbstractMetadataWriteTool
     private static final String KEY_PERSISTED = "persisted";
     private static final String HELP = "help";
     private static final String MODIFY = "modify";
+    private static final String READ = "read";
+    private static final String KEY_AREA_NAME = "areaName";
+    private static final String KEY_OFFSET = "offset";
+    private static final String KEY_LIMIT = "limit";
     private static final String VAL_MODIFIED = "modified";
     private static final String ERR_NO_BM_MANAGER = "IBmModelManager not available";
     private static final String ERR_NO_BM_MODEL = "BM model not available for project: ";
@@ -116,8 +123,8 @@ public class TemplateContentTool extends AbstractMetadataWriteTool
     @Override
     public String getDescription()
     {
-        return "Edit an existing template's SpreadsheetDocument or TextDocument content. "
-            + "Use method='help' for guidance and method='modify' to write. "
+        return "Read a SpreadsheetDocument template's areas, cells, parameters, merges and drawings, "
+            + "or edit spreadsheet or text template content. Use method='read', 'modify' or 'help'. "
             + "Use metadata tools for the template object itself. "
             + "Full parameters and examples: call get_tool_guide('template_content').";
     }
@@ -126,9 +133,15 @@ public class TemplateContentTool extends AbstractMetadataWriteTool
     public String getInputSchema()
     {
         return JsonSchemaBuilder.object()
-            .enumProperty(KEY_METHOD, "help: show usage; modify: edit an existing template.", true, HELP, MODIFY)
-            .stringProperty(McpKeys.PROJECT_NAME, "Required for modify: EDT project name.")
-            .stringProperty(KEY_FQN, "Required for modify: CommonTemplate.Name or Type.Owner.Template.Name.")
+            .enumProperty(KEY_METHOD, "help: show usage; modify: edit an existing template; read: inspect one spreadsheet template.",
+                true, HELP, MODIFY, READ)
+            .stringProperty(McpKeys.PROJECT_NAME, "Required for read and modify: EDT project name.")
+            .stringProperty(KEY_FQN, "Required for read and modify: CommonTemplate.Name or Type.Owner.Template.Name.")
+            .stringProperty(KEY_AREA_NAME, "Read only: named cell area (case-insensitive).")
+            .property(KEY_OFFSET, "Read only: per-collection offset (default 0).",
+                "{\"type\":\"integer\",\"minimum\":0,\"maximum\":" + Integer.MAX_VALUE + "}")
+            .property(KEY_LIMIT, "Read only: items per collection (default 100, max 200).",
+                "{\"type\":\"integer\",\"minimum\":1,\"maximum\":" + SpreadsheetTemplateReader.MAX_LIMIT + "}")
             .property(KEY_TEMPLATE,
                 "Required for modify. TextDocument: {text, mode?, oldText?, " //$NON-NLS-1$
                 + "expectedHash?, expectedSource?, overwrite?}; mode = 'searchReplace' (default, needs " //$NON-NLS-1$
@@ -161,11 +174,11 @@ public class TemplateContentTool extends AbstractMetadataWriteTool
         return WrittenObjectMarkers.declareOutput(JsonSchemaBuilder.object()
             .booleanProperty("success", "Whether the call succeeded.", true)
             .stringProperty("error", "Actionable refusal on failure.")
-            .enumProperty(KEY_METHOD, "Requested operation.", HELP, MODIFY)
+            .enumProperty(KEY_METHOD, "Requested operation.", HELP, MODIFY, READ)
             .stringProperty(HELP, "Markdown usage guide for method='help'.")
-            .stringProperty(KEY_FQN, "Canonical FQN of the modified template.")
+            .stringProperty(KEY_FQN, "Canonical FQN of the addressed template.")
             .stringProperty(McpKeys.ACTION, "'modified' after a write.")
-            .objectProperty(KEY_TEMPLATE, "For a template content change: the applied counts object " //$NON-NLS-1$
+            .objectProperty(KEY_TEMPLATE, "For read: paged areas, cells, merges and drawings. For a template content change: the applied counts object " //$NON-NLS-1$
                 + "{cells, merges, areas, columnWidths, rowHeights, unmerges, removedAreas, renamedAreas}, or " //$NON-NLS-1$
                 + "{contentHash} for text") //$NON-NLS-1$
             .booleanProperty(KEY_PERSISTED, "Whether EDT accepted an export task for the write.")
@@ -186,7 +199,22 @@ public class TemplateContentTool extends AbstractMetadataWriteTool
         return true;
     }
 
+    @Override
+    protected String awaitDiskExport(Map<String, String> params, String result, WriteScope scope)
+    {
+        // The base falls back to waiting on the requested project when no write scope was declared.
+        // Inspection must not wait for an unrelated export. Do not suppress a recorded write.
+        if (READ.equals(JsonUtils.extractStringArgument(params, KEY_METHOD)) && !scope.hasRecordedWriteOrExport())
+        {
+            return result;
+        }
+        return super.awaitDiskExport(params, result, scope);
+    }
+
     private static final Set<String> PARAMETERS = Set.of(KEY_METHOD, McpKeys.PROJECT_NAME, KEY_FQN, KEY_TEMPLATE);
+
+    private static final Set<String> READ_PARAMETERS =
+        Set.of(KEY_METHOD, McpKeys.PROJECT_NAME, KEY_FQN, KEY_AREA_NAME, KEY_OFFSET, KEY_LIMIT);
 
     @Override
     protected String validateRequest(Map<String, String> params)
@@ -196,14 +224,46 @@ public class TemplateContentTool extends AbstractMetadataWriteTool
         {
             if (params.keySet().stream().anyMatch(key -> !KEY_METHOD.equals(key)))
             {
-                return ToolResult.error("method='help' takes no other parameters; use method='modify' to edit content.")
+                return ToolResult.error("method='help' takes no other parameters; use method='read' or method='modify'.")
                     .toJson();
             }
             return null;
         }
+        if (READ.equals(method))
+        {
+            for (String key : params.keySet())
+            {
+                if (!READ_PARAMETERS.contains(key))
+                {
+                    return ToolResult.error("Unknown template_content read argument '" + key + "'. "
+                        + "Accepted read arguments: method, projectName, fqn, areaName, offset, limit.").toJson();
+                }
+            }
+            String missing = JsonUtils.requireArguments(params, McpKeys.PROJECT_NAME, KEY_FQN);
+            if (missing != null)
+            {
+                return missing;
+            }
+            String area = JsonUtils.extractStringArgument(params, KEY_AREA_NAME);
+            if (area != null && (area.isBlank() || area.length() > SpreadsheetTemplateReader.MAX_STRING_LENGTH))
+            {
+                return ToolResult.error("areaName must be a nonblank named cell area of at most "
+                    + SpreadsheetTemplateReader.MAX_STRING_LENGTH + " characters.").toJson();
+            }
+            try
+            {
+                readOffset(params);
+                readLimit(params);
+                return null;
+            }
+            catch (IllegalArgumentException e)
+            {
+                return ToolResult.error(e.getMessage()).toJson();
+            }
+        }
         if (!MODIFY.equals(method))
         {
-            return ToolResult.error("Specify method='help' or method='modify' for template_content.").toJson();
+            return ToolResult.error("Specify method='help', method='read' or method='modify' for template_content.").toJson();
         }
         for (String key : params.keySet())
         {
@@ -216,6 +276,33 @@ public class TemplateContentTool extends AbstractMetadataWriteTool
         String missing = JsonUtils.requireArguments(params, McpKeys.PROJECT_NAME, KEY_FQN, KEY_TEMPLATE);
         return missing != null ? missing : parseTemplateSpec(params.get(KEY_TEMPLATE)) == null
             ? malformedTemplateError() : null;
+    }
+
+    private static int readOffset(Map<String, String> params)
+    {
+        return parsePageArgument(JsonUtils.extractStringArgument(params, KEY_OFFSET),
+            KEY_OFFSET, 0, 0, Integer.MAX_VALUE);
+    }
+
+    private static int readLimit(Map<String, String> params)
+    {
+        return parsePageArgument(JsonUtils.extractStringArgument(params, KEY_LIMIT),
+            KEY_LIMIT, SpreadsheetTemplateReader.DEFAULT_LIMIT, 1, SpreadsheetTemplateReader.MAX_LIMIT);
+    }
+
+    private static int parsePageArgument(String value, String key, int defaultValue, int min, int max)
+    {
+        if (value == null)
+        {
+            return defaultValue;
+        }
+        Integer result = JsonUtils.parseIntegralInt(value);
+        if (result != null && result >= min && result <= max)
+        {
+            return result;
+        }
+        String rejected = value.length() <= 64 ? value : value.substring(0, 64) + "...";
+        throw Refusals.argument(key + " '" + rejected + "' must be an integer between " + min + " and " + max + ".");
     }
 
     private static JsonObject parseTemplateSpec(String raw)
@@ -244,6 +331,20 @@ public class TemplateContentTool extends AbstractMetadataWriteTool
         }
         String projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
         String normFqn = MetadataTypeUtils.normalizeFqn(JsonUtils.extractStringArgument(params, KEY_FQN));
+        if (READ.equals(JsonUtils.extractStringArgument(params, KEY_METHOD)))
+        {
+            // Resolve only the identity in the read transaction; no vendor write-intent check.
+            ProjectContext readCtx = resolveProjectAndScope(projectName);
+            if (readCtx.hasError())
+            {
+                return readCtx.error;
+            }
+            TemplateReadTarget target = ReadToolExecution.readModel(readCtx.project, "Resolve spreadsheet template",
+                model -> resolveTemplateReadTarget(preparationScope(readCtx), readCtx.project.getName(), model,
+                    normFqn));
+            return target.error() != null ? target.error()
+                : readTemplateContent(target.model(), target.id(), target.fqn(), params);
+        }
         JsonObject templateSpec = parseTemplateSpec(params.get(KEY_TEMPLATE));
         ProjectContext ctx = resolveProjectAndScope(projectName, normFqn);
         if (ctx.hasError())
@@ -253,6 +354,83 @@ public class TemplateContentTool extends AbstractMetadataWriteTool
         TemplateWriteContext plan = readPreparation(ctx.project,
             () -> prepareTemplateWrite(ctx, normFqn, templateSpec));
         return modifyTemplateContent(ctx, plan, templateSpec);
+    }
+
+    record TemplateReadTarget(IBmModel model, long id, String fqn, String error)
+    {
+        static TemplateReadTarget failure(String error)
+        {
+            return new TemplateReadTarget(null, IBmObject.BM_NULL_ID, null, ToolResult.error(error).toJson());
+        }
+    }
+
+    static TemplateReadTarget resolveTemplateReadTarget(MetadataScope scope, String projectName, IBmModel model,
+        String normFqn)
+    {
+        String hint = scope.addressingHint(normFqn);
+        if (!hint.isEmpty())
+        {
+            return TemplateReadTarget.failure("'" + normFqn + "' cannot be addressed in project '"
+                + projectName + "'." + hint);
+        }
+        var resolved = MetadataNodeResolver.resolveExistingWithYoFallback(scope, normFqn);
+        if (resolved.node == null || !(resolved.node.object instanceof BasicTemplate template))
+        {
+            return TemplateReadTarget.failure("'" + normFqn + "' did not resolve to a template. Use CommonTemplate.<Name> "
+                + "or <Type>.<Owner>.Template.<Name>." + MetadataNodeResolver.yoNotFoundHint(normFqn));
+        }
+        String fqn = MetadataTypeUtils.toCanonicalEnglishFqn(resolved.yoFallback ? resolved.fqn : normFqn);
+        if (template.eIsProxy() || !(template instanceof IBmObject bm) || bm.bmGetId() == IBmObject.BM_NULL_ID)
+        {
+            return TemplateReadTarget.failure("Template '" + fqn + "' is not loaded in EDT. "
+                + "Check that the template opens in the addressed project.");
+        }
+        return new TemplateReadTarget(model, bm.bmGetId(), fqn, null);
+    }
+
+    static String readTemplateContent(IBmModel model, long id, String fqn, Map<String, String> params)
+    {
+        // Like DcsRootReader, let EDT resolve lazy template content only in an auto-rollback task.
+        // It is not nested in the identity read. Only the projected JSON crosses this boundary.
+        return BmTransactions.executeAndRollback(model, "Inspect spreadsheet template", (tx, monitor) -> {
+            if (!(tx.getObjectById(id) instanceof BasicTemplate template) || template.eIsProxy())
+            {
+                return ToolResult.error("Template '" + fqn + "' disappeared before its content could be read. "
+                    + "Check its FQN and retry template_content.").toJson();
+            }
+            return projectTemplateContent(template, fqn, params);
+        });
+    }
+
+    private static String projectTemplateContent(BasicTemplate template, String fqn, Map<String, String> params)
+    {
+        if (template.getTemplateType() != TemplateType.SPREADSHEET_DOCUMENT)
+        {
+            var actual = template.getTemplateType();
+            return ToolResult.error("Template '" + fqn + "' is not a SpreadsheetDocument (its type is '"
+                + (actual == null ? "unset" : actual.getName()) + "'). "
+                + "Use get_metadata_details to read TextDocument content.").toJson();
+        }
+        EObject content = template.getTemplate();
+        if (content != null && (content.eIsProxy()
+            || !(content instanceof SpreadsheetDocument) && !TemplateContentSupport.isPlaceholder(content)))
+        {
+            return ToolResult.error("SpreadsheetDocument content of '" + fqn + "' is not available in EDT. "
+                + "Check that the template opens in the addressed project.").toJson();
+        }
+        try
+        {
+            JsonObject data = SpreadsheetTemplateReader.read(
+                content instanceof SpreadsheetDocument document ? document : null,
+                JsonUtils.extractStringArgument(params, KEY_AREA_NAME),
+                readOffset(params),
+                readLimit(params));
+            return ToolResult.success().put(KEY_METHOD, READ).put(KEY_FQN, fqn).put(KEY_TEMPLATE, data).toJson();
+        }
+        catch (IllegalArgumentException e)
+        {
+            return ToolResult.error(e.getMessage()).toJson();
+        }
     }
 
     private TemplateWriteContext prepareTemplateWrite(ProjectContext ctx, String normFqn, JsonObject templateSpec)

@@ -43,6 +43,7 @@ top object is reverted by the write-metadata reset (reset_fixture git-clean + re
 
 import base64
 import re
+from xml.etree import ElementTree
 
 from harness import (
     call,
@@ -50,6 +51,8 @@ from harness import (
     assert_error,
     assert_error_quality,
     assert_no_diff,
+    tree_snapshot,
+    assert_tree_unchanged,
     poll_diff_contains,
     read_disk,
     wait_for_project_ready,
@@ -342,3 +345,159 @@ def test_help_describes_both_template_surfaces_without_a_project():
     doc = r.structured.get("help", "")
     assert "SpreadsheetDocument" in doc and "TextDocument" in doc, r.structured
     assert "renameAreas" in doc and "expectedHash" in doc, r.structured
+
+
+@e2e_test(tool="template_content", kind="read")
+def test_existing_common_spreadsheet_template_is_read_without_changes():
+    r = call("template_content", {"method": "read", "projectName": PROJECT, "fqn": FIXTURE_TEMPLATE})
+    assert_ok(r, "read existing common spreadsheet template")
+    data = r.structured["template"]
+    assert any(cell["type"] == "text" and cell["text"] == "E2E Print Template"
+               for cell in data["cells"]), data
+    assert data["merges"] == [{"type": "rectangle", "fromRow": 5, "fromCol": 1,
+                               "toRow": 8, "toCol": 6}], data
+    assert "writtenProjects" not in r.structured, r.structured
+    assert_no_diff(ctx="reading a common spreadsheet template")
+
+
+@e2e_test(tool="template_content", kind="write-metadata")
+def test_read_owned_spreadsheet_template_area_and_parameter_round_trip():
+    fqn, mxlx = _seed_owned_template("E2EMxlxRead")
+    r = call("template_content", {
+        "method": "modify", "projectName": PROJECT, "fqn": fqn,
+        "template": {
+            "cells": [{"row": 0, "col": 0, "text": "E2E Read"},
+                      {"row": 1, "col": 0, "parameter": "ДолжностьРуководителя"},
+                      {"row": 2, "col": 0, "text": "Outside"}],
+            "merges": [{"fromRow": 0, "fromCol": 0, "toRow": 0, "toCol": 1}],
+            "areas": [{"name": "Header", "fromRow": 0, "fromCol": 0, "toRow": 1, "toCol": 1}],
+        },
+    })
+    assert_ok(r, "author owned spreadsheet template")
+    poll_diff_contains("E2E Read", ctx="persist before checking read-only behavior")
+    before = read_disk(mxlx)
+    args = {"method": "read", "projectName": PROJECT,
+            "fqn": fqn.replace("Catalog.", "Справочник.", 1).replace(".Template.", ".Макет."),
+            "areaName": "header", "limit": 1}
+    r = call("template_content", args)
+    assert_ok(r, "read first named-area page with Russian structural FQN tokens")
+    first = r.structured["template"]
+    assert first["areaName"] == "Header", first
+    assert first["areas"] == [{"name": "Header", "type": "rectangle", "fromRow": 0,
+                               "fromCol": 0, "toRow": 1, "toCol": 1}], first
+    assert first["cells"][0]["text"] == "E2E Read", first
+    assert first["merges"][0]["toCol"] == 1, first
+    assert "persisted" not in r.structured and "writtenProjects" not in r.structured, r.structured
+    r = call("template_content", dict(args, offset=first["nextOffset"]))
+    assert_ok(r, "read next page")
+    next_page = r.structured["template"]
+    assert next_page["cells"] == [{"row": 1, "col": 0, "type": "parameter",
+                                   "parameter": "ДолжностьРуководителя"}], next_page
+    assert "nextOffset" not in next_page, next_page
+    assert read_disk(mxlx) == before, "read must not change the template resource"
+
+
+@e2e_test(tool="template_content", kind="read")
+def test_read_unknown_named_area_names_the_value_and_how_to_list_areas():
+    missing = "E2EUnknownArea1019"
+    r = call("template_content", {"method": "read", "projectName": PROJECT,
+                                  "fqn": FIXTURE_TEMPLATE, "areaName": missing})
+    error = assert_error(r, "read an unknown named cell area")
+    assert_error_quality(error, names=[missing], suggests=["Omit areaName", "list", "areas"],
+                         ctx="unknown area must name the value and explain how to discover cell areas")
+    assert_no_diff("a refused area read must not change the fixture")
+
+
+@e2e_test(tool="template_content", kind="read")
+def test_read_non_template_fqn_names_the_target_and_template_address():
+    r = call("template_content", {"method": "read", "projectName": PROJECT,
+                                  "fqn": NON_TEMPLATE_FQN})
+    error = assert_error(r, "read spreadsheet content from a Catalog rather than its template")
+    assert_error_quality(error, names=[NON_TEMPLATE_FQN],
+                         suggests=["CommonTemplate.<Name>", "<Type>.<Owner>.Template.<Name>"],
+                         ctx="wrong-kind read must direct the caller to a template FQN")
+    assert_no_diff("a wrong-kind template read must not change the fixture")
+
+
+@e2e_test(tool="template_content", kind="write-metadata")
+def test_read_text_document_refers_to_its_supported_reader_without_changes():
+    name = "E2EReadTextRefusal1019"
+    fqn = "Catalog.Catalog.Template." + name
+    created = call("create_metadata", {
+        "projectName": PROJECT, "fqn": fqn,
+        "properties": [{"name": "templateType", "value": "TextDocument"}],
+    })
+    assert_ok(created, "seed a real TextDocument rather than a nonexistent template")
+    # Creation submits export: prove its actual type on disk before another MCP call.
+    owner = ElementTree.fromstring(read_disk("src/Catalogs/Catalog/Catalog.mdo"))
+    definitions = [item for item in owner.findall("templates") if item.findtext("name") == name]
+    assert len(definitions) == 1, "the created template must exist in its owner's descriptor"
+    assert definitions[0].findtext("templateType") == "TextDocument", ElementTree.tostring(definitions[0])
+    wait_for_project_ready()
+    before = tree_snapshot()
+    r = call("template_content", {"method": "read", "projectName": PROJECT, "fqn": fqn})
+    error = assert_error(r, "SpreadsheetDocument reader must not silently accept a TextDocument")
+    assert_error_quality(error, names=[fqn, "TextDocument"], suggests=["get_metadata_details"],
+                         ctx="TextDocument read refusal points to its supported content reader")
+    assert_tree_unchanged(before, "the refused read must not retype or otherwise modify the seeded template")
+
+
+@e2e_test(tool="template_content", kind="read")
+def test_read_pagination_rejects_out_of_range_values_without_changes():
+    # Pin both lower/upper boundaries; a clamping implementation must not pass.
+    for key, value, minimum, maximum in (
+            ("limit", 0, 1, 200), ("limit", -1, 1, 200), ("limit", 201, 1, 200),
+            ("offset", -1, 0, 2147483647), ("offset", 2147483648, 0, 2147483647)):
+        args = {"method": "read", "projectName": PROJECT, "fqn": FIXTURE_TEMPLATE, key: value}
+        error = assert_error(call("template_content", args), "out-of-range %s=%s" % (key, value))
+        assert_error_quality(error, names=[key, str(value)],
+                             suggests=[str(minimum if value < minimum else maximum)],
+                             ctx="pagination refusal must name the rejected value and violated bound")
+        assert_no_diff("a refused %s=%s read must not change the fixture" % (key, value))
+
+
+@e2e_test(tool="template_content", kind="read")
+def test_read_unknown_argument_names_the_key_and_supported_read_keys():
+    key = "unrecognizedReadArgument1019"
+    r = call("template_content", {"method": "read", "projectName": PROJECT,
+                                  "fqn": FIXTURE_TEMPLATE, key: True})
+    error = assert_error(r, "unknown read argument must not be silently ignored")
+    assert_error_quality(error, names=[key], suggests=["areaName", "offset", "limit"],
+                         ctx="unknown read argument names the key and lists the accepted read arguments")
+    assert_no_diff("a refused unknown read argument must not change the fixture")
+
+
+@e2e_test(tool="template_content", kind="read")
+def test_read_native_detail_picture_and_drawing_parameters_without_changes():
+    r = call("template_content", {"method": "read", "projectName": PROJECT,
+                                  "fqn": "CommonTemplate.ReadParameters"})
+    assert_ok(r, "read native parameter-only cells and drawing")
+    template = r.structured["template"]
+    cells = {(cell["row"], cell["col"]): cell for cell in template["cells"]}
+    assert cells[(0, 0)]["detailParameter"] == "DetailCell", template
+    assert cells[(0, 1)]["pictureParameter"] == "PictureCell", template
+    # These are parameter-only native cells, not text cells concealing a skipped projection.
+    for position in ((0, 0), (0, 1)):
+        assert "text" not in cells[position] and "parameter" not in cells[position], cells[position]
+    drawings = [drawing for drawing in template["drawings"] if drawing.get("name") == "DetailDrawing"]
+    assert len(drawings) == 1, template
+    drawing = drawings[0]
+    assert drawing["type"] == "TextDrawing", drawing
+    assert drawing["detailParameter"] == "DetailDrawingValue", drawing
+    assert drawing["parameter"] == "DrawingParam", drawing
+    assert "persisted" not in r.structured and "writtenProjects" not in r.structured, r.structured
+    assert_no_diff("reading native cell and drawing parameters must not change the fixture")
+
+
+@e2e_test(tool="template_content", kind="read")
+def test_read_drawing_name_is_not_accepted_as_a_named_cell_area():
+    args = {"method": "read", "projectName": PROJECT, "fqn": "CommonTemplate.ReadParameters"}
+    r = call("template_content", args)
+    assert_ok(r, "prove the rejected area name actually belongs to an existing native drawing")
+    assert any(drawing.get("name") == "DetailDrawing"
+               for drawing in r.structured["template"]["drawings"]), r.structured
+    error = assert_error(call("template_content", dict(args, areaName="DetailDrawing")),
+                         "drawing names must not be interpreted as named cell areas")
+    assert_error_quality(error, names=["DetailDrawing"], suggests=["Omit areaName", "list", "areas"],
+                         ctx="drawing-as-area refusal names the value and shows how to discover cell areas")
+    assert_no_diff("a drawing-as-area refusal must not change the fixture")

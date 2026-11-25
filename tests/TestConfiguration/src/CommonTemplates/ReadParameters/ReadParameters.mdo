@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mdclass:CommonTemplate xmlns:mdclass="http://g5.1c.ru/v8/dt/metadata/mdclass" uuid="7e769ec8-e4b9-49d9-8805-22ef46189bbf">
+  <name>ReadParameters</name>
+  <synonym>
+    <key>en</key>
+    <value>Spreadsheet Read Parameters</value>
+  </synonym>
+</mdclass:CommonTemplate>
