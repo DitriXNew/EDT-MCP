@@ -104,6 +104,73 @@ public class SpreadsheetTemplateReaderTest
     }
 
     @Test
+    public void exactAreaNamesWinButAmbiguousFoldAndExactDrawingAreRefused()
+    {
+        var doc = MOXEL.createSpreadsheetDocument();
+        for (String name : new String[] {"Header", "HEADER", "Logo"})
+        {
+            var rows = MOXEL.createRowsArea();
+            rows.setBegin(name.equals("Header") ? 1 : 4);
+            rows.setEnd(4);
+            var named = MOXEL.createNamedItemCells();
+            named.setArea(rows);
+            doc.getNamedItems().put(name, named);
+        }
+        doc.getNamedItems().put("LOGO", MOXEL.createNamedItemDrawing());
+        assertEquals(1, at(SpreadsheetTemplateReader.read(doc, "Header", 0, 1), "areas", 0)
+            .get("fromRow").getAsInt());
+        assertEquals(4, at(SpreadsheetTemplateReader.read(doc, "HEADER", 0, 1), "areas", 0)
+            .get("fromRow").getAsInt());
+        assertTrue(assertThrows(IllegalArgumentException.class,
+            () -> SpreadsheetTemplateReader.read(doc, "header", 0, 1)).getMessage().contains("exact name"));
+        assertThrows(IllegalArgumentException.class, () -> SpreadsheetTemplateReader.read(doc, "LOGO", 0, 1));
+    }
+
+    @Test
+    public void auxiliaryOnlyCellsArePagedAndDrawingParameterRequiresParameterFill()
+    {
+        var doc = MOXEL.createSpreadsheetDocument();
+        var row = MOXEL.createRow();
+        var detail = MOXEL.createCell();
+        detail.setDetailParameter("Расшифровка");
+        row.getCells().put(0, detail);
+        var picture = MOXEL.createCell();
+        picture.setPictureParameter("Logo");
+        row.getCells().put(1, picture);
+        row.getCells().put(2, MOXEL.createCell()); // An empty cell is still not emitted.
+        doc.getRows().put(0, row);
+
+        var fill = MOXEL.createFormat();
+        fill.setFillType(FillType.PARAMETER);
+        doc.getFormats().add(fill);
+        var textDrawing = MOXEL.createTextDrawing();
+        textDrawing.setDrawingId(7);
+        textDrawing.setFormatIndex(0);
+        textDrawing.setDetailParameter("DrawingDetail");
+        textDrawing.setParameter("DrawingText");
+        doc.getDrawings().add(textDrawing);
+        var storedButNotInUse = MOXEL.createTextDrawing();
+        storedButNotInUse.setFormatIndex(-1);
+        storedButNotInUse.setDetailParameter("AnotherDetail");
+        storedButNotInUse.setParameter("Inactive");
+        doc.getDrawings().add(storedButNotInUse);
+        var before = EcoreUtil.copy(doc);
+
+        var first = SpreadsheetTemplateReader.read(doc, null, 0, 1);
+        assertEquals("Расшифровка", at(first, "cells", 0).get("detailParameter").getAsString());
+        assertFalse(at(first, "cells", 0).has("parameter"));
+        assertFalse(at(first, "cells", 0).has("text"));
+        assertEquals("DrawingDetail", at(first, "drawings", 0).get("detailParameter").getAsString());
+        assertEquals("DrawingText", at(first, "drawings", 0).get("parameter").getAsString());
+        var second = SpreadsheetTemplateReader.read(doc, null, first.get("nextOffset").getAsInt(), 1);
+        assertEquals("Logo", at(second, "cells", 0).get("pictureParameter").getAsString());
+        assertEquals("AnotherDetail", at(second, "drawings", 0).get("detailParameter").getAsString());
+        assertFalse(at(second, "drawings", 0).has("parameter"));
+        assertFalse(second.has("nextOffset"));
+        assertTrue(EcoreUtil.equals(before, doc));
+    }
+
+    @Test
     public void emptyAndOversizeTextHaveExplicitShapes()
     {
         assertTrue(SpreadsheetTemplateReader.read(null, null, 0, 1).getAsJsonArray("cells").isEmpty());
@@ -166,6 +233,51 @@ public class SpreadsheetTemplateReaderTest
             }
         }
         while (offset < 21);
+    }
+
+    @Test
+    public void oneRankAlwaysFitsEvenWithMaximallyEscapedAdditionalParameters()
+    {
+        var doc = MOXEL.createSpreadsheetDocument();
+        String escaped = String.valueOf((char)1).repeat(2048);
+        var row = MOXEL.createRow();
+        doc.getRows().put(0, row);
+        for (int i = 0; i < 2; i++)
+        {
+            var cell = MOXEL.createCell();
+            var text = ContentFactory.eINSTANCE.createLocalString();
+            text.getContent().put(escaped, escaped);
+            cell.setText(text);
+            cell.setDetailParameter(escaped);
+            cell.setPictureParameter(escaped);
+            row.getCells().put(i, cell);
+        }
+        var fill = MOXEL.createFormat();
+        fill.setFillType(FillType.PARAMETER);
+        // Use a separate format for the drawings, leaving the cell format in TEXT mode.
+        doc.getFormats().add(MOXEL.createFormat());
+        doc.getFormats().add(fill);
+        var drawing = MOXEL.createTextDrawing();
+        drawing.setDrawingId(1);
+        drawing.setFormatIndex(1);
+        drawing.setDetailParameter(escaped);
+        drawing.setParameter(escaped);
+        doc.getDrawings().add(drawing);
+        var drawingId = MOXEL.createNamedItemDrawing();
+        drawingId.setDrawingId(1);
+        doc.getNamedItems().put(escaped, drawingId);
+        var area = MOXEL.createNamedItemCells();
+        area.setArea(MOXEL.createRowsArea());
+        doc.getNamedItems().put(escaped.substring(0, 2047) + "!", area);
+
+        var first = SpreadsheetTemplateReader.read(doc, null, 0, 2);
+        assertEquals(1, first.get("nextOffset").getAsInt());
+        assertEquals(1024, at(first, "cells", 0).get("detailParameter").getAsString().length());
+        assertTrue(at(first, "cells", 0).get("detailParameterTruncated").getAsBoolean());
+        assertTrue(at(first, "drawings", 0).get("parameterTruncated").getAsBoolean());
+        var second = SpreadsheetTemplateReader.read(doc, null, first.get("nextOffset").getAsInt(), 2);
+        assertEquals(1, at(second, "cells", 0).get("col").getAsInt());
+        assertFalse(second.has("nextOffset"));
     }
 
     private static SpreadsheetPoint point(int row, int col)

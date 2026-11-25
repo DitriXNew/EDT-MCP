@@ -33,6 +33,7 @@ import com.ditrix.edt.mcp.server.tools.base.WriteScope;
 import com.ditrix.edt.mcp.server.utils.BmModelResolver;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
+import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.Refusals;
 import com.ditrix.edt.mcp.server.utils.ReadToolExecution;
@@ -93,9 +94,10 @@ public class TemplateContentTool extends AbstractMetadataWriteTool
         + ",\"toRow\":" + INDEX_SCHEMA + ",\"toCol\":" + INDEX_SCHEMA //$NON-NLS-1$ //$NON-NLS-2$
         + "},\"required\":[\"fromRow\",\"fromCol\",\"toRow\",\"toCol\"],\"additionalProperties\":false}}," //$NON-NLS-1$
         + "\"areas\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{" //$NON-NLS-1$
-        + "\"name\":{\"type\":\"string\"},\"fromRow\":" + INDEX_SCHEMA + ",\"fromCol\":" + INDEX_SCHEMA //$NON-NLS-1$ //$NON-NLS-2$
+        + "\"name\":{\"type\":\"string\"},\"type\":{\"type\":\"string\",\"enum\":[\"Rows\",\"Columns\",\"Rectangle\"]}," //$NON-NLS-1$
+        + "\"fromRow\":" + INDEX_SCHEMA + ",\"fromCol\":" + INDEX_SCHEMA //$NON-NLS-1$ //$NON-NLS-2$
         + ",\"toRow\":" + INDEX_SCHEMA + ",\"toCol\":" + INDEX_SCHEMA //$NON-NLS-1$ //$NON-NLS-2$
-        + "},\"required\":[\"name\",\"fromRow\",\"fromCol\",\"toRow\",\"toCol\"],\"additionalProperties\":false}}," //$NON-NLS-1$
+        + "},\"required\":[\"name\"],\"additionalProperties\":false}}," //$NON-NLS-1$
         + "\"columnWidths\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{" //$NON-NLS-1$
         + "\"col\":" + INDEX_SCHEMA + ",\"width\":{\"type\":\"integer\",\"minimum\":1},\"autoWidthCalculation\":{}," //$NON-NLS-1$ //$NON-NLS-2$
         + "\"widthWeightFactor\":" + INDEX_SCHEMA + "},\"required\":[\"col\"]}}," //$NON-NLS-1$ //$NON-NLS-2$
@@ -136,7 +138,8 @@ public class TemplateContentTool extends AbstractMetadataWriteTool
             .stringProperty(McpKeys.PROJECT_NAME, "Required for read and modify: EDT project name.")
             .stringProperty(KEY_FQN, "Required for read and modify: CommonTemplate.Name or Type.Owner.Template.Name.")
             .stringProperty(KEY_AREA_NAME, "Read only: named cell area (case-insensitive).")
-            .property(KEY_OFFSET, "Read only: per-collection offset (default 0).", INDEX_SCHEMA)
+            .property(KEY_OFFSET, "Read only: per-collection offset (default 0).",
+                "{\"type\":\"integer\",\"minimum\":0,\"maximum\":" + Integer.MAX_VALUE + "}")
             .property(KEY_LIMIT, "Read only: items per collection (default 100, max 200).",
                 "{\"type\":\"integer\",\"minimum\":1,\"maximum\":" + SpreadsheetTemplateReader.MAX_LIMIT + "}")
             .property(KEY_TEMPLATE,
@@ -152,7 +155,9 @@ public class TemplateContentTool extends AbstractMetadataWriteTool
                 + "borders? ('Solid' or {style, width? 1..3}, or {left?, top?, right?, bottom?} of those), " //$NON-NLS-1$
                 + "borderColor? / backColor? / textColor? ({red, green, blue}, 'Web.Red', 'Style.<Name>', " //$NON-NLS-1$
                 + "'auto')}]; merges [{fromRow, " //$NON-NLS-1$
-                + "fromCol, toRow, toCol}]; areas [{name, fromRow, fromCol, toRow, toCol}]; columnWidths " //$NON-NLS-1$
+                + "fromCol, toRow, toCol}]; areas [{name, type?, fromRow?, fromCol?, toRow?, toCol?}]: " //$NON-NLS-1$
+                + "Rectangle (default) needs all four indices; Rows needs only fromRow/toRow; Columns needs only " //$NON-NLS-1$
+                + "fromCol/toCol; columnWidths " //$NON-NLS-1$
                 + "[{col, width?, autoWidthCalculation?, widthWeightFactor? (only with " //$NON-NLS-1$
                 + "autoWidthCalculation:true)}]; rowHeights [{row, height}]; unmerges [{fromRow, fromCol, " //$NON-NLS-1$
                 + "toRow, toCol}] drops every merge touching the range; removeAreas [name]; renameAreas " //$NON-NLS-1$
@@ -231,7 +236,7 @@ public class TemplateContentTool extends AbstractMetadataWriteTool
                 if (!READ_PARAMETERS.contains(key))
                 {
                     return ToolResult.error("Unknown template_content read argument '" + key + "'. "
-                        + "Use method='modify' to edit content.").toJson();
+                        + "Accepted read arguments: method, projectName, fqn, areaName, offset, limit.").toJson();
                 }
             }
             String missing = JsonUtils.requireArguments(params, McpKeys.PROJECT_NAME, KEY_FQN);
@@ -296,7 +301,8 @@ public class TemplateContentTool extends AbstractMetadataWriteTool
         {
             return result;
         }
-        throw Refusals.argument(key + " must be an integer between " + min + " and " + max + ".");
+        String rejected = value.length() <= 64 ? value : value.substring(0, 64) + "...";
+        throw Refusals.argument(key + " '" + rejected + "' must be an integer between " + min + " and " + max + ".");
     }
 
     private static JsonObject parseTemplateSpec(String raw)
@@ -334,7 +340,8 @@ public class TemplateContentTool extends AbstractMetadataWriteTool
                 return readCtx.error;
             }
             TemplateReadTarget target = ReadToolExecution.readModel(readCtx.project, "Resolve spreadsheet template",
-                model -> resolveTemplateReadTarget(readCtx, model, normFqn));
+                model -> resolveTemplateReadTarget(preparationScope(readCtx), readCtx.project.getName(), model,
+                    normFqn));
             return target.error() != null ? target.error()
                 : readTemplateContent(target.model(), target.id(), target.fqn(), params);
         }
@@ -349,7 +356,7 @@ public class TemplateContentTool extends AbstractMetadataWriteTool
         return modifyTemplateContent(ctx, plan, templateSpec);
     }
 
-    private record TemplateReadTarget(IBmModel model, long id, String fqn, String error)
+    record TemplateReadTarget(IBmModel model, long id, String fqn, String error)
     {
         static TemplateReadTarget failure(String error)
         {
@@ -357,14 +364,14 @@ public class TemplateContentTool extends AbstractMetadataWriteTool
         }
     }
 
-    private static TemplateReadTarget resolveTemplateReadTarget(ProjectContext ctx, IBmModel model, String normFqn)
+    static TemplateReadTarget resolveTemplateReadTarget(MetadataScope scope, String projectName, IBmModel model,
+        String normFqn)
     {
-        var scope = preparationScope(ctx);
         String hint = scope.addressingHint(normFqn);
         if (!hint.isEmpty())
         {
             return TemplateReadTarget.failure("'" + normFqn + "' cannot be addressed in project '"
-                + ctx.project.getName() + "'." + hint);
+                + projectName + "'." + hint);
         }
         var resolved = MetadataNodeResolver.resolveExistingWithYoFallback(scope, normFqn);
         if (resolved.node == null || !(resolved.node.object instanceof BasicTemplate template))
@@ -494,8 +501,15 @@ public class TemplateContentTool extends AbstractMetadataWriteTool
         SpreadsheetTemplateWriter.Result result;
         try
         {
+            // An extension can have no local Language objects yet. Resolve the project and base
+            // language snapshot before acquiring the template's write lock.
+            List<String> languageCodes = containsSpreadsheetText(templateSpec)
+                ? TemplateContentSupport.spreadsheetLanguageCodes(Activator.getDefault().getV8ProjectManager(),
+                    ctx.project)
+                : List.of();
             result = BmTransactions.write(writeCtx.bmModel, "ModifyTemplateContent", //$NON-NLS-1$
-                (tx, pm) -> applyTemplateSpec(ctx, tx, writeCtx, normFqn, templateSpec, contentFqnHolder));
+                (tx, pm) -> applyTemplateSpec(ctx, tx, writeCtx, normFqn, templateSpec, contentFqnHolder,
+                    languageCodes));
         }
         catch (TemplateWriteException e)
         {
@@ -523,6 +537,25 @@ public class TemplateContentTool extends AbstractMetadataWriteTool
         }
         boolean persisted = BmTransactions.forceExportToDisk(ctx.project, exportFqns);
         return buildTemplateResult(normFqn, result, persisted);
+    }
+
+    /** Parameter-only and formatting-only edits do not need to consult project languages. */
+    private static boolean containsSpreadsheetText(JsonObject spec)
+    {
+        JsonElement cells = spec.get("cells"); //$NON-NLS-1$
+        if (cells != null && cells.isJsonArray())
+        {
+            for (JsonElement cell : cells.getAsJsonArray())
+            {
+                JsonElement text = cell.isJsonObject() ? cell.getAsJsonObject().get("text") : null; //$NON-NLS-1$
+                if (text != null && text.isJsonPrimitive()
+                    && text.getAsJsonPrimitive().isString() && !text.getAsString().isEmpty())
+                {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     /** Write file-backed text inside a BM boundary with rollback for the file write. */
@@ -717,7 +750,7 @@ public class TemplateContentTool extends AbstractMetadataWriteTool
      */
     private SpreadsheetTemplateWriter.Result applyTemplateSpec(ProjectContext ctx, IBmTransaction tx,
         TemplateWriteContext writeCtx, String normFqn, JsonObject templateSpec,
-        String[] contentFqnHolder)
+        String[] contentFqnHolder, List<String> languageCodes)
     {
         Object inTx = tx.getObjectById(writeCtx.templateBmId);
         if (!(inTx instanceof BasicTemplate))
@@ -747,7 +780,8 @@ public class TemplateContentTool extends AbstractMetadataWriteTool
         // reference to it); an external-objects project offers platform colours only.
         SpreadsheetTemplateWriter.Result applied = SpreadsheetTemplateWriter.apply(doc, templateSpec,
             writeCtx.projectVersion, SpreadsheetTemplateWriter.projectColors(writeCtx.externalObjects ? null
-                : () -> (Configuration)tx.getTopObjectByFqn("Configuration"), writeCtx.projectVersion)); //$NON-NLS-1$
+                : () -> (Configuration)tx.getTopObjectByFqn("Configuration"), writeCtx.projectVersion), //$NON-NLS-1$
+            languageCodes);
         if (applied.hasError())
         {
             // Roll the whole write back so a validation failure leaves nothing on disk.

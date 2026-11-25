@@ -43,6 +43,7 @@ top object is reverted by the write-metadata reset (reset_fixture git-clean + re
 
 import base64
 import re
+from xml.etree import ElementTree
 
 from harness import (
     call,
@@ -50,6 +51,8 @@ from harness import (
     assert_error,
     assert_error_quality,
     assert_no_diff,
+    tree_snapshot,
+    assert_tree_unchanged,
     poll_diff_contains,
     read_disk,
     wait_for_project_ready,
@@ -103,24 +106,17 @@ def _png_ok(r):
         return False
 
 
-# The v1 template writer stores a cell's LITERAL text under the platform's language-NEUTRAL key "#"
-# (SheetFactory.DEFAULT_LANGUAGE) so it renders for EVERY viewing language: the moxel text reader
-# resolves content.get(currentLanguage) then falls back to content.get("#"). On disk that neutral
-# entry serializes as a <v8:item> whose <v8:lang> is "#". A bare `text in doc` is NOT enough — the
-# substring is present no matter which <v8:lang> key stores the text (the shipped fixtures key their
-# cell text under "en"), so a regression that keyed authored text under "en"/"" would render BLANK yet
-# still pass the substring gate. This pins the text to the neutral "#" item — the deterministic half
-# of the render proof; actual pixel visibility is live-verified with get_template_screenshot.
-_NEUTRAL_TEXT_RE_TMPL = r"<v8:lang>#</v8:lang>\s*<v8:content>%s</v8:content>"
+# The neutral key is EDT's fallback; a concrete config language key is what
+# lets a 1C session read the same authored cell text (#1039).
+def _assert_text_under_language_key(doc, text, mxlx, code):
+    pattern = r"<v8:lang>%s</v8:lang>\s*<v8:content>%s</v8:content>" % (
+        re.escape(code), re.escape(text))
+    assert re.search(pattern, doc), (
+        "the authored cell text must be stored under %r in %s: %r" % (code, mxlx, doc[:1000]))
 
 
 def _assert_text_under_neutral_key(doc, text, mxlx):
-    """Fail unless the authored cell text is serialized under the language-neutral '#' key (the key that
-    renders for every viewing language), not under a specific language code like the fixtures' 'en'."""
-    pattern = re.compile(_NEUTRAL_TEXT_RE_TMPL % re.escape(text))
-    assert pattern.search(doc), (
-        "the authored cell text must be stored under the language-neutral '#' key (so it renders for "
-        "every viewing language), not under 'en'/'' like the fixtures, in %s: %r" % (mxlx, doc[:600]))
+    _assert_text_under_language_key(doc, text, mxlx, "#")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -164,11 +160,10 @@ def test_template_content_lands_in_mxlx_on_disk():
     # to its separate resource, not just committed in-memory.
     poll_diff_contains(text, ctx="the authored cell text must flush to the template's .mxlx on disk")
     doc = read_disk(mxlx)
-    # Not a bare `text in doc` (satisfied under ANY <v8:lang> key): pin the cell text to the
-    # language-NEUTRAL "#" item — the key that renders for every viewing language. Text keyed under
-    # "en"/"" (like the shipped fixtures) would still contain the substring yet render blank; this
-    # fails it. This is the on-disk half of the render proof (pixel visibility is live-verified).
+    # The fixture's configured language code is en (the object name is English).
+    # Requiring both keys catches a regression that only works in EDT rendering.
     _assert_text_under_neutral_key(doc, text, mxlx)
+    _assert_text_under_language_key(doc, text, mxlx, "en")
     assert parameter in doc, \
         "the parameter cell must land in the same .mxlx (%s): %r" % (mxlx, doc[:400])
     # A fresh empty template has NO <merge>, so its presence proves the authored merge wrote (anti-cheat).
@@ -400,3 +395,109 @@ def test_read_owned_spreadsheet_template_area_and_parameter_round_trip():
                                    "parameter": "ДолжностьРуководителя"}], next_page
     assert "nextOffset" not in next_page, next_page
     assert read_disk(mxlx) == before, "read must not change the template resource"
+
+
+@e2e_test(tool="template_content", kind="read")
+def test_read_unknown_named_area_names_the_value_and_how_to_list_areas():
+    missing = "E2EUnknownArea1019"
+    r = call("template_content", {"method": "read", "projectName": PROJECT,
+                                  "fqn": FIXTURE_TEMPLATE, "areaName": missing})
+    error = assert_error(r, "read an unknown named cell area")
+    assert_error_quality(error, names=[missing], suggests=["Omit areaName", "list", "areas"],
+                         ctx="unknown area must name the value and explain how to discover cell areas")
+    assert_no_diff("a refused area read must not change the fixture")
+
+
+@e2e_test(tool="template_content", kind="read")
+def test_read_non_template_fqn_names_the_target_and_template_address():
+    r = call("template_content", {"method": "read", "projectName": PROJECT,
+                                  "fqn": NON_TEMPLATE_FQN})
+    error = assert_error(r, "read spreadsheet content from a Catalog rather than its template")
+    assert_error_quality(error, names=[NON_TEMPLATE_FQN],
+                         suggests=["CommonTemplate.<Name>", "<Type>.<Owner>.Template.<Name>"],
+                         ctx="wrong-kind read must direct the caller to a template FQN")
+    assert_no_diff("a wrong-kind template read must not change the fixture")
+
+
+@e2e_test(tool="template_content", kind="write-metadata")
+def test_read_text_document_refers_to_its_supported_reader_without_changes():
+    name = "E2EReadTextRefusal1019"
+    fqn = "Catalog.Catalog.Template." + name
+    created = call("create_metadata", {
+        "projectName": PROJECT, "fqn": fqn,
+        "properties": [{"name": "templateType", "value": "TextDocument"}],
+    })
+    assert_ok(created, "seed a real TextDocument rather than a nonexistent template")
+    # Creation submits export: prove its actual type on disk before another MCP call.
+    owner = ElementTree.fromstring(read_disk("src/Catalogs/Catalog/Catalog.mdo"))
+    definitions = [item for item in owner.findall("templates") if item.findtext("name") == name]
+    assert len(definitions) == 1, "the created template must exist in its owner's descriptor"
+    assert definitions[0].findtext("templateType") == "TextDocument", ElementTree.tostring(definitions[0])
+    wait_for_project_ready()
+    before = tree_snapshot()
+    r = call("template_content", {"method": "read", "projectName": PROJECT, "fqn": fqn})
+    error = assert_error(r, "SpreadsheetDocument reader must not silently accept a TextDocument")
+    assert_error_quality(error, names=[fqn, "TextDocument"], suggests=["get_metadata_details"],
+                         ctx="TextDocument read refusal points to its supported content reader")
+    assert_tree_unchanged(before, "the refused read must not retype or otherwise modify the seeded template")
+
+
+@e2e_test(tool="template_content", kind="read")
+def test_read_pagination_rejects_out_of_range_values_without_changes():
+    # Pin both lower/upper boundaries; a clamping implementation must not pass.
+    for key, value, minimum, maximum in (
+            ("limit", 0, 1, 200), ("limit", -1, 1, 200), ("limit", 201, 1, 200),
+            ("offset", -1, 0, 2147483647), ("offset", 2147483648, 0, 2147483647)):
+        args = {"method": "read", "projectName": PROJECT, "fqn": FIXTURE_TEMPLATE, key: value}
+        error = assert_error(call("template_content", args), "out-of-range %s=%s" % (key, value))
+        assert_error_quality(error, names=[key, str(value)],
+                             suggests=[str(minimum if value < minimum else maximum)],
+                             ctx="pagination refusal must name the rejected value and violated bound")
+        assert_no_diff("a refused %s=%s read must not change the fixture" % (key, value))
+
+
+@e2e_test(tool="template_content", kind="read")
+def test_read_unknown_argument_names_the_key_and_supported_read_keys():
+    key = "unrecognizedReadArgument1019"
+    r = call("template_content", {"method": "read", "projectName": PROJECT,
+                                  "fqn": FIXTURE_TEMPLATE, key: True})
+    error = assert_error(r, "unknown read argument must not be silently ignored")
+    assert_error_quality(error, names=[key], suggests=["areaName", "offset", "limit"],
+                         ctx="unknown read argument names the key and lists the accepted read arguments")
+    assert_no_diff("a refused unknown read argument must not change the fixture")
+
+
+@e2e_test(tool="template_content", kind="read")
+def test_read_native_detail_picture_and_drawing_parameters_without_changes():
+    r = call("template_content", {"method": "read", "projectName": PROJECT,
+                                  "fqn": "CommonTemplate.ReadParameters"})
+    assert_ok(r, "read native parameter-only cells and drawing")
+    template = r.structured["template"]
+    cells = {(cell["row"], cell["col"]): cell for cell in template["cells"]}
+    assert cells[(0, 0)]["detailParameter"] == "DetailCell", template
+    assert cells[(0, 1)]["pictureParameter"] == "PictureCell", template
+    # These are parameter-only native cells, not text cells concealing a skipped projection.
+    for position in ((0, 0), (0, 1)):
+        assert "text" not in cells[position] and "parameter" not in cells[position], cells[position]
+    drawings = [drawing for drawing in template["drawings"] if drawing.get("name") == "DetailDrawing"]
+    assert len(drawings) == 1, template
+    drawing = drawings[0]
+    assert drawing["type"] == "TextDrawing", drawing
+    assert drawing["detailParameter"] == "DetailDrawingValue", drawing
+    assert drawing["parameter"] == "DrawingParam", drawing
+    assert "persisted" not in r.structured and "writtenProjects" not in r.structured, r.structured
+    assert_no_diff("reading native cell and drawing parameters must not change the fixture")
+
+
+@e2e_test(tool="template_content", kind="read")
+def test_read_drawing_name_is_not_accepted_as_a_named_cell_area():
+    args = {"method": "read", "projectName": PROJECT, "fqn": "CommonTemplate.ReadParameters"}
+    r = call("template_content", args)
+    assert_ok(r, "prove the rejected area name actually belongs to an existing native drawing")
+    assert any(drawing.get("name") == "DetailDrawing"
+               for drawing in r.structured["template"]["drawings"]), r.structured
+    error = assert_error(call("template_content", dict(args, areaName="DetailDrawing")),
+                         "drawing names must not be interpreted as named cell areas")
+    assert_error_quality(error, names=["DetailDrawing"], suggests=["Omit areaName", "list", "areas"],
+                         ctx="drawing-as-area refusal names the value and shows how to discover cell areas")
+    assert_no_diff("a drawing-as-area refusal must not change the fixture")

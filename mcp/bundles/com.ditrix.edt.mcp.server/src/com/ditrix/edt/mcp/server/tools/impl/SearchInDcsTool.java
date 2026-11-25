@@ -92,7 +92,9 @@ public class SearchInDcsTool implements IMcpTool
             .booleanProperty("isRegex", //$NON-NLS-1$
                 "Treat query as a regular expression. Default: false") //$NON-NLS-1$
             .integerProperty("limit", //$NON-NLS-1$
-                "Max matches returned with context. Default: 100, max: 500") //$NON-NLS-1$
+                "Max matches (full/lines) or file rows (files). Default: 100, max: 500") //$NON-NLS-1$
+            .integerProperty("offset", //$NON-NLS-1$
+                "Skip this many matched files in path order (files mode only, default: 0)") //$NON-NLS-1$
             .integerProperty(KEY_CONTEXT_LINES,
                 "Lines of context before/after each match. Default: 2, max: 5") //$NON-NLS-1$
             .stringProperty("fileMask", //$NON-NLS-1$
@@ -154,6 +156,7 @@ public class SearchInDcsTool implements IMcpTool
 
         limit = Pagination.clampLimit(limit, MAX_LIMIT);
         contextLines = Math.min(Math.max(0, contextLines), MAX_CONTEXT_LINES);
+        int offset = Math.max(0, JsonUtils.extractIntArgument(params, "offset", 0)); //$NON-NLS-1$
 
         Pattern pattern;
         try
@@ -194,7 +197,7 @@ public class SearchInDcsTool implements IMcpTool
         }
 
         return SearchResultFormatter.withAddress("xml", "Template", SearchInDcsTool::templateFqn) //$NON-NLS-1$ //$NON-NLS-2$
-            .format(outputMode, query, search);
+            .format(outputMode, query, search, limit, offset);
     }
 
     /**

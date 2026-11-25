@@ -27,6 +27,8 @@ import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 import com._1c.g5.v8.dt.metadata.mdclass.TemplateType;
 import com._1c.g5.v8.dt.moxel.MoxelFactory;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
+import com.ditrix.edt.mcp.server.utils.MetadataScope;
+import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.SpreadsheetTemplateWriter;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -46,6 +48,7 @@ public class TemplateContentToolTest
         assertEquals(Set.of("method", "fqn", "projectName", "template", "areaName", "offset", "limit"), properties.keySet());
         assertEquals(1, schema.getAsJsonArray("required").size());
         assertEquals("method", schema.getAsJsonArray("required").get(0).getAsString());
+        assertEquals(Integer.MAX_VALUE, properties.getAsJsonObject("offset").get("maximum").getAsInt());
         JsonObject payload = properties.getAsJsonObject("template");
         assertEquals(Set.of("text", "mode", "oldText", "expectedHash", "expectedSource", "overwrite",
             "cells", "merges", "areas", "columnWidths", "rowHeights", "unmerges", "removeAreas", "renameAreas"),
@@ -107,6 +110,61 @@ public class TemplateContentToolTest
         assertTrue(tool.validateRequest(args).contains("limit"));
         assertTrue(tool.execute(Map.of("method", "modify", "projectName", "NoProject",
             "fqn", "CommonTemplate.Print", "template", "{}", "areaName", "Header")).contains("areaName"));
+    }
+
+    @Test
+    public void testUnknownReadArgumentListsReadKeysAndInvalidOffsetNamesValue()
+    {
+        var args = new java.util.HashMap<>(Map.of("method", "read", "projectName", "NoProject",
+            "fqn", "CommonTemplate.Print", "area", "Header"));
+        String failure = tool.validateRequest(args);
+        assertTrue(failure, failure.contains("'area'"));
+        assertTrue(failure, failure.contains("areaName, offset, limit"));
+        assertFalse(failure, failure.contains("method='modify'"));
+        args.remove("area");
+        args.put("offset", "2147483648");
+        failure = tool.validateRequest(args);
+        assertTrue(failure, failure.contains("offset '2147483648'"));
+        assertTrue(failure, failure.contains("between 0 and 2147483647"));
+    }
+
+    @Test
+    public void testNonTemplateIdentityNamesTheAcceptedFqnsInBothDialects()
+    {
+        var config = MdClassFactory.eINSTANCE.createConfiguration();
+        var catalog = MdClassFactory.eINSTANCE.createCatalog();
+        catalog.setName("Products");
+        config.getCatalogs().add(catalog);
+        var scope = MetadataScope.ofConfiguration(config);
+        for (String fqn : Set.of("Catalog.Products", "Справочник.Products"))
+        {
+            var target = TemplateContentTool.resolveTemplateReadTarget(scope, "Fixture", null,
+                MetadataTypeUtils.normalizeFqn(fqn));
+            assertTrue(target.error(), target.error().contains("Products"));
+            assertTrue(target.error(), target.error().contains("did not resolve to a template"));
+            assertTrue(target.error(), target.error().contains("CommonTemplate.<Name>"));
+            assertEquals(IBmObject.BM_NULL_ID, target.id());
+        }
+    }
+
+    @Test
+    public void testReadRejectsTextTemplateWithoutMaterializingItsContent()
+    {
+        IBmModel model = mock(IBmModel.class);
+        IBmTransaction tx = mock(IBmTransaction.class);
+        CommonTemplate template = mock(CommonTemplate.class, withSettings().extraInterfaces(IBmObject.class));
+        when(tx.getObjectById(17L)).thenReturn((IBmObject)template);
+        when(template.getTemplateType()).thenReturn(TemplateType.TEXT_DOCUMENT);
+        when(model.executeAndRollback(any())).thenAnswer(inv -> ((IBmTask<?>)inv.getArgument(0)).execute(tx, null));
+
+        JsonObject response = json(TemplateContentTool.readTemplateContent(model, 17L,
+            "CommonTemplate.Terms", Map.of()));
+        assertFalse(response.get("success").getAsBoolean());
+        String error = response.get("error").getAsString();
+        assertTrue(error, error.contains("CommonTemplate.Terms") && error.contains("TextDocument")
+            && error.contains("get_metadata_details"));
+        verify(template, never()).getTemplate();
+        verify(model, never()).execute(any());
     }
 
     @Test

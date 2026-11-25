@@ -117,7 +117,7 @@ public class SearchInDcsToolTest
         JsonObject schema = JsonParser.parseString(new SearchInDcsTool().getInputSchema()).getAsJsonObject();
         Set<String> properties = new TreeSet<>(schema.getAsJsonObject("properties").keySet()); //$NON-NLS-1$
         assertEquals(new TreeSet<>(Set.of("projectName", "query", "caseSensitive", "isRegex", "limit", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
-            "contextLines", "fileMask", "outputMode")), properties); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "offset", "contextLines", "fileMask", "outputMode")), properties); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
 
         Set<String> required = new TreeSet<>();
         for (JsonElement element : schema.getAsJsonArray("required")) //$NON-NLS-1$
@@ -133,6 +133,20 @@ public class SearchInDcsToolTest
             modes.add(element.getAsString());
         }
         assertEquals(new TreeSet<>(Set.of("full", "lines", "count", "files")), modes); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+    }
+
+    @Test
+    public void testFilesPageKeepsExactCountsAndFqnWhileOffsetSkipsEarlierPaths() throws CoreException
+    {
+        project();
+        String page = search(MARK, "outputMode", "files", "limit", "1", "offset", "1"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+        assertTrue(page, page.contains("**Total matches:** 3 in **3** files (showing 2-2 of 3; next page: offset=2)")); //$NON-NLS-1$
+        assertTrue(page, page.contains(MarkdownUtils.tableRow(ODD, "-", "1"))); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse(page, page.contains(ANALYTICS));
+        assertFalse(page, page.contains(STOCK));
+        String tail = search(MARK, "outputMode", "files", "limit", "1", "offset", "2"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+        assertTrue(tail, tail.contains(MarkdownUtils.tableRow(STOCK, "Report.Stock.Template.Main", "1"))); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse(tail, tail.contains("next page")); //$NON-NLS-1$
     }
 
     @Test

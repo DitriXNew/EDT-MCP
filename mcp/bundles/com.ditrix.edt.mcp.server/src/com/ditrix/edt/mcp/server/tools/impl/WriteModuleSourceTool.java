@@ -43,7 +43,10 @@ import com.ditrix.edt.mcp.server.utils.BslMethodTransfer;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
 import com.ditrix.edt.mcp.server.utils.BslSyntaxChecker;
 import com.ditrix.edt.mcp.server.utils.BslWholeWordReplace;
+import com.ditrix.edt.mcp.server.utils.ConsentPreview;
 import com.ditrix.edt.mcp.server.utils.ContentHash;
+import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
+import com.ditrix.edt.mcp.server.utils.EmptyModuleRemoval;
 import com.ditrix.edt.mcp.server.utils.FrontMatter;
 import com.ditrix.edt.mcp.server.utils.InvalidFileCharacters;
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
@@ -71,6 +74,7 @@ public class WriteModuleSourceTool implements IMcpTool
     private static final String MODE_INSERT_AFTER = "insertAfter"; //$NON-NLS-1$
     /** Deletes the methods named in {@code methodNames} (#978). */
     private static final String MODE_DELETE_METHODS = "deleteMethods"; //$NON-NLS-1$
+    private static final String MODE_DELETE_MODULE = "deleteModule"; //$NON-NLS-1$
     /** Replaces every whole-word occurrence of {@code oldSource} with {@code source} (#996). */
     private static final String MODE_REPLACE_ALL = "replaceAll"; //$NON-NLS-1$
 
@@ -103,7 +107,7 @@ public class WriteModuleSourceTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Create or edit BSL source in a metadata module. Parameters and examples: " //$NON-NLS-1$
+        return "Create or edit BSL source, or remove a blank object/manager module. Parameters and examples: " //$NON-NLS-1$
             + "get_tool_guide('write_module_source')."; //$NON-NLS-1$
     }
 
@@ -125,7 +129,7 @@ public class WriteModuleSourceTool implements IMcpTool
             .stringProperty("source", //$NON-NLS-1$
                 "BSL source to write: full file for replace, new fragment for " + //$NON-NLS-1$
                 "searchReplace, text to add for append, or exactly one complete method for " + //$NON-NLS-1$
-                "a method-targeted mode. Required unless fromModulePath or mode=deleteMethods.") //$NON-NLS-1$
+                "a method-targeted mode. Required unless fromModulePath, deleteMethods, or deleteModule.") //$NON-NLS-1$
             .stringProperty(FROM_MODULE_PATH,
                 "Instead of source: copy the methodNames methods from this module of the same project " //$NON-NLS-1$
                 + "(modes append (default), insertBefore, insertAfter, replace of a new module).") //$NON-NLS-1$
@@ -138,7 +142,7 @@ public class WriteModuleSourceTool implements IMcpTool
             .enumProperty("mode", //$NON-NLS-1$
                 "Write mode (default searchReplace).", //$NON-NLS-1$
                 MODE_SEARCH_REPLACE, MODE_REPLACE, MODE_APPEND,
-                MODE_REPLACE_METHOD, MODE_INSERT_BEFORE, MODE_INSERT_AFTER, MODE_DELETE_METHODS, MODE_REPLACE_ALL)
+                MODE_REPLACE_METHOD, MODE_INSERT_BEFORE, MODE_INSERT_AFTER, MODE_DELETE_METHODS, MODE_REPLACE_ALL, MODE_DELETE_MODULE)
             .stringProperty("methodName", //$NON-NLS-1$
                 "Existing anchor method; required for replaceMethod, insertBefore, and insertAfter.") //$NON-NLS-1$
             .stringProperty("formName", //$NON-NLS-1$
@@ -161,7 +165,7 @@ public class WriteModuleSourceTool implements IMcpTool
             .stringProperty("expectedHash", //$NON-NLS-1$
                 "Lost-update guard: the hash from the read that produced your edit. The write is " //$NON-NLS-1$
                 + "rejected if the module changed since; required for every method-targeted mode " //$NON-NLS-1$
-                + "and deleteMethods.") //$NON-NLS-1$
+                + "and deleteMethods/deleteModule.") //$NON-NLS-1$
             .build();
     }
 
@@ -252,10 +256,16 @@ public class WriteModuleSourceTool implements IMcpTool
             {
                 return root.errorJson();
             }
-            String locked = vendorSupportRefusal(ctx, root, file);
+            String locked = req.isDeleteModule()
+                ? deletionVendorSupportError(root.scope(), file)
+                : vendorSupportRefusal(ctx, root, file);
             if (locked != null)
             {
                 return locked;
+            }
+            if (req.isDeleteModule())
+            {
+                return deleteModule(req, file, root.scope(), mutationEntered, mutationCommitted);
             }
             // 7. A copy (#978): the methods' text is cut from the source module here, server-side; the source
             // is only read, so it needs no vendor guard and no adopted-module step of its own.
@@ -347,6 +357,12 @@ public class WriteModuleSourceTool implements IMcpTool
         IFile file)
     {
         String refusal = VendorSupportGuard.refusalForModuleFile(ctx.project(), root.scope(), file);
+        return refusal == null ? null : ToolResult.error(refusal).toJson();
+    }
+
+    private static String deletionVendorSupportError(MetadataScope scope, IFile file)
+    {
+        String refusal = VendorSupportGuard.refusalForSourceRelativeModuleFile(file.getProject(), scope, file);
         return refusal == null ? null : ToolResult.error(refusal).toJson();
     }
 
@@ -501,6 +517,11 @@ public class WriteModuleSourceTool implements IMcpTool
         boolean isDelete()
         {
             return MODE_DELETE_METHODS.equals(mode);
+        }
+
+        boolean isDeleteModule()
+        {
+            return MODE_DELETE_MODULE.equals(mode);
         }
 
         boolean isReplaceAll()
@@ -672,6 +693,46 @@ public class WriteModuleSourceTool implements IMcpTool
             moduleState -> buildSuccessResponse(req.projectName, req.modulePath, req.mode, req.skipSyntaxCheck,
                 newLines, fileExists, totalOriginal, contentHash, charFix.summary(), moduleState,
                 methodFacts(req, deletedMethods, stillCalled, duplicateWarning, replaceAll)));
+    }
+
+    private static String deleteModule(WriteRequest req, IFile file, MetadataScope scope,
+        AtomicBoolean mutationEntered, AtomicBoolean mutationCommitted) throws Exception
+    {
+        EmptyModuleRemoval.Owner owner = EmptyModuleRemoval.resolveOwner(file, scope);
+        EmptyModuleRemoval.validateSource(file, req.expectedHash);
+        ConsentPreview preview = new ConsentPreview("Delete blank BSL module", //$NON-NLS-1$
+            "Remove this empty module file; the metadata object and its other modules are kept.", //$NON-NLS-1$
+            1, List.of(req.modulePath));
+        var decision = DestructiveConsentGate.getInstance().requireConsent(NAME, preview);
+        if (decision != DestructiveConsentGate.ConsentDecision.ALLOW)
+        {
+            return ToolResult.error(DestructiveConsentGate.consentDeniedMessage(decision, NAME)).toJson();
+        }
+        // The project/owner may have changed while consent was open.
+        String reload = ProjectStateChecker.checkoutReloadErrorOrNull(file.getProject());
+        if (reload != null)
+        {
+            return ToolResult.error(reload).toJson();
+        }
+        if (!owner.equals(EmptyModuleRemoval.resolveOwner(file, scope)))
+        {
+            return ToolResult.error("The module owner changed after consent. Nothing was deleted.").toJson(); //$NON-NLS-1$
+        }
+        String locked = deletionVendorSupportError(scope, file);
+        if (locked != null)
+        {
+            return locked;
+        }
+        EmptyModuleRemoval.remove(file, owner, req.expectedHash,
+            () -> mutationEntered.set(true), () -> mutationCommitted.set(true));
+        return FrontMatter.create()
+            .put("tool", NAME) //$NON-NLS-1$
+            .put(PROJECT_NAME, req.projectName)
+            .put(MODULE_PATH, req.modulePath)
+            .put("mode", MODE_DELETE_MODULE) //$NON-NLS-1$
+            .put("status", "success") //$NON-NLS-1$ //$NON-NLS-2$
+            .put("deletedFile", true) //$NON-NLS-1$
+            .wrapContent("Deleted blank module file. The owning metadata object was not changed."); //$NON-NLS-1$
     }
 
     /** What {@link #planWrite} found: a ready refusal, or the lines to write and how to write them. */
@@ -1056,6 +1117,10 @@ public class WriteModuleSourceTool implements IMcpTool
         {
             return err;
         }
+        if (req.isDeleteModule())
+        {
+            return validateDeleteModuleArguments(req);
+        }
         String methodsError = validateMethodsArguments(req);
         if (methodsError != null)
         {
@@ -1078,7 +1143,7 @@ public class WriteModuleSourceTool implements IMcpTool
         {
             return ToolResult.error("invalid mode '" + req.mode + "'. " + //$NON-NLS-1$ //$NON-NLS-2$
                 "Allowed: searchReplace, replace, append, replaceMethod, insertBefore, " + //$NON-NLS-1$
-                "insertAfter, deleteMethods, replaceAll").toJson(); //$NON-NLS-1$
+                "insertAfter, deleteMethods, replaceAll, deleteModule").toJson(); //$NON-NLS-1$
         }
         if (req.isDelete() && (req.expectedHash == null || req.expectedHash.trim().isEmpty()))
         {
@@ -1113,6 +1178,23 @@ public class WriteModuleSourceTool implements IMcpTool
                     ". Read the module with read_module_source or read_method_source and pass " + //$NON-NLS-1$
                     "its contentHash.").toJson(); //$NON-NLS-1$
             }
+        }
+        return null;
+    }
+
+    private static String validateDeleteModuleArguments(WriteRequest req)
+    {
+        if (req.expectedHash == null || req.expectedHash.isBlank())
+        {
+            return ToolResult.error("expectedHash is required for mode=deleteModule. Read the module with " //$NON-NLS-1$
+                + "read_module_source and pass its contentHash.").toJson(); //$NON-NLS-1$
+        }
+        if (req.source != null || req.oldSource != null || req.methodName != null || req.methodNames != null
+            || req.fromModulePath != null || req.expectedSource != null || req.overwrite || req.skipSyntaxCheck
+            || !req.normalizeInvalidCharacters || req.formName != null || req.commandName != null)
+        {
+            return ToolResult.error("mode=deleteModule takes a module address and expectedHash only; " //$NON-NLS-1$
+                + "it cannot force-delete a nonblank module.").toJson(); //$NON-NLS-1$
         }
         return null;
     }

@@ -14,6 +14,7 @@ import com._1c.g5.v8.dt.moxel.RectArea;
 import com._1c.g5.v8.dt.moxel.RowsArea;
 import com._1c.g5.v8.dt.moxel.SpreadsheetDocument;
 import com._1c.g5.v8.dt.moxel.SpreadsheetPoint;
+import com._1c.g5.v8.dt.moxel.TextDrawing;
 import com._1c.g5.v8.dt.moxel.content.Area;
 import com._1c.g5.v8.dt.moxel.content.FillType;
 import com._1c.g5.v8.dt.moxel.content.LocalString;
@@ -27,6 +28,9 @@ public final class SpreadsheetTemplateReader
     public static final int DEFAULT_LIMIT = 100;
     public static final int MAX_LIMIT = 200;
     public static final int MAX_STRING_LENGTH = 2048;
+    // Bound the additional parameter names separately. Even a rank containing maximally JSON-
+    // escaped strings in every collection must still fit, so the offset can always advance.
+    private static final int MAX_ADDITIONAL_PARAMETER_LENGTH = 1024;
     // Reserve room for the page envelope, escaped area name and FQN. JSON-in-text
     // clients need the whole payload, including the next offset, under the shared cap.
     private static final int PAGE_ITEMS_BUDGET = OutputSizeGuard.MAX_CONTENT_CHARS - 16_000;
@@ -105,31 +109,49 @@ public final class SpreadsheetTemplateReader
 
     private static Selection findArea(SpreadsheetDocument document, String name)
     {
-        Selection match = null;
         if (document != null)
         {
-            for (var item : document.getNamedItems())
+            var direct = document.getNamedItems().get(name);
+            if (direct instanceof NamedItemCells named)
             {
-                if (!(item.getValue() instanceof NamedItemCells named) || !name.equalsIgnoreCase(item.getKey()))
+                return selectedArea(name, named);
+            }
+            // An exact name that belongs to a drawing is not a folded alias for an area.
+            if (direct == null)
+            {
+                String selectedName = null;
+                NamedItemCells selected = null;
+                for (var item : document.getNamedItems())
                 {
-                    continue;
+                    if (!(item.getValue() instanceof NamedItemCells named) || !name.equalsIgnoreCase(item.getKey()))
+                    {
+                        continue;
+                    }
+                    if (selected != null)
+                    {
+                        throw Refusals.argument("Area name '" + name
+                            + "' is ambiguous (case-insensitive match). Use the exact name.");
+                    }
+                    selectedName = item.getKey();
+                    selected = named;
                 }
-                if (match != null)
+                if (selected != null)
                 {
-                    throw Refusals.argument("Area name '" + name + "' is ambiguous (case-insensitive match).");
+                    return selectedArea(selectedName, selected);
                 }
-                match = new Selection(item.getKey(), areaRange(named.getArea()));
             }
         }
-        if (match == null)
-        {
-            throw Refusals.argument("No named cell area '" + name + "'. Omit areaName to list available areas.");
-        }
-        if (match.range == null)
+        throw Refusals.argument("No named cell area '" + name + "'. Omit areaName to list available areas.");
+    }
+
+    private static Selection selectedArea(String name, NamedItemCells named)
+    {
+        Range range = areaRange(named.getArea());
+        if (range == null)
         {
             throw Refusals.argument("Area '" + name + "' does not have a supported row, column or rectangle range.");
         }
-        return match;
+        return new Selection(name, range);
     }
 
     private static void readAreas(SpreadsheetDocument document, Selection selection, Page page)
@@ -174,14 +196,15 @@ public final class SpreadsheetTemplateReader
                     continue;
                 }
                 var cell = col.getValue();
-                int formatIndex = cell.getFormatIndex();
                 // EDT's getCellText uses the *cell's* format, not merged/inherited visual formatting.
-                FillType fill = formatIndex >= 0 && formatIndex < document.getFormats().size()
-                    ? document.getFormats().get(formatIndex).getFillType() : FillType.TEXT;
+                FillType fill = fillType(document, cell.getFormatIndex());
                 boolean parameter = fill == FillType.PARAMETER;
                 Text text = parameter ? new Text(null, cell.getParameter())
                     : cellText(cell.getText(), document.getLanguageSettings());
-                if (text == null || text.value == null || text.value.isEmpty())
+                boolean hasText = text != null && notEmpty(text.value);
+                String detail = cell.getDetailParameter();
+                String picture = cell.getPictureParameter();
+                if (!hasText && !notEmpty(detail) && !notEmpty(picture))
                 {
                     continue;
                 }
@@ -190,11 +213,16 @@ public final class SpreadsheetTemplateReader
                     data.addProperty("row", rowIndex);
                     data.addProperty("col", colIndex);
                     data.addProperty("type", parameter ? "parameter" : fill == FillType.TEMPLATE ? "template" : "text");
-                    putString(data, parameter ? "parameter" : "text", text.value);
-                    if (text.language != null)
+                    if (hasText)
                     {
-                        putString(data, "language", text.language);
+                        putString(data, parameter ? "parameter" : "text", text.value);
+                        if (text.language != null)
+                        {
+                            putString(data, "language", text.language);
+                        }
                     }
+                    putParameter(data, "detailParameter", detail);
+                    putParameter(data, "pictureParameter", picture);
                     return data;
                 });
                 if (page.more)
@@ -304,6 +332,12 @@ public final class SpreadsheetTemplateReader
                     {
                         data.add("anchor", anchors.toJson());
                     }
+                    putParameter(data, "detailParameter", drawing.getDetailParameter());
+                    if (drawing instanceof TextDrawing textDrawing
+                        && fillType(document, drawing.getFormatIndex()) == FillType.PARAMETER)
+                    {
+                        putParameter(data, "parameter", textDrawing.getParameter());
+                    }
                     return data;
                 });
                 if (page.more)
@@ -311,6 +345,25 @@ public final class SpreadsheetTemplateReader
                     return;
                 }
             }
+        }
+    }
+
+    private static FillType fillType(SpreadsheetDocument document, int index)
+    {
+        return index >= 0 && index < document.getFormats().size()
+            ? document.getFormats().get(index).getFillType() : FillType.TEXT;
+    }
+
+    private static boolean notEmpty(String value)
+    {
+        return value != null && !value.isEmpty();
+    }
+
+    private static void putParameter(JsonObject data, String key, String value)
+    {
+        if (notEmpty(value))
+        {
+            putString(data, key, value, MAX_ADDITIONAL_PARAMETER_LENGTH);
         }
     }
 
@@ -360,13 +413,17 @@ public final class SpreadsheetTemplateReader
 
     private static void putString(JsonObject data, String key, String value)
     {
-        if (value.length() <= MAX_STRING_LENGTH)
+        putString(data, key, value, MAX_STRING_LENGTH);
+    }
+
+    private static void putString(JsonObject data, String key, String value, int maxLength)
+    {
+        if (value.length() <= maxLength)
         {
             data.addProperty(key, value);
             return;
         }
-        int end = Character.isHighSurrogate(value.charAt(MAX_STRING_LENGTH - 1))
-            ? MAX_STRING_LENGTH - 1 : MAX_STRING_LENGTH;
+        int end = Character.isHighSurrogate(value.charAt(maxLength - 1)) ? maxLength - 1 : maxLength;
         data.addProperty(key, value.substring(0, end));
         data.addProperty(key + "Truncated", true);
     }

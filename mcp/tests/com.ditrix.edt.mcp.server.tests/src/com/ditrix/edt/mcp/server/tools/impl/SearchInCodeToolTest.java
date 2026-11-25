@@ -73,6 +73,7 @@ public class SearchInCodeToolTest
         assertTrue("schema must declare caseSensitive", schema.contains("\"caseSensitive\"")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("schema must declare isRegex", schema.contains("\"isRegex\"")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("schema must declare limit", schema.contains("\"limit\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("schema must declare offset", schema.contains("\"offset\"")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("schema must declare the deprecated maxResults alias", //$NON-NLS-1$
             schema.contains("\"maxResults\"")); //$NON-NLS-1$
         assertTrue("schema must declare contextLines", schema.contains("\"contextLines\"")); //$NON-NLS-1$ //$NON-NLS-2$

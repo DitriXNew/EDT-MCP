@@ -50,7 +50,7 @@ One page per tool: what it does, every parameter, and how it works. Generated fr
 | [`modify_metadata`](modify_metadata.md) | Set properties of any metadata node, including managed-form roots, items, attributes, commands, and handlers, and edit a section's command interface. Paramet… |
 | [`rename_metadata_object`](rename_metadata_object.md) | Rename a metadata object or member and rewrite the references EDT RESOLVES for it. CASCADES ACROSS THE WHOLE CONFIGURATION - BSL, forms, roles, subsystems -… |
 | [`search_in_dcs`](search_in_dcs.md) | Literal/regex full-text search inside DCS schemas (*.dcs under src/); names the template FQN when the layout is recognised. Parameters and examples: get_tool… |
-| [`template_content`](template_content.md) | Edit spreadsheet and text template content; use the help method for the payload rules. |
+| [`template_content`](template_content.md) | Read spreadsheet areas, cells, merges and drawings, or edit spreadsheet and text template content. |
 
 ## Code
 
@@ -67,7 +67,7 @@ One page per tool: what it does, every parameter, and how it works. Generated fr
 | [`open_editor`](open_editor.md) | Open an EDT editor for metadata, a managed form, or BSL source. Requires Allow UI navigation in MCP Server preferences (off by default). Parameters and examp… |
 | [`read_method_source`](read_method_source.md) | Inspect the source of one or more BSL procedures or functions. Parameters and examples: get_tool_guide('read_method_source'). |
 | [`validate_query`](validate_query.md) | Check a 1C query or stored BSL query literals for syntax and metadata-reference errors. Parameters and examples: get_tool_guide('validate_query'). |
-| [`write_module_source`](write_module_source.md) | Create or edit BSL source in a metadata module. Parameters and examples: get_tool_guide('write_module_source'). |
+| [`write_module_source`](write_module_source.md) | Create or edit BSL source, or remove a blank object/manager module. Parameters and examples: get_tool_guide('write_module_source'). |
 
 ## Debug
 

@@ -8,16 +8,17 @@ package com.ditrix.edt.mcp.server.utils;
 
 import java.util.List;
 import java.util.Map;
+import java.util.TreeMap;
 import java.util.function.Function;
 
 /**
  * Renders a {@link ResourceTextSearch} result as Markdown in the four output modes the full-text
  * search tools share: {@code full} (matches with context, capped), {@code lines} (one
  * {@code path:line: text} row per match, capped like {@code full}, no context), {@code count}
- * (exact totals only) and {@code files} (one row per matched file with its exact count).
+ * (exact totals only) and {@code files} (a page of matched files with their exact counts).
  * <p>
- * The text is the {@code search_in_code} contract, byte for byte: {@link #forCode()} configures
- * nothing beyond the {@code bsl} code fence. A tool may add two things and nothing else:
+ * {@link #forCode()} uses a {@code bsl} code fence, no per-file address, and the plain
+ * no-match sentinel. A tool may add:
  * <ul>
  * <li>a per-file <b>address</b> (e.g. the DCS template FQN a {@code .dcs} file belongs to),
  * printed under the file heading in {@code full} mode, after the path in {@code lines} mode and
@@ -55,6 +56,10 @@ public final class SearchResultFormatter
 
     private static final String INTERRUPTED_WARNING =
         "**Warning:** Search was interrupted, results may be incomplete"; //$NON-NLS-1$
+
+    // Reserve space for the page notice, without ever cutting a table row at the transport cap.
+    private static final int FILES_PAGE_BUDGET = OutputSizeGuard.MAX_CONTENT_CHARS - 1_000;
+    private static final int MAX_FILES_TITLE_QUERY_CHARS = 1_000;
 
     private final String fenceLanguage;
     private final String addressLabel;
@@ -102,23 +107,34 @@ public final class SearchResultFormatter
      *     {@link #MODE_FILES}; anything else renders as {@code full}
      * @param query the query as the caller sent it (echoed in the heading)
      * @param search the finished scan ({@code full} and {@code lines} need its detailed matches)
+     * @param limit the clamped file-row limit for {@code files} (details already capped in the scan)
+     * @param offset the non-negative number of matched files to skip in {@code files}
      * @return the Markdown text
      */
-    public String format(String outputMode, String query, ResourceTextSearch search)
+    public String format(String outputMode, String query, ResourceTextSearch search, int limit, int offset)
     {
-        if (MODE_COUNT.equals(outputMode))
+        String filters = addressOf == null ? "'fileMask' or 'metadataType'" : "'fileMask'"; //$NON-NLS-1$ //$NON-NLS-2$
+        String text;
+        String advice;
+        if (MODE_FILES.equals(outputMode))
         {
-            return formatCount(query, search);
+            text = formatFiles(query, search, limit, offset);
+            advice = "use 'outputMode=count' for totals or narrow the search with " + filters + "."; //$NON-NLS-1$ //$NON-NLS-2$
         }
-        else if (MODE_FILES.equals(outputMode))
+        else if (MODE_COUNT.equals(outputMode))
         {
-            return formatFiles(query, search);
+            text = formatCount(query, search);
+            advice = "use a shorter query or narrow the search with " + filters + "."; //$NON-NLS-1$ //$NON-NLS-2$
         }
-        else if (MODE_LINES.equals(outputMode))
+        else
         {
-            return formatLines(query, search);
+            text = MODE_LINES.equals(outputMode) ? formatLines(query, search) : formatFull(query, search);
+            advice = "use 'outputMode=count' for totals, 'outputMode=files' for file pages, " //$NON-NLS-1$
+                + "a smaller 'limit', or narrow the search with " + filters + "."; //$NON-NLS-1$ //$NON-NLS-2$
         }
-        return formatFull(query, search);
+        // File pages already fit at row boundaries. This also handles unusual inputs such as a huge
+        // rejected mask echoed by a warning, and keeps truncation advice specific to this mode.
+        return OutputSizeGuard.cap(text, OutputSizeGuard.MAX_CONTENT_CHARS, advice);
     }
 
     private String formatCount(String query, ResourceTextSearch search)
@@ -141,12 +157,15 @@ public final class SearchResultFormatter
         return sb.toString();
     }
 
-    private String formatFiles(String query, ResourceTextSearch search)
+    private String formatFiles(String query, ResourceTextSearch search, int limit, int offset)
     {
         StringBuilder sb = new StringBuilder();
-        sb.append("## Search Files for \"").append(query).append(QUOTE_NEWLINES); //$NON-NLS-1$
+        sb.append("## Search Files for \"").append(filesTitleQuery(query)).append(QUOTE_NEWLINES); //$NON-NLS-1$
+        int totalFiles = search.getTotalMatchedFiles();
         sb.append("**Total matches:** ").append(search.getTotalMatches()); //$NON-NLS-1$
-        sb.append(" in **").append(search.getTotalMatchedFiles()).append("** files\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        sb.append(" in **").append(totalFiles).append("** files"); //$NON-NLS-1$ //$NON-NLS-2$
+        int noticeStart = sb.length();
+        sb.append("\n\n"); //$NON-NLS-1$
 
         appendFileMaskWarning(sb, search, "\n\n"); //$NON-NLS-1$
         if (search.getSkippedFiles() > 0)
@@ -165,6 +184,12 @@ public final class SearchResultFormatter
             return sb.toString();
         }
 
+        if (offset >= totalFiles)
+        {
+            return sb.append("No files on this page (offset=").append(offset) //$NON-NLS-1$
+                .append("). Use a smaller offset.\n").toString(); //$NON-NLS-1$
+        }
+
         if (addressOf == null)
         {
             sb.append(MarkdownUtils.tableHeader("File", "Matches")); //$NON-NLS-1$ //$NON-NLS-2$
@@ -174,21 +199,59 @@ public final class SearchResultFormatter
             sb.append(MarkdownUtils.tableHeader("File", addressLabel, "Matches")); //$NON-NLS-1$ //$NON-NLS-2$
         }
 
-        for (Map.Entry<String, Integer> entry : search.getMatchCountByFile().entrySet())
+        int shown = 0;
+        int index = 0;
+        // A resource walk need not produce the same order across calls. Page by display path.
+        for (Map.Entry<String, Integer> entry : new TreeMap<>(search.getMatchCountByFile()).entrySet())
         {
-            String count = String.valueOf(entry.getValue());
-            if (addressOf == null)
+            if (index++ < offset)
             {
-                sb.append(MarkdownUtils.tableRow(entry.getKey(), count));
+                continue;
             }
-            else
+            String row = fileRow(entry);
+            if (row.length() > FILES_PAGE_BUDGET - sb.length())
             {
-                String address = addressOf.apply(entry.getKey());
-                sb.append(MarkdownUtils.tableRow(entry.getKey(), address == null ? "-" : address, count)); //$NON-NLS-1$
+                break;
+            }
+            sb.append(row);
+            if (++shown == limit)
+            {
+                break;
             }
         }
+        if (shown == 0)
+        {
+            return sb.append("\nA file row exceeds the output budget. Narrow the search with 'fileMask'.\n") //$NON-NLS-1$
+                .toString();
+        }
 
+        sb.insert(noticeStart, Pagination.pageNotice(offset, shown, totalFiles));
         return sb.toString();
+    }
+
+    private static String filesTitleQuery(String query)
+    {
+        if (query.length() <= MAX_FILES_TITLE_QUERY_CHARS)
+        {
+            return query;
+        }
+        int end = MAX_FILES_TITLE_QUERY_CHARS;
+        if (Character.isHighSurrogate(query.charAt(end - 1)))
+        {
+            end--;
+        }
+        return query.substring(0, end) + "..."; //$NON-NLS-1$
+    }
+
+    private String fileRow(Map.Entry<String, Integer> entry)
+    {
+        String count = String.valueOf(entry.getValue());
+        if (addressOf == null)
+        {
+            return MarkdownUtils.tableRow(entry.getKey(), count);
+        }
+        String address = addressOf.apply(entry.getKey());
+        return MarkdownUtils.tableRow(entry.getKey(), address == null ? "-" : address, count); //$NON-NLS-1$
     }
 
     private String formatFull(String query, ResourceTextSearch search)

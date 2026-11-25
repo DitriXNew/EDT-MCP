@@ -10,6 +10,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
 import org.eclipse.emf.ecore.util.EcoreUtil;
@@ -22,6 +23,7 @@ import com._1c.g5.v8.dt.mcore.McoreFactory;
 import com._1c.g5.v8.dt.moxel.Cell;
 import com._1c.g5.v8.dt.moxel.Column;
 import com._1c.g5.v8.dt.moxel.Columns;
+import com._1c.g5.v8.dt.moxel.ColumnsArea;
 import com._1c.g5.v8.dt.moxel.Format;
 import com._1c.g5.v8.dt.moxel.Merge;
 import com._1c.g5.v8.dt.moxel.MoxelFactory;
@@ -30,6 +32,7 @@ import com._1c.g5.v8.dt.moxel.NamedItemCells;
 import com._1c.g5.v8.dt.moxel.Rect;
 import com._1c.g5.v8.dt.moxel.RectArea;
 import com._1c.g5.v8.dt.moxel.Row;
+import com._1c.g5.v8.dt.moxel.RowsArea;
 import com._1c.g5.v8.dt.moxel.SpreadsheetDocument;
 import com._1c.g5.v8.dt.moxel.content.FillType;
 import com._1c.g5.v8.dt.moxel.content.HorizontalAlignment;
@@ -650,6 +653,79 @@ public class SpreadsheetTemplateWriterTest
         Rect rect = ((RectArea)((NamedItemCells)item).getArea()).getPosition();
         assertEquals(0, rect.getX());
         assertEquals(2, rect.getWidth());
+    }
+
+    @Test
+    public void testNamedBandsUseNativeTypesAndColumnGroups()
+    {
+        SpreadsheetDocument doc = newDocument();
+        Columns defaultBand = MoxelFactory.eINSTANCE.createColumns();
+        defaultBand.setColumnsId(java.util.UUID.randomUUID());
+        doc.setColumns(defaultBand);
+        Columns specialBand = MoxelFactory.eINSTANCE.createColumns();
+        specialBand.setColumnsId(java.util.UUID.randomUUID());
+        doc.getAllColumns().add(specialBand);
+        Row first = MoxelFactory.eINSTANCE.createRow();
+        first.setColumns(specialBand);
+        doc.getRows().put(Integer.valueOf(3), first);
+
+        Result result = SpreadsheetTemplateWriter.apply(doc, json("""
+            {"areas":[{"name":"Header","type":"Rows","fromRow":3,"toRow":5},
+                      {"name":"Side","type":"Columns","fromCol":1,"toCol":4},
+                      {"name":"Block","type":"Rectangle","fromRow":1,"toRow":2,"fromCol":0,"toCol":2}]}
+            """)); //$NON-NLS-1$
+        assertFalse(result.hasError());
+        assertEquals(3, result.areas);
+        RowsArea header = (RowsArea)((NamedItemCells)doc.getNamedItems().get("Header")).getArea(); //$NON-NLS-1$
+        ColumnsArea side = (ColumnsArea)((NamedItemCells)doc.getNamedItems().get("Side")).getArea(); //$NON-NLS-1$
+        assertTrue(((NamedItemCells)doc.getNamedItems().get("Block")).getArea() instanceof RectArea); //$NON-NLS-1$
+
+        assertEquals(3, header.getBegin());
+        assertEquals(5, header.getEnd());
+        assertSame(specialBand, header.getColumns());
+        assertEquals(1, side.getBegin());
+        assertEquals(4, side.getEnd());
+        assertSame(defaultBand, side.getColumns());
+        assertEquals(6, doc.getHeight());
+        assertEquals(5, defaultBand.getSize());
+    }
+
+    @Test
+    public void testNamedBandsDoNotGrowTheUnusedAxis()
+    {
+        SpreadsheetDocument rows = newDocument();
+        assertFalse(SpreadsheetTemplateWriter.apply(rows,
+            json("{\"areas\":[{\"name\":\"R\",\"type\":\"Rows\",\"fromRow\":1,\"toRow\":2}]}")).hasError()); //$NON-NLS-1$
+        assertEquals(3, rows.getHeight());
+        assertEquals(0, rows.getColumns().getSize());
+
+        SpreadsheetDocument columns = newDocument();
+        int originalHeight = columns.getHeight();
+        assertFalse(SpreadsheetTemplateWriter.apply(columns,
+            json("{\"areas\":[{\"name\":\"C\",\"type\":\"Columns\",\"fromCol\":1,\"toCol\":2}]}")).hasError()); //$NON-NLS-1$
+        assertEquals(originalHeight, columns.getHeight());
+        assertEquals(3, columns.getColumns().getSize());
+    }
+
+    @Test
+    public void testInvalidNamedBandRefusesWholeWrite()
+    {
+        for (String entry : new String[] {
+            "{\"name\":\"R\",\"type\":\"Rows\",\"fromRow\":3,\"toRow\":1}",
+            "{\"name\":\"R\",\"type\":\"Rows\",\"fromRow\":0,\"toRow\":2,\"fromCol\":0}",
+            "{\"name\":\"C\",\"type\":\"Columns\",\"fromCol\":0}",
+            "{\"name\":\"C\",\"type\":\"Columns\",\"fromCol\":0,\"toCol\":2147483647}",
+            "{\"name\":\"R\",\"fromRow\":0,\"toRow\":2}",
+            "{\"name\":\"R\",\"type\":\"Triangle\",\"fromRow\":0,\"toRow\":2}" })
+        {
+            SpreadsheetDocument doc = newDocument();
+            Result result = SpreadsheetTemplateWriter.apply(doc, json(
+                "{\"cells\":[{\"row\":0,\"col\":0,\"text\":\"Not written\"}],\"areas\":[" + entry + "]}")); //$NON-NLS-1$ //$NON-NLS-2$
+            assertTrue(entry, result.hasError());
+            assertTrue(doc.getRows().isEmpty());
+            assertTrue(doc.getNamedItems().isEmpty());
+            assertTrue(doc.getFormats().isEmpty());
+        }
     }
 
     // ==================== column widths / row heights ====================

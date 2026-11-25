@@ -1395,7 +1395,8 @@ public class McpProtocolHandler
      * <p>
      * This and {@link #buildToolCallResourceResponse} are the single central point
      * where a tool's human-readable CONTENT TEXT is finalized into a tools/call
-     * result, so the absolute output-size guard is applied here (and only here).
+     * result, so the absolute output-size guard is always applied here. A tool
+     * may bound its own output to preserve rows or supply tool-specific advice.
      * The guard is a pure no-op below its budget, so sub-cap output is byte-for-byte
      * identical to before. It is deliberately NOT applied on the JSON
      * structuredContent path ({@link #buildToolCallJsonResponse}), where the textual
