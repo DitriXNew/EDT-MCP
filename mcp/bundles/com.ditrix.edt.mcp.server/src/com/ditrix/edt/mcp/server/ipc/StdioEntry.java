@@ -16,13 +16,6 @@ import java.util.HexFormat;
 /** Stable launcher entry. Keep this tiny ABI independent of the versioned runtime and Gson. */
 public final class StdioEntry
 {
-    // Bump the ABI for incompatible launcher/runtime changes, not for every plugin release.
-    private static final String ABI = "abi-1";
-    public static final String CURRENT_POINTER = "current-" + ABI;
-    public static final String PREVIOUS_POINTER = "previous-" + ABI;
-    public static final String RUNTIME_PREFIX = ABI + "-";
-    public static final String RUNTIME_NAME_PATTERN = RUNTIME_PREFIX + "[a-f0-9]{64}\\.jar";
-
     private StdioEntry() { }
     public static void main(String[] args)
     {
@@ -32,14 +25,14 @@ public final class StdioEntry
             // Both platforms use <private root>/bootstrap/<install hash>.
             for (Path path : new Path[]{directory, directory.getParent(), directory.getParent().getParent()})
             { PrivatePaths.verifyDirectory(path); }
-            Path pointer = directory.resolve(CURRENT_POINTER);
+            Path pointer = directory.resolve("current");
             PrivatePaths.verifyFile(pointer);
             String name = Files.readString(pointer, StandardCharsets.UTF_8).trim();
-            if (!name.matches(RUNTIME_NAME_PATTERN)) { throw new IOException("Invalid bootstrap runtime pointer"); }
+            if (!name.matches("[a-f0-9]{64}\\.jar")) { throw new IOException("Invalid bootstrap runtime pointer"); }
             Path runtime = directory.resolve(name);
             PrivatePaths.verifyFile(runtime);
             String hash = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(Files.readAllBytes(runtime)));
-            if (!hash.equals(name.substring(RUNTIME_PREFIX.length(), RUNTIME_PREFIX.length() + 64))) { throw new IOException("Bootstrap runtime SHA-256 does not match its file name"); }
+            if (!hash.equals(name.substring(0, 64))) { throw new IOException("Bootstrap runtime SHA-256 does not match its file name"); }
             try (URLClassLoader loader = new URLClassLoader(new java.net.URL[]{runtime.toUri().toURL()}, ClassLoader.getPlatformClassLoader()))
             {
                 Class.forName("com.ditrix.edt.mcp.server.ipc.StdioBootstrap", true, loader)

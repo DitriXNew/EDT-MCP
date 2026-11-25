@@ -24,7 +24,7 @@ public class StdioPluginSupportTest extends StdioTestSupport
     private static final byte[] CURRENT = "current runtime".getBytes(StandardCharsets.UTF_8);
 
     static String runtimeName(byte[] bytes) throws Exception
-    { return "abi-1-" + HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes)) + ".jar"; }
+    { return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes)) + ".jar"; }
 
     static void assertListing(Path directory, String... names) throws IOException
     {
@@ -37,17 +37,17 @@ public class StdioPluginSupportTest extends StdioTestSupport
         Path directory = PrivatePaths.directory(temporary.newFolder().toPath());
         PrivatePaths.atomicWrite(directory.resolve(runtimeName(OLD)), OLD);
         PrivatePaths.atomicWrite(directory.resolve(runtimeName(PREVIOUS)), PREVIOUS);
-        PrivatePaths.atomicWrite(directory.resolve("current-abi-1"), (runtimeName(PREVIOUS) + "\n").getBytes(StandardCharsets.UTF_8));
+        PrivatePaths.atomicWrite(directory.resolve("current"), (runtimeName(PREVIOUS) + "\n").getBytes(StandardCharsets.UTF_8));
         return directory;
     }
 
     private static Path extract(Path directory, byte[] runtime) throws IOException
     { return StdioPluginSupport.extractBootstrap(directory, runtime, ENTRY, Files::delete); }
 
-    @Test public void upgradingDoesNotExposeTheNewRuntimeToAPreloadedLegacyEntry() throws Exception
+    @Test public void upgradingPublishesTheNewRuntimeToAPreloadedLegacyEntry() throws Exception
     {
         Path directory = seeded();
-        String legacyName = runtimeName(PREVIOUS).substring("abi-1-".length());
+        String legacyName = runtimeName(PREVIOUS);
         PrivatePaths.atomicWrite(directory.resolve(legacyName), PREVIOUS);
         Files.writeString(directory.resolve("current"), legacyName + "\n");
         Files.writeString(directory.resolve("previous"), "");
@@ -56,13 +56,14 @@ public class StdioPluginSupportTest extends StdioTestSupport
         Files.writeString(directory.resolve("current-abi-2"), otherAbi + "\n");
 
         extract(directory, CURRENT);
-        assertEquals("A preloaded legacy entry still reads current", legacyName + "\n",
+        assertEquals("A preloaded legacy entry must discover the compatible update",
+            runtimeName(CURRENT) + "\n",
             Files.readString(directory.resolve("current")));
-        assertEquals("", Files.readString(directory.resolve("previous")));
+        assertEquals(legacyName + "\n", Files.readString(directory.resolve("previous")));
         assertArrayEquals(PREVIOUS, Files.readAllBytes(directory.resolve(legacyName)));
         assertEquals(otherAbi + "\n", Files.readString(directory.resolve("current-abi-2")));
         assertArrayEquals(PREVIOUS, Files.readAllBytes(directory.resolve(otherAbi)));
-        assertEquals(runtimeName(CURRENT) + "\n", Files.readString(directory.resolve("current-abi-1")));
+        assertEquals(runtimeName(CURRENT) + "\n", Files.readString(directory.resolve("current")));
     }
 
     @Test public void aLockedLegacyEntryKeepsItsRuntimeAndCanBeReplacedAfterClosing() throws Exception
@@ -71,7 +72,7 @@ public class StdioPluginSupportTest extends StdioTestSupport
         Path directory = PrivatePaths.directory(temporary.newFolder().toPath());
         Path entry = directory.resolve("edt-mcp-bootstrap.jar");
         PrivatePaths.atomicWrite(entry, OLD);
-        String name = runtimeName(PREVIOUS).substring("abi-1-".length());
+        String name = runtimeName(PREVIOUS);
         PrivatePaths.atomicWrite(directory.resolve(name), PREVIOUS);
         PrivatePaths.atomicWrite(directory.resolve("current"), (name + "\n").getBytes(StandardCharsets.UTF_8));
         var noDelete = (OpenOption)Class.forName("com.sun.nio.file.ExtendedOpenOption", true,
@@ -80,46 +81,63 @@ public class StdioPluginSupportTest extends StdioTestSupport
         {
             assertThrows(IOException.class, () -> extract(directory, CURRENT));
             assertArrayEquals(OLD, Files.readAllBytes(entry));
-            String published = Files.readString(directory.resolve("current-abi-1")).trim();
+            String published = Files.readString(directory.resolve("current")).trim();
             assertEquals(runtimeName(CURRENT), published);
             assertArrayEquals(CURRENT, Files.readAllBytes(directory.resolve(published)));
-            assertEquals(name + "\n", Files.readString(directory.resolve("current")));
+            assertEquals(name + "\n", Files.readString(directory.resolve("previous")));
             assertArrayEquals(PREVIOUS, Files.readAllBytes(directory.resolve(name)));
         }
         assertEquals(entry, extract(directory, CURRENT));
         assertArrayEquals(ENTRY, Files.readAllBytes(entry));
-        assertEquals(runtimeName(CURRENT) + "\n", Files.readString(directory.resolve("current-abi-1")));
-        assertEquals(name + "\n", Files.readString(directory.resolve("current")));
+        assertEquals(runtimeName(CURRENT) + "\n", Files.readString(directory.resolve("current")));
+        assertEquals(name + "\n", Files.readString(directory.resolve("previous")));
+    }
+
+    @Test public void deniedEntryReplacementStillPublishesAndCleansCompatibleRuntimes() throws Exception
+    {
+        Path directory = seeded();
+        Path entry = directory.resolve("edt-mcp-bootstrap.jar");
+        PrivatePaths.atomicWrite(entry, ENTRY);
+        var failure = assertThrows(AccessDeniedException.class, () ->
+            StdioPluginSupport.extractBootstrap(directory, CURRENT, OLD, Files::delete, (target, bytes) -> {
+                throw new AccessDeniedException(target.toString());
+            }));
+        assertEquals(entry.toString(), failure.getFile());
+        assertArrayEquals(ENTRY, Files.readAllBytes(entry));
+        assertEquals(runtimeName(CURRENT) + "\n", Files.readString(directory.resolve("current")));
+        assertEquals(runtimeName(PREVIOUS) + "\n", Files.readString(directory.resolve("previous")));
+        assertFalse("Cleanup must run even when entry replacement fails",
+            Files.exists(directory.resolve(runtimeName(OLD))));
     }
 
     @Test public void removesOldRuntimeAfterPublishingCurrent() throws Exception
     {
         Path directory = seeded();
         assertEquals(directory.resolve("edt-mcp-bootstrap.jar"), extract(directory, CURRENT));
-        assertListing(directory, "current-abi-1", "previous-abi-1", "extract.lock", "edt-mcp-bootstrap.jar",
+        assertListing(directory, "current", "previous", "extract.lock", "edt-mcp-bootstrap.jar",
             runtimeName(PREVIOUS), runtimeName(CURRENT));
     }
 
     @Test public void currentRuntimeAndEntryStayByteIdentical() throws Exception
     {
         Path directory = seeded(); extract(directory, CURRENT);
-        assertEquals(runtimeName(CURRENT) + "\n", Files.readString(directory.resolve("current-abi-1")));
+        assertEquals(runtimeName(CURRENT) + "\n", Files.readString(directory.resolve("current")));
         assertArrayEquals(CURRENT, Files.readAllBytes(directory.resolve(runtimeName(CURRENT))));
         assertArrayEquals(ENTRY, Files.readAllBytes(directory.resolve("edt-mcp-bootstrap.jar")));
-        assertListing(directory, "current-abi-1", "previous-abi-1", "extract.lock", "edt-mcp-bootstrap.jar",
+        assertListing(directory, "current", "previous", "extract.lock", "edt-mcp-bootstrap.jar",
             runtimeName(PREVIOUS), runtimeName(CURRENT));
     }
 
     @Test public void leavesEveryNonmatchingNameAlone() throws Exception
     {
         Path directory = seeded();
-        var other = List.of("notes.jar", "a".repeat(63) + ".jar", "a".repeat(65) + ".jar",
+        var other = List.of("abi-2-" + "a".repeat(64) + ".jar", "notes.jar", "a".repeat(63) + ".jar", "a".repeat(65) + ".jar",
             "A".repeat(64) + ".jar", "g".repeat(64) + ".jar", "b".repeat(64) + ".JAR",
             "a".repeat(64) + ".jar.bak");
         for (String name : other) { PrivatePaths.atomicWrite(directory.resolve(name), OLD); }
         extract(directory, CURRENT);
         var expected = new ArrayList<>(other);
-        expected.addAll(List.of("current-abi-1", "previous-abi-1", "extract.lock", "edt-mcp-bootstrap.jar",
+        expected.addAll(List.of("current", "previous", "extract.lock", "edt-mcp-bootstrap.jar",
             runtimeName(PREVIOUS), runtimeName(CURRENT)));
         assertListing(directory, expected.toArray(String[]::new));
     }
@@ -127,8 +145,8 @@ public class StdioPluginSupportTest extends StdioTestSupport
     private void assertDeleteFailureIsIsolated(boolean accessDenied) throws Exception
     {
         Path directory = seeded();
-        PrivatePaths.atomicWrite(directory.resolve("abi-1-" + "a".repeat(64) + ".jar"), OLD);
-        PrivatePaths.atomicWrite(directory.resolve("abi-1-" + "b".repeat(64) + ".jar"), OLD);
+        PrivatePaths.atomicWrite(directory.resolve("a".repeat(64) + ".jar"), OLD);
+        PrivatePaths.atomicWrite(directory.resolve("b".repeat(64) + ".jar"), OLD);
         var failed = new AtomicReference<Path>(); var attempted = new ArrayList<Path>();
         String current = runtimeName(CURRENT) + "\n";
         var statuses = new ArrayList<IStatus>();
@@ -141,7 +159,7 @@ public class StdioPluginSupportTest extends StdioTestSupport
         {
             assertEquals(directory.resolve("edt-mcp-bootstrap.jar"),
                 StdioPluginSupport.extractBootstrap(directory, CURRENT, ENTRY, path -> {
-                    assertEquals(current, Files.readString(directory.resolve("current-abi-1")));
+                    assertEquals(current, Files.readString(directory.resolve("current")));
                     attempted.add(path);
                     if (failed.compareAndSet(null, path))
                     {
@@ -151,9 +169,9 @@ public class StdioPluginSupportTest extends StdioTestSupport
                     Files.delete(path);
                 }));
             assertEquals("Both remaining stale jars must be tried after the first failure", 3, attempted.size());
-            assertListing(directory, "current-abi-1", "previous-abi-1", "extract.lock", "edt-mcp-bootstrap.jar",
+            assertListing(directory, "current", "previous", "extract.lock", "edt-mcp-bootstrap.jar",
                 runtimeName(PREVIOUS), runtimeName(CURRENT), failed.get().getFileName().toString());
-            assertEquals(runtimeName(CURRENT) + "\n", Files.readString(directory.resolve("current-abi-1")));
+            assertEquals(runtimeName(CURRENT) + "\n", Files.readString(directory.resolve("current")));
             assertEquals(1, statuses.size());
             assertEquals(IStatus.INFO, statuses.get(0).getSeverity());
             assertTrue(statuses.get(0).getMessage(), statuses.get(0).getMessage().startsWith("[DEBUG] "));
@@ -177,45 +195,45 @@ public class StdioPluginSupportTest extends StdioTestSupport
         try (var handle = Files.newByteChannel(directory.resolve(runtimeName(OLD)), Set.of(StandardOpenOption.READ, option)))
         {
             extract(directory, CURRENT);
-            assertListing(directory, "current-abi-1", "previous-abi-1", "extract.lock", "edt-mcp-bootstrap.jar",
+            assertListing(directory, "current", "previous", "extract.lock", "edt-mcp-bootstrap.jar",
                 runtimeName(OLD), runtimeName(PREVIOUS), runtimeName(CURRENT));
         }
         extract(directory, CURRENT);
-        assertListing(directory, "current-abi-1", "previous-abi-1", "extract.lock", "edt-mcp-bootstrap.jar",
+        assertListing(directory, "current", "previous", "extract.lock", "edt-mcp-bootstrap.jar",
             runtimeName(PREVIOUS), runtimeName(CURRENT));
     }
 
     @Test public void repeatedExtractionKeepsTheImmediatePredecessorUntilTheNextGeneration() throws Exception
     {
         Path directory = seeded(); extract(directory, CURRENT); extract(directory, CURRENT);
-        assertEquals(runtimeName(PREVIOUS) + "\n", Files.readString(directory.resolve("previous-abi-1")));
-        assertListing(directory, "current-abi-1", "previous-abi-1", "extract.lock", "edt-mcp-bootstrap.jar",
+        assertEquals(runtimeName(PREVIOUS) + "\n", Files.readString(directory.resolve("previous")));
+        assertListing(directory, "current", "previous", "extract.lock", "edt-mcp-bootstrap.jar",
             runtimeName(PREVIOUS), runtimeName(CURRENT));
         extract(directory, OLD);
-        assertEquals(runtimeName(CURRENT) + "\n", Files.readString(directory.resolve("previous-abi-1")));
-        assertListing(directory, "current-abi-1", "previous-abi-1", "extract.lock", "edt-mcp-bootstrap.jar",
+        assertEquals(runtimeName(CURRENT) + "\n", Files.readString(directory.resolve("previous")));
+        assertListing(directory, "current", "previous", "extract.lock", "edt-mcp-bootstrap.jar",
             runtimeName(OLD), runtimeName(CURRENT));
     }
 
     @Test public void matchingDirectoryIsRefusedWithoutStoppingCleanup() throws Exception
     {
-        Path directory = seeded(); String name = "abi-1-" + "a".repeat(64) + ".jar";
+        Path directory = seeded(); String name = "a".repeat(64) + ".jar";
         PrivatePaths.directory(directory.resolve(name)); extract(directory, CURRENT);
-        assertListing(directory, "current-abi-1", "previous-abi-1", "extract.lock", "edt-mcp-bootstrap.jar",
+        assertListing(directory, "current", "previous", "extract.lock", "edt-mcp-bootstrap.jar",
             runtimeName(PREVIOUS), runtimeName(CURRENT), name);
     }
 
     @Test public void matchingLinkIsRefusedWithoutTouchingItsTarget() throws Exception
     {
         Path directory = seeded(); Path target = temporary.newFile().toPath(); Files.write(target, OLD);
-        String name = "abi-1-" + "a".repeat(64) + ".jar"; Path link = directory.resolve(name);
+        String name = "a".repeat(64) + ".jar"; Path link = directory.resolve(name);
         try { Files.createSymbolicLink(link, target); }
         catch (IOException | UnsupportedOperationException e) { Assume.assumeNoException(e); }
         try
         {
             extract(directory, CURRENT);
             assertArrayEquals(OLD, Files.readAllBytes(target));
-            assertListing(directory, "current-abi-1", "previous-abi-1", "extract.lock", "edt-mcp-bootstrap.jar",
+            assertListing(directory, "current", "previous", "extract.lock", "edt-mcp-bootstrap.jar",
                 runtimeName(PREVIOUS), runtimeName(CURRENT), name);
         }
         finally { Files.deleteIfExists(link); }

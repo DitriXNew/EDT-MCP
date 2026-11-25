@@ -19,14 +19,15 @@ import org.eclipse.osgi.service.datalocation.Location;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.ipc.EndpointRegistry;
 import com.ditrix.edt.mcp.server.ipc.PrivatePaths;
-import com.ditrix.edt.mcp.server.ipc.StdioEntry;
-
 
 /** Plugin lifecycle adapter and read-only client configuration export. */
 public final class StdioPluginSupport
 {
     /** The running listener; replaced only under the class lock, read lock-free by {@link #isIpcRunning}. */
     private static final AtomicReference<IpcListener> LISTENER = new AtomicReference<>();
+    // ABI 1 is the original current/previous/<sha256>.jar layout. Keep the entry unchanged
+    // until an incompatible runtime contract requires a new ABI namespace.
+    private static final String RUNTIME_NAME_PATTERN = "[a-f0-9]{64}\\.jar";
     private StdioPluginSupport() { }
 
     public static synchronized void start()
@@ -69,7 +70,14 @@ public final class StdioPluginSupport
     @FunctionalInterface
     interface RuntimeDelete { void delete(Path runtime) throws IOException; }
 
+    @FunctionalInterface
+    interface EntryWrite { void write(Path destination, byte[] entry) throws IOException; }
+
     static Path extractBootstrap(Path directory, byte[] runtime, byte[] entry, RuntimeDelete delete) throws IOException
+    { return extractBootstrap(directory, runtime, entry, delete, StdioPluginSupport::writeJar); }
+
+    static Path extractBootstrap(Path directory, byte[] runtime, byte[] entry, RuntimeDelete delete,
+        EntryWrite writeEntry) throws IOException
     {
         Path destination = directory.resolve("edt-mcp-bootstrap.jar");
         try (var channel = PrivatePaths.lockFile(directory.resolve("extract.lock"));
@@ -78,19 +86,19 @@ public final class StdioPluginSupport
             String hash;
             try { hash = java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(runtime)); }
             catch (java.security.NoSuchAlgorithmException e) { throw new IllegalStateException(e); }
-            String current = StdioEntry.RUNTIME_PREFIX + hash + ".jar";
-            Path currentPointer = directory.resolve(StdioEntry.CURRENT_POINTER);
-            Path previousPointer = directory.resolve(StdioEntry.PREVIOUS_POINTER);
+            String current = hash + ".jar";
+            Path currentPointer = directory.resolve("current");
+            Path previousPointer = directory.resolve("previous");
             String previous = runtimePointer(currentPointer);
             // Re-extracting the same build must not discard the preceding generation.
             if (current.equals(previous)) { previous = runtimePointer(previousPointer); }
             writeJar(directory.resolve(current), runtime);
             EndpointRegistry.atomicWrite(previousPointer, previous == null ? "" : previous + "\n");
             EndpointRegistry.atomicWrite(currentPointer, current + "\n");
-            // Publish this ABI before making its entry visible. An older entry still uses
-            // its own pointer, even if it has already loaded or Windows denies replacement.
-            writeJar(destination, entry);
-            cleanupRuntimes(directory, current, previous, delete);
+            // Publish compatible runtime updates before touching the stable entry. A preloaded
+            // or locked ABI 1 entry must continue to discover the new runtime through current.
+            try { writeEntry.write(destination, entry); }
+            finally { cleanupRuntimes(directory, current, previous, delete); }
             return destination;
         }
     }
@@ -100,7 +108,7 @@ public final class StdioPluginSupport
         if (!Files.exists(pointer, java.nio.file.LinkOption.NOFOLLOW_LINKS)) { return null; }
         PrivatePaths.verifyFile(pointer);
         String name = Files.readString(pointer).trim();
-        return name.matches(StdioEntry.RUNTIME_NAME_PATTERN) ? name : null;
+        return name.matches(RUNTIME_NAME_PATTERN) ? name : null;
     }
 
     private static void cleanupRuntimes(Path directory, String current, String previous, RuntimeDelete delete)
@@ -113,7 +121,7 @@ public final class StdioPluginSupport
                 for (Path file : files)
                 {
                     String name = file.getFileName().toString();
-                    if (!name.matches(StdioEntry.RUNTIME_NAME_PATTERN) || name.equals(current) || name.equals(previous)) { continue; }
+                    if (!name.matches(RUNTIME_NAME_PATTERN) || name.equals(current) || name.equals(previous)) { continue; }
                     try { PrivatePaths.verifyFile(file); delete.delete(file); }
                     catch (IOException e)
                     { Log.debug("Cannot remove obsolete stdio runtime " + name + " (" + e.getClass().getSimpleName() + ")"); }
@@ -144,7 +152,7 @@ public final class StdioPluginSupport
             PrivatePaths.atomicWrite(destination, bytes);
         }
         catch (java.nio.file.AccessDeniedException e)
-        { throw new IOException("Close stdio clients, then retry with Copy stdio .mcp.json in Window > Preferences > MCP Server > General.", e); }
+        { throw new IOException("Close stdio clients, then restart EDT for this installation and workspace to retry bootstrap extraction (GUI or headless).", e); }
     }
 
     /** The real path of an Eclipse location; the URL may be raw (see {@link FileUrls}). */
