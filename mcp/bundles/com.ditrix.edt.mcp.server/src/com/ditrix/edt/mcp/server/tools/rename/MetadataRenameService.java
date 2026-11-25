@@ -482,6 +482,8 @@ public class MetadataRenameService
         }
         catch (RuntimeException e)
         {
+            // A preview stopped mid-pass can leave EDT's refactoring half-initialized; that is a stop, not an error.
+            rethrowIfCanceled();
             Activator.logError("Could not prepare rename refactoring for " + objectFqn, e); //$NON-NLS-1$
             return ToolResult.error("Could not prepare rename of '" + objectFqn + "' in project '" //$NON-NLS-1$ //$NON-NLS-2$
                 + project.getName() + "'. Nothing was renamed; no cascade started. Use list_projects " //$NON-NLS-1$
