@@ -323,8 +323,15 @@ public class TemplateContentTool extends AbstractMetadataWriteTool
         SpreadsheetTemplateWriter.Result result;
         try
         {
+            // An extension can have no local Language objects yet. Resolve the project and base
+            // language snapshot before acquiring the template's write lock.
+            List<String> languageCodes = containsSpreadsheetText(templateSpec)
+                ? TemplateContentSupport.spreadsheetLanguageCodes(Activator.getDefault().getV8ProjectManager(),
+                    ctx.project)
+                : List.of();
             result = BmTransactions.write(writeCtx.bmModel, "ModifyTemplateContent", //$NON-NLS-1$
-                (tx, pm) -> applyTemplateSpec(ctx, tx, writeCtx, normFqn, templateSpec, contentFqnHolder));
+                (tx, pm) -> applyTemplateSpec(ctx, tx, writeCtx, normFqn, templateSpec, contentFqnHolder,
+                    languageCodes));
         }
         catch (TemplateWriteException e)
         {
@@ -352,6 +359,25 @@ public class TemplateContentTool extends AbstractMetadataWriteTool
         }
         boolean persisted = BmTransactions.forceExportToDisk(ctx.project, exportFqns);
         return buildTemplateResult(normFqn, result, persisted);
+    }
+
+    /** Parameter-only and formatting-only edits do not need to consult project languages. */
+    private static boolean containsSpreadsheetText(JsonObject spec)
+    {
+        JsonElement cells = spec.get("cells"); //$NON-NLS-1$
+        if (cells != null && cells.isJsonArray())
+        {
+            for (JsonElement cell : cells.getAsJsonArray())
+            {
+                JsonElement text = cell.isJsonObject() ? cell.getAsJsonObject().get("text") : null; //$NON-NLS-1$
+                if (text != null && text.isJsonPrimitive()
+                    && text.getAsJsonPrimitive().isString() && !text.getAsString().isEmpty())
+                {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     /** Write file-backed text inside a BM boundary with rollback for the file write. */
@@ -546,7 +572,7 @@ public class TemplateContentTool extends AbstractMetadataWriteTool
      */
     private SpreadsheetTemplateWriter.Result applyTemplateSpec(ProjectContext ctx, IBmTransaction tx,
         TemplateWriteContext writeCtx, String normFqn, JsonObject templateSpec,
-        String[] contentFqnHolder)
+        String[] contentFqnHolder, List<String> languageCodes)
     {
         Object inTx = tx.getObjectById(writeCtx.templateBmId);
         if (!(inTx instanceof BasicTemplate))
@@ -576,7 +602,8 @@ public class TemplateContentTool extends AbstractMetadataWriteTool
         // reference to it); an external-objects project offers platform colours only.
         SpreadsheetTemplateWriter.Result applied = SpreadsheetTemplateWriter.apply(doc, templateSpec,
             writeCtx.projectVersion, SpreadsheetTemplateWriter.projectColors(writeCtx.externalObjects ? null
-                : () -> (Configuration)tx.getTopObjectByFqn("Configuration"), writeCtx.projectVersion)); //$NON-NLS-1$
+                : () -> (Configuration)tx.getTopObjectByFqn("Configuration"), writeCtx.projectVersion), //$NON-NLS-1$
+            languageCodes);
         if (applied.hasError())
         {
             // Roll the whole write back so a validation failure leaves nothing on disk.

@@ -85,6 +85,10 @@ FQN cannot resolve, and the failure row says which project kind holds that type.
 ## Vendor support
 For an object that a configuration on vendor support locks, the output carries one line: `**Vendor support:** not editable, not deletable` (or `editable, not deletable` when only a delete is locked), with `(the configuration itself is locked)` when the whole configuration is. No line means the object may be changed. The writing tools refuse a change EDT's support settings do not allow.
 
+## Owned templates
+
+Read an owner's FQN with `full: true` to see its `### Templates` table (name, localized synonym, declared template type, and FQN). The list contains the templates of that owner only and does not load their contents. For an object-owned spreadsheet, pass its FQN (e.g. `Catalog.Products.Template.Invoice`) to `get_template_screenshot` as `templatePath`. Pass the FQN of the template you want to edit to `modify_metadata` as `fqn`. The screenshot tool supports only spreadsheet templates in configuration projects; a template's FQN alone does not imply screenshot support.
+
 ## Text templates
 
 A TextDocument template FQN (`CommonTemplate.Name` or `<Type>.<Owner>.Template.Name`) returns a `## Text template` section with the exact text in a fenced block and a `contentHash` from the same helper as `write_module_source`. Pass that hash as `template_content.template.expectedHash`. Long text is bounded using the standard `[OUTPUT TRUNCATED]` notice; the hash always covers the full text, including the part omitted from the response. Request a single template FQN to keep its section within the overall response budget. This read does not write the model or the file.

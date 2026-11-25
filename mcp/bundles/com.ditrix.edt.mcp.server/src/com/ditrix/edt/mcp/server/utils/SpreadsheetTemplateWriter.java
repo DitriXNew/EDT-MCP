@@ -9,9 +9,11 @@ package com.ditrix.edt.mcp.server.utils;
 import java.util.Locale;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.TreeSet;
 import java.util.function.Supplier;
 
@@ -394,6 +396,23 @@ public final class SpreadsheetTemplateWriter
     public static Result apply(SpreadsheetDocument document, JsonObject spec, Version projectVersion,
         ColorBuilder colors)
     {
+        return apply(document, spec, projectVersion, colors, List.of());
+    }
+
+    /**
+     * Applies the spec with the project's effective language codes (default first). If not available,
+     * use the spreadsheet's own recorded language settings and retain the neutral fallback.
+     *
+     * @param document spreadsheet to edit inside the caller's write boundary
+     * @param spec template payload
+     * @param projectVersion project's runtime version
+     * @param colors cell colour resolver
+     * @param languageCodes project language codes (may be empty)
+     * @return changes applied, or the validation error
+     */
+    public static Result apply(SpreadsheetDocument document, JsonObject spec, Version projectVersion,
+        ColorBuilder colors, List<String> languageCodes)
+    {
         if (document == null)
         {
             return Result.failed(ToolResult.error(
@@ -444,9 +463,10 @@ public final class SpreadsheetTemplateWriter
             document.getNamedItems().put(rename[1], item);
         }
 
+        TextLanguages textLanguages = textLanguages(document, languageCodes);
         for (CellPlan cell : plan.cells)
         {
-            applyCell(document, cell);
+            applyCell(document, cell, textLanguages);
         }
         for (MergePlan merge : plan.merges)
         {
@@ -478,7 +498,7 @@ public final class SpreadsheetTemplateWriter
      * fill. A parameter cell is marked with {@link FillType#PARAMETER} on its format (what makes EDT
      * substitute the parameter instead of rendering empty text).
      */
-    private static void applyCell(SpreadsheetDocument document, CellPlan plan)
+    private static void applyCell(SpreadsheetDocument document, CellPlan plan, TextLanguages textLanguages)
     {
         Row row = getOrCreateRow(document, plan.row);
         boolean mergeExisting = !plan.replace && row.getCells().containsKey(Integer.valueOf(plan.col));
@@ -491,15 +511,40 @@ public final class SpreadsheetTemplateWriter
             cell.setFormatIndex(0);
         }
 
-        applyCellContent(cell, plan);
+        applyCellContent(cell, plan, textLanguages);
         applyCellFormat(document, cell, plan, mergeExisting);
     }
 
+    private record TextLanguages(Set<String> codes, String active) { }
+
+    private static TextLanguages textLanguages(SpreadsheetDocument document, List<String> projectCodes)
+    {
+        var settings = document.getLanguageSettings();
+        Set<String> codes = new LinkedHashSet<>();
+        projectCodes.forEach(code -> addTextLanguage(codes, code));
+        if (codes.isEmpty() && settings != null)
+        {
+            addTextLanguage(codes, settings.getDefaultLanguage());
+            settings.getLanguages().forEach(language -> addTextLanguage(codes, language.getLanguageId()));
+            addTextLanguage(codes, settings.getCurrentLanguage());
+        }
+        String current = settings == null ? null : settings.getCurrentLanguage();
+        return new TextLanguages(codes,
+            codes.contains(current) ? current : codes.isEmpty() ? null : codes.iterator().next());
+    }
+
+    private static void addTextLanguage(Set<String> codes, String code)
+    {
+        if (code != null && !code.isBlank() && !NEUTRAL_LANGUAGE_KEY.equals(code))
+        {
+            codes.add(code);
+        }
+    }
+
     /**
-     * Sets the cell's content: its report parameter name, or its literal text as a {@link LocalString}
-     * keyed by the neutral language code. Empty strings clear the named content; omitted keys keep it.
+     * Sets the parameter or literal text. Empty strings clear the named content; omitted keys keep it.
      */
-    private static void applyCellContent(Cell cell, CellPlan plan)
+    private static void applyCellContent(Cell cell, CellPlan plan, TextLanguages languages)
     {
         if (plan.parameterPresent)
         {
@@ -514,12 +559,34 @@ public final class SpreadsheetTemplateWriter
             LocalString text = null;
             if (plan.text != null)
             {
-                text = ContentFactory.eINSTANCE.createLocalString();
-                text.getContent().put(NEUTRAL_LANGUAGE_KEY, plan.text);
+                text = localizedText(cell.getText(), plan.text, languages);
                 cell.setParameter(null);
             }
             cell.setText(text);
         }
+    }
+
+    /**
+     * EDT can display '#'-only text but 1C needs the session's concrete language key. Fill absent
+     * languages and update previous scalar copies (matching the old neutral text). On a patch keep
+     * distinct translations outside the active language; replace has already cleared the old text.
+     */
+    private static LocalString localizedText(LocalString text, String value, TextLanguages languages)
+    {
+        LocalString result = text == null ? ContentFactory.eINSTANCE.createLocalString() : text;
+        var content = result.getContent();
+        String previous = content.get(NEUTRAL_LANGUAGE_KEY);
+        content.put(NEUTRAL_LANGUAGE_KEY, value);
+        for (String code : languages.codes)
+        {
+            String translation = content.get(code);
+            if (code.equals(languages.active) || translation == null || translation.isEmpty()
+                || translation.equals(previous))
+            {
+                content.put(code, value);
+            }
+        }
+        return result;
     }
 
     /**
@@ -541,7 +608,8 @@ public final class SpreadsheetTemplateWriter
         {
             fillType = FillType.PARAMETER;
         }
-        else if (plan.text != null || (plan.parameterPresent && format.getFillType() == FillType.PARAMETER))
+        else if (plan.text != null && format.getFillType() != FillType.TEMPLATE
+            || (plan.parameterPresent && format.getFillType() == FillType.PARAMETER))
         {
             fillType = FillType.TEXT;
         }

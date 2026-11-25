@@ -10,7 +10,9 @@ First create a **SpreadsheetDocument** (the default template type) with `create_
 
 The `template` object takes any of these arrays (all optional; an omitted array leaves that aspect untouched; indices are 0-based, ranges inclusive):
 - `cells` - `[{row, col, replace?, text?, parameter?, bold?, fontSize?, hAlign?, vAlign?, wrap?, textOrientation?, autoIndent?, autoMarkIncomplete?, borders?, borderColor?, backColor?, textColor?}]`; `row`, `col` required:
-  - `text` - static text; `parameter` - a print-time PARAMETER name filled by BSL (`ОбластьМакета.Параметры.<Name>`). A cell holds one of them.
+  - `text` - static text (or the text of an existing mixed template cell; a patch keeps its fill kind). The neutral value and the project's language-code values are stored so both EDT and 1C can display the text. For extensions this includes base languages.
+  - A text patch updates the active sheet language (or the project default), fills missing languages and refreshes copies of the previous neutral value; other translations are kept. `replace:true` resets them.
+  - `parameter` - a print-time PARAMETER name filled by BSL (`ОбластьМакета.Параметры.<Name>`). A cell holds text or a parameter, not both.
   - `bold` (`false` disables), `fontSize` (points, positive), `hAlign` `Left` / `Center` / `Right` / `Auto` / `Width`, `vAlign` `Top` / `Center` / `Bottom`.
   - `wrap` - `true` word-wraps; `false` unsets placement (inherits); also `Auto` / `Cut` / `Block` / `Wrap`.
   - `textOrientation` - rotation in **tenths of a degree**, `0..3600`, unscaled (`900` = 90 degrees; EDT's editor shows degrees). `autoIndent` `0..100` (greyed out while rotated). `autoMarkIncomplete` - `true` marks the cell incomplete while empty.

@@ -351,6 +351,10 @@ public class UniversalMetadataFormatter extends AbstractMetadataFormatter
         {
             formatExchangePlanContentCollection(sb, collectionName, collection);
         }
+        else if (full && firstItem instanceof BasicTemplate)
+        {
+            formatTemplatesCollection(sb, collectionName, collection, language);
+        }
         else if (firstItem instanceof MdObject)
         {
             formatMdObjectCollection(sb, collectionName, collection, full, language);
@@ -900,6 +904,24 @@ public class UniversalMetadataFormatter extends AbstractMetadataFormatter
         return groupObj.toString();
     }
     
+    /**
+     * List the owner's template metadata without opening or materializing the template document.
+     * In full mode callers get the canonical member address, not a name they must reconstruct.
+     */
+    private void formatTemplatesCollection(StringBuilder sb, String name, Collection<?> items, String language)
+    {
+        addSectionHeader(sb, name);
+        startTable(sb, "Name", SYNONYM_TOKEN, "Type", "FQN"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        for (Object item : items)
+        {
+            if (item instanceof BasicTemplate template)
+            {
+                addTableRow(sb, template.getName(), getSynonym(template.getSynonym(), language),
+                    getTypeFromMdObject(template), MetadataNodeResolver.addressOf(template));
+            }
+        }
+    }
+
     /**
      * Format a collection of MdObjects (attributes, tabular sections, dimensions, etc.)
      */
