@@ -22,6 +22,23 @@ public class EndpointRegistryTest extends StdioTestSupport
     private static final UserPrincipal OTHER_ACCOUNT = () -> "another-ordinary-user";
     private static final Set<UserPrincipal> PRIVILEGED = Set.of(ADMINISTRATORS, SYSTEM);
 
+    @Test public void deniedRecordAttributesAreUnknownRatherThanAbsent() throws Exception
+    {
+        Assume.assumeFalse(System.getProperty("os.name").startsWith("Windows"));
+        var registry = registry();
+        Assume.assumeTrue(PrivatePaths.posix(registry.directory()));
+        registry.publish(endpoint(registry, "denied", ProcessHandle.current().pid()));
+        var directory = registry.directory();
+        var original = Files.getPosixFilePermissions(directory);
+        try {
+            Files.setPosixFilePermissions(directory, PosixFilePermissions.fromString("rw-------"));
+            Assume.assumeFalse("privileged users can still search the directory",
+                Files.exists(registry.recordPath(), LinkOption.NOFOLLOW_LINKS));
+            assertThrows(IOException.class, registry::read);
+        }
+        finally { Files.setPosixFilePermissions(directory, original); }
+    }
+
     @Test public void ownershipAcceptsTheCurrentAccount()
     {
         assertTrue(PrivatePaths.isTrustedOwner(ACCOUNT, ACCOUNT, Set.of()));
@@ -225,6 +242,26 @@ public class EndpointRegistryTest extends StdioTestSupport
         var entries = new ArrayList<>(acl.getAcl());
         entries.add(grant(windowsAccounts().get("everyone"), Set.of(AclEntryPermission.READ_DATA), false)); acl.setAcl(entries);
         assertThrows(IOException.class, registry::read);
+    }
+
+    @Test public void anUndeterminableRecordThrowsRatherThanReportingNoHost() throws Exception
+    {
+        // The record path exists without following it, but its target does not: the state cannot be
+        // determined, and answering null would tell a caller "no host" when a host may be running.
+        var registry = registry();
+        Path record = registry.recordPath();
+        Path missing = registry.directory().resolve("missing-record");
+        try { Files.createSymbolicLink(record, missing); }
+        catch (IOException | UnsupportedOperationException e) { Assume.assumeNoException(e); }
+        IOException failure = assertThrows(IOException.class, registry::read);
+        assertFalse("A record that cannot be read is not an absent record",
+            failure.getMessage() == null || failure.getMessage().isBlank());
+    }
+
+    @Test public void anAbsentRecordStillReadsAsNoHost() throws Exception
+    {
+        // The other half of the same rule: nothing there really is nothing there.
+        assertNull(registry().read());
     }
 
     @Test public void malformedRecordNeverExposesItsContentsThroughAnException() throws Exception

@@ -45,6 +45,32 @@ Headless database updates use core synchronization callbacks: confirmed restruct
 
 The stdio drivers share 22 windowed response pins through `tests/e2e/read_host_contracts.py`. With the base and extension fixtures imported, 18 responses match byte for byte. The differences are `symbol-Calc` and `symbol-Вычисление` (EMF summaries, pinned in `stdio-read-headless.json`) and `source-full-Calc` and `source-range-Calc` (the optional interception footer). The Linux driver also checks real content from additional reads and confirmed English/Cyrillic writes by reading the exported files before another MCP call can repair them. Filesystem-wide module listing checks paths separately because traversal order is unspecified.
 
+## Stopping the host on request
+
+An idle timeout is not a control channel: a wrapper that has to release a workspace cannot wait 30 minutes, and killing the JVM leaves the workspace lock held and the model unsaved. A client can therefore ask for the same clean close the idle timer performs, with `notifications/host_shutdown` - a plugin extension to MCP, not a protocol method.
+
+An initialized IPC client can send this notification without an `id`. The host answers immediately with `notifications/host_shutdown_accepted` when it will shut down, or `notifications/host_shutdown_refused` when it will not, and only then begins closing: the decision must reach the client before the teardown it describes. An `id` on the method gets a JSON-RPC error rather than being left unanswered, because the method is a notification.
+
+After `accepted` the host stops admitting new operations and waits for active tools and tracked background jobs to finish before closing the project contexts, saving the workspace and releasing its lock. Work that a *running* operation schedules for itself - the follow-up a tool posts after its own commit - is still admitted, or the operation would be left half-done. When cleanup ends, the host sends `notifications/host_shutdown_complete` with `params.success` to the requesting connection and then closes the transport. Repeated requests do not start another shutdown, and each is answered as accepted while the first one owns the completion.
+
+Only the headless application arms the channel. The windowed IDE leaves it empty and answers `refused` - a client must never be able to close the user's IDE, and `refused` is a distinct answer precisely so that a wrapper never kills a host that answered it. The channel requires a live connection, so a client that has already disconnected cannot ask for anything; a wrapper may reserve a bounded kill only for a headless process it independently verified that it owns. Neither the endpoint record nor exit code 1 proves the host kind.
+
+The sender is `com.ditrix.edt.mcp.server.ipc.HostShutdownClient` on the shipped runtime jar - the bootstrap already owns the framing and the handshake secret, so a shell script does not implement the protocol:
+
+```text
+java -cp <runtime jar named by the ABI-1 current pointer> \
+     com.ditrix.edt.mcp.server.ipc.HostShutdownClient -data <workspace> [-timeout <seconds>]
+```
+
+The CLI treats the answer and the exit as two separate budgets: the decision arrives immediately, and the wait for the process exit then has the full `-timeout`. The exit codes are distinct on purpose:
+
+- **`0`** - workspace cleanup was confirmed successful and the host process exited. On Linux, an exited process awaiting collection by its parent is also considered exited.
+- **`1`** - accepted, but the process did not exit within the budget, or the state could not be determined. A failed full save also leaves the cleanup unconfirmed. A bounded force-kill requires independently verified ownership of a headless process; code 1 alone never authorizes it.
+- **`2`** - nothing to stop: no live host is registered for the workspace.
+- **`3`** - the host answered `refused`. It is still running deliberately, so a wrapper must **not** kill it.
+
+Released hosts that do not implement the notification ignore it and return code 1 after the decision timeout, never `refused`. Slot exhaustion and rejected initialization can also return code 1 before any shutdown request. `-timeout` must be positive; zero is rejected before connecting. `-install` is accepted and ignored. Full workspace save counts as successful only when Eclipse reports OK. A warning, any other non-OK status, or an exception is logged and leaves shutdown unconfirmed, even if the process exits.
+
 A headless host exits cleanly after 30 minutes with no connected client and no running MCP tool or tracked background job, stopping project contexts and saving the workspace. Set the host JVM property `-Dedt.mcp.headlessIdleMinutes=<minutes>` to change the interval; `0` disables it. The timer restarts when the last client and last tool finish. A disconnected client's tool retains its lease until the operation actually finishes, even if its response waiter has detached. Windowed EDT continues to stay open until the user closes it.
 
 The owner's ERP measurements motivate this option: about 1.3 GB less RAM and 38% less CPU. The measured opening difference was only 2–3 seconds; this mode does not promise faster opening.

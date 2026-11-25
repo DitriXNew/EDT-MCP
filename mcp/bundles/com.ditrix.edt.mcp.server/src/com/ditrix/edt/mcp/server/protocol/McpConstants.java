@@ -103,6 +103,30 @@ public final class McpConstants
     
     /** Initialized notification */
     public static final String METHOD_INITIALIZED = "notifications/initialized"; //$NON-NLS-1$
+
+    /**
+     * Client-requested host shutdown. A plugin extension to MCP, not a protocol method: it is
+     * accepted only by a host that armed a shutdown channel ({@code StdioHostApplication}), and it
+     * is answered with {@link #METHOD_HOST_SHUTDOWN_ACCEPTED} or {@link #METHOD_HOST_SHUTDOWN_REFUSED}
+     * before the host starts closing, so a caller can tell "this host is going down" from "this host
+     * will not go down" instead of guessing from a timeout.
+     */
+    public static final String METHOD_HOST_SHUTDOWN = "notifications/host_shutdown"; //$NON-NLS-1$
+
+    /**
+     * The host accepted {@link #METHOD_HOST_SHUTDOWN} and is draining. Sent immediately, before any
+     * cleanup, so a caller can wait for the process exit with a full budget instead of racing it.
+     */
+    public static final String METHOD_HOST_SHUTDOWN_ACCEPTED = "notifications/host_shutdown_accepted"; //$NON-NLS-1$
+
+    /**
+     * The host will not shut down - an interactive EDT has no shutdown channel, or the request
+     * could not be resolved. The host keeps running and must never be force-killed on this answer.
+     */
+    public static final String METHOD_HOST_SHUTDOWN_REFUSED = "notifications/host_shutdown_refused"; //$NON-NLS-1$
+
+    /** The host finished its cleanup; carries the boolean {@code success} of the full save. */
+    public static final String METHOD_HOST_SHUTDOWN_COMPLETE = "notifications/host_shutdown_complete"; //$NON-NLS-1$
     
     /** Tools list method */
     public static final String METHOD_TOOLS_LIST = "tools/list"; //$NON-NLS-1$

@@ -17,6 +17,16 @@ import harness as H
 
 
 class HeadlessDriverTest(unittest.TestCase):
+    def test_runtime_uses_legacy_abi_one_pointer_despite_other_abis(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "current").write_text("abi-one.jar", encoding="utf-8")
+            (root / "abi-one.jar").touch()
+            for abi in (2, 10):
+                (root / f"current-abi-{abi}").write_text(f"abi-{abi}.jar", encoding="utf-8")
+                (root / f"abi-{abi}.jar").touch()
+            self.assertEqual(root / "abi-one.jar", S.bootstrap_runtime(root / "edt-mcp-bootstrap.jar"))
+
     def test_quick_fix_waits_for_ready_then_checks_disk_before_another_call(self):
         with tempfile.TemporaryDirectory() as directory:
             project = Path(directory)
@@ -257,6 +267,7 @@ class HeadlessDriverTest(unittest.TestCase):
                  patch.object(S, "seed_and_read_modules"), \
                  patch.object(S, "run_designer_writes"), \
                  patch.object(S, "run_additional_reads"), \
+                 patch.object(S, "run_command_stop") as command_stop, \
                  patch("builtins.print"):
                 S.main()
             environment = popen.call_args.kwargs["env"]
@@ -264,6 +275,8 @@ class HeadlessDriverTest(unittest.TestCase):
             self.assertEqual(2, sum(name == "get_server_status" for name, _ in calls))
             registrations.assert_called_once()
             runtime.assert_called_once()
+            # The stop command runs on its own host and workspace, after the shared one has saved.
+            command_stop.assert_called_once()
             reads = [(name, arguments) for name, arguments in calls if name in (*C.MOVED_TOOLS, "read_module_source")]
             self.assertEqual(23, len(reads))
             self.assertIn("Вычисление", json.dumps(reads, ensure_ascii=False))

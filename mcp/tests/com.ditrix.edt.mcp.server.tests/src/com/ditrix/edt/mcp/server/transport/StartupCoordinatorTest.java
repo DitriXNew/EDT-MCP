@@ -19,6 +19,31 @@ public class StartupCoordinatorTest extends StdioTestSupport
         EndpointRegistry.atomicWrite(registry.claimPath(), new Gson().toJson(value));
     }
 
+    @Test public void unreadableEndpointDoesNotLaunchAnotherHost() throws Exception
+    {
+        var registry = registry(); AtomicInteger starts = new AtomicInteger();
+        EndpointRegistry.atomicWrite(registry.recordPath(), "not an endpoint");
+        var coordinator = new StartupCoordinator(registry, () -> { starts.incrementAndGet(); return null; });
+        assertThrows(java.io.IOException.class, coordinator::ensureStarted);
+        assertEquals(0, starts.get());
+    }
+
+    @Test public void corruptReadableClaimFallsThroughToWorkspaceOccupancy() throws Exception
+    {
+        var registry = registry(); var starts = new AtomicInteger();
+        var coordinator = new StartupCoordinator(registry, () -> { starts.incrementAndGet(); return null; });
+        EndpointRegistry.atomicWrite(registry.claimPath(), "not a startup claim");
+        var metadata = Files.createDirectories(registry.workspace().resolve(".metadata"));
+        try (var channel = FileChannel.open(metadata.resolve(".lock"), StandardOpenOption.CREATE, StandardOpenOption.WRITE);
+             var lock = channel.lock())
+        {
+            assertTrue(coordinator.ensureStarted().contains("already open"));
+            assertEquals(0, starts.get());
+        }
+        assertEquals(StartupCoordinator.STARTING, coordinator.ensureStarted());
+        assertEquals(1, starts.get());
+    }
+
     @Test public void recentClaimWithKnownDeadIdentityRecoversImmediately() throws Exception
     {
         var registry = registry(); AtomicInteger starts = new AtomicInteger();

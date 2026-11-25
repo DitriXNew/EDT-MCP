@@ -1,4 +1,4 @@
-﻿/**
+/**
  * MCP Server for EDT
  * Copyright (C) 2025 DitriX (https://github.com/DitriXNew)
  * Licensed under AGPL-3.0-or-later
@@ -14,11 +14,14 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 
 import com.ditrix.edt.mcp.server.preferences.PreferenceConstants;
+import com.ditrix.edt.mcp.server.protocol.McpConstants;
 import com.ditrix.edt.mcp.server.protocol.McpProtocolHandler;
 import com.ditrix.edt.mcp.server.tools.BuiltInToolRegistrar;
 import com.ditrix.edt.mcp.server.tools.McpToolRegistry;
@@ -55,6 +58,16 @@ public class McpServer
 
     /** Currently active tool call that can be interrupted */
     private final AtomicReference<ActiveToolCall> activeToolCall = new AtomicReference<>();
+
+    /**
+     * The host's shutdown channel, or {@code null} when this host has none. Armed only by the
+     * headless application: the windowed IDE must never be closed by a client's request, so it
+     * leaves this empty and the notification is refused in the log.
+     */
+    private final AtomicReference<HostShutdown> hostShutdown = new AtomicReference<>();
+
+    /** Whether the shutdown channel has already been fired; a repeat request is a no-op. */
+    private final AtomicBoolean hostShutdownRequested = new AtomicBoolean();
 
     /** Main thread pool for POST/OPTIONS/DELETE requests */
     private ThreadPoolExecutor mainExecutor;
@@ -279,6 +292,79 @@ public class McpServer
             }
             Activator.logInfo("MCP Server stopped"); //$NON-NLS-1$
         }
+    }
+
+    /**
+     * Arms the client-requested shutdown channel, or disarms it with {@code null}.
+     * <p>
+     * The test client's belief that the host can be stopped is a property of the host, not of
+     * the notification: this is the only place that decides it. Arming resets the one-shot guard,
+     * so a host started again in the same JVM accepts a fresh request.
+     *
+     * @param shutdown the action that begins a clean shutdown, or {@code null} to refuse the
+     *            notification
+     */
+    public void setHostShutdown(HostShutdown shutdown)
+    {
+        hostShutdown.set(shutdown);
+        hostShutdownRequested.set(false);
+    }
+
+    /**
+     * The armed shutdown channel: an accepted request begins a clean shutdown and delivers its
+     * result to the completion callback. A host with no channel refuses the request instead, and
+     * that refusal must never be mistaken for "stopping, kill it" - an interactive EDT has none.
+     */
+    public interface HostShutdown
+    {
+        /**
+         * @param completion receives the result of the workspace cleanup once the host finishes
+         */
+        void accept(Consumer<Boolean> completion);
+    }
+
+    /**
+     * Whether this host will honour a shutdown request. Checked before the request is made, so the
+     * caller can answer the client first: the receipt must reach it before the host starts
+     * closing, or the answer races the teardown it describes.
+     *
+     * @return whether a shutdown channel is armed
+     */
+    public boolean hostShutdownArmed() { return hostShutdown.get() != null; }
+
+    /**
+     * Begins a clean host shutdown on a client's request ({@code notifications/host_shutdown}).
+     * <p>
+     * Idempotent and safe to call from any transport thread: the first request runs the action,
+     * every later one is logged and still answered as accepted, so a client that repeats itself
+     * can never start a second closing cycle and is never told to kill a host that is closing.
+     * <p>
+     * The action is expected to signal the shutdown and return, not to block until the host has
+     * exited: the caller is the connection that will close as the host goes down.
+     *
+     * @param completion receives the cleanup result once the host finishes
+     * @return whether this host accepted the request; {@code false} means it keeps running
+     */
+    public boolean requestHostShutdown(Consumer<Boolean> completion)
+    {
+        var shutdown = hostShutdown.get();
+        if (shutdown == null)
+        {
+            Activator.logInfo("Client requested host shutdown (" + McpConstants.METHOD_HOST_SHUTDOWN
+                + "), but this host has no shutdown channel; the request is refused."); //$NON-NLS-1$
+            return false;
+        }
+        if (!hostShutdownRequested.compareAndSet(false, true))
+        {
+            // A repeat is not refused and does not start a second cycle: the host is already going
+            // down, and answering "refused" would tell the caller to kill a process that is
+            // cleaning up. The repeat gets no completion callback - the first request owns it.
+            Activator.logInfo("Client repeated host shutdown (" + McpConstants.METHOD_HOST_SHUTDOWN
+                + ") while already stopping; the repeat is acknowledged as accepted."); //$NON-NLS-1$
+            return true;
+        }
+        shutdown.accept(completion);
+        return true;
     }
 
     /**

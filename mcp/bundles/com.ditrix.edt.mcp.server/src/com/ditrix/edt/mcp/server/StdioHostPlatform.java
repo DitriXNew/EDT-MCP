@@ -2,7 +2,11 @@
 // Copyright (C) 2025-2026 DitriX
 package com.ditrix.edt.mcp.server;
 
+import java.util.function.Consumer;
+
+import org.eclipse.core.resources.IWorkspace;
 import org.eclipse.core.resources.ResourcesPlugin;
+import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.core.runtime.Platform;
 import org.eclipse.osgi.service.datalocation.Location;
@@ -27,18 +31,34 @@ final class StdioHostPlatform implements StdioHostApplication.Runtime
         ServiceInitialization.startInitialization();
         ServiceInitialization.join();
     }
+    @Override public void armHostShutdown(McpServer.HostShutdown shutdown) {
+        // The immersive host is the only one allowed to accept the request; the windowed EDT
+        // leaves the channel empty and logs the refusal. A host whose plugin is not active keeps
+        // running without a channel rather than failing to start over one optional request.
+        Activator activator = Activator.getDefault();
+        if (activator == null || activator.getMcpServer() == null) {
+            Activator.logError("Cannot arm the host shutdown channel: the MCP plugin is not active", null);
+            return;
+        }
+        activator.getMcpServer().setHostShutdown(shutdown);
+    }
     @Override public void startCore(HeadlessLifetime lifetime) {
         Activator.getDefault().startHeadlessCore(lifetime);
     }
     @Override public boolean ipcRunning() { return StdioPluginSupport.isIpcRunning(); }
+    @Override public void stopTransport() { StdioPluginSupport.stop(); }
     @Override public void stopContexts() {
-        StdioPluginSupport.stop();
         CoreServiceLifecycleUtils.stopDefaultContexts();
     }
     @Override public void waitForContexts() { CoreServiceLifecycleUtils.waitForStartingContexts(); }
     @Override public void save() throws Exception {
-        ResourcesPlugin.getWorkspace().save(true, new NullProgressMonitor());
+        saveWorkspace(ResourcesPlugin.getWorkspace());
         Activator.logInfo("EDT MCP headless workspace saved");
+    }
+    static void saveWorkspace(IWorkspace workspace) throws CoreException {
+        var status = workspace.save(true, new NullProgressMonitor());
+        // Eclipse can report a failed save participant as a warning without throwing.
+        if (!status.isOK()) { throw new CoreException(status); }
     }
     @Override public void release() {
         try { if (questions != null) { questions.unregister(); } }

@@ -5,6 +5,7 @@ package com.ditrix.edt.mcp.server;
 import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 import org.eclipse.equinox.app.IApplication;
 import org.eclipse.equinox.app.IApplicationContext;
 
@@ -15,6 +16,15 @@ public class StdioHostApplication implements IApplication
     {
         boolean lockWorkspace() throws Exception;
         void initialize() throws Exception;
+        /**
+         * Arms the client-requested shutdown channel on the running MCP server. Called before the
+         * IPC listener exists, so a request that arrives during workspace loading is not lost, and
+         * before {@link #startCore}, so the channel is never live but unarmed.
+         *
+         * @param shutdown accepts a callback to receive the result of workspace cleanup
+         */
+        void armHostShutdown(McpServer.HostShutdown shutdown);
+        default void stopTransport() { }
         void startCore(HeadlessLifetime lifetime) throws Exception;
         boolean ipcRunning();
         void stopContexts() throws Exception;
@@ -26,6 +36,7 @@ public class StdioHostApplication implements IApplication
 
     private final CountDownLatch stopped = new CountDownLatch(1);
     private final Runtime runtime;
+    private volatile Consumer<Boolean> shutdownCompletion;
 
     public StdioHostApplication() { this(new StdioHostPlatform()); }
     StdioHostApplication(Runtime runtime) { this.runtime = runtime; }
@@ -62,6 +73,10 @@ public class StdioHostApplication implements IApplication
             initialized = true;
             runtime.initialize();
             try (HeadlessLifetime lifetime = new HeadlessLifetime(idle, this::stop)) {
+                runtime.armHostShutdown(completion -> lifetime.requestShutdown(() -> {
+                    shutdownCompletion = completion;
+                    stop();
+                }));
                 // Startup counts as work, including project restoration and import.
                 try (var startup = lifetime.tool()) { runtime.startCore(lifetime); }
                 if (!runtime.ipcRunning()) { throw new IllegalStateException("Headless IPC listener failed to start; inspect the EDT workspace log"); }
@@ -77,12 +92,25 @@ public class StdioHostApplication implements IApplication
         }
         finally
         {
+            // Idle and framework shutdown keep their original transport teardown order.
+            // A command keeps its requesting socket open just long enough for the receipt.
+            var completion = shutdownCompletion;
+            if (initialized && completion == null) {
+                result |= finish(runtime::stopTransport, "Cannot stop headless transport");
+            }
             if (initialized) {
                 result |= finish(runtime::stopContexts, "Cannot stop headless project contexts");
                 result |= finish(runtime::waitForContexts, "Cannot await headless project contexts");
                 result |= finish(runtime::save, "Cannot save headless workspace during shutdown");
             }
             if (locked) { result |= finish(runtime::release, "Cannot release headless workspace lock"); }
+            try {
+                if (completion != null) { completion.accept(result == 0); }
+            } catch (RuntimeException e) {
+                runtime.failure("Cannot deliver headless shutdown result", e);
+            } finally {
+                if (completion != null) { result |= finish(runtime::stopTransport, "Cannot stop headless transport"); }
+            }
         }
         return Integer.valueOf(result);
     }

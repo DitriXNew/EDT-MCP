@@ -577,6 +577,8 @@ jobs:
             ${{ runner.temp }}/stdio-headless/host.log
             ${{ runner.temp }}/stdio-headless/workspace/.metadata/.log
             ${{ runner.temp }}/stdio-headless/workspace/.metadata/.bak_*.log
+            ${{ runner.temp }}/stdio-headless/command-stop.log
+            ${{ runner.temp }}/stdio-headless/command-stop-workspace/.metadata/.log
           include-hidden-files: true
           if-no-files-found: ignore
 

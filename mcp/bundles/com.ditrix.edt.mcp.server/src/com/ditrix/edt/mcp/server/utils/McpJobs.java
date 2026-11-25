@@ -49,7 +49,9 @@ public final class McpJobs
         var activator = Activator.getDefault();
         var lifetime = activator == null ? null : activator.getHeadlessLifetime();
         if (lifetime == null) { job.schedule(); return; }
-        var lease = lifetime.tool();
+        // This is the follow-up of a tool call that is already running, not a new request: it must
+        // be admitted even after the drain begins, or the operation fails halfway through.
+        var lease = lifetime.nestedTool();
         if (lease == null) { throw new IllegalStateException("Headless EDT is shutting down"); }
         var listener = new JobChangeAdapter() {
             @Override public void done(IJobChangeEvent event) {

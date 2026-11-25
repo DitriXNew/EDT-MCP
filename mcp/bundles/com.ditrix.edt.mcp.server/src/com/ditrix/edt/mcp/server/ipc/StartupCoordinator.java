@@ -5,12 +5,9 @@
  */
 package com.ditrix.edt.mcp.server.ipc;
 
-import java.io.IOException;
 import java.nio.channels.FileChannel;
 import java.nio.channels.FileLock;
 import java.nio.channels.OverlappingFileLockException;
-import java.nio.file.Files;
-import java.nio.file.StandardOpenOption;
 import java.time.Instant;
 import com.google.gson.Gson;
 
@@ -53,31 +50,15 @@ public final class StartupCoordinator
                 var endpoint = registry.read();
                 if (endpoint != null && EndpointRegistry.live(endpoint))
                 { return "EDT is connecting. Retry the same call in about 2 seconds. No tool ran."; }
-                if (Files.exists(registry.claimPath()))
+                var claim = registry.readStartupClaim();
+                if (claim != null)
                 {
-                    PrivatePaths.verifyFile(registry.claimPath());
-                    Claim claim;
-                    try { claim = JSON.fromJson(Files.readString(registry.claimPath()), Claim.class); }
-                    catch (RuntimeException e) { throw new IOException("Invalid EDT startup claim", e); }
-                    boolean recent = claim != null && Instant.parse(claim.requested()).plusSeconds(180).isAfter(Instant.now());
-                    boolean live = claim != null && claim.process() != null
-                        && EndpointRegistry.sameProcess(claim.process().pid(), claim.process().startTime());
-                    if (recent && (claim.process() == null || live)) { return STARTING; }
+                    boolean live = claim.namesALiveProcess();
+                    if (claim.isRecent(Instant.now()) && (claim.pid() == null || live)) { return STARTING; }
                     if (live) { return starter.notReadyMessage(); }
                 }
                 // A missing listener must never cause a second EDT against an already-open workspace.
-                var workspaceLock = registry.workspace().resolve(".metadata/.lock");
-                if (Files.exists(workspaceLock))
-                {
-                    try (FileChannel wc = FileChannel.open(workspaceLock, StandardOpenOption.WRITE))
-                    {
-                        try (FileLock wl = wc.tryLock())
-                        {
-                            if (wl == null) { return occupied(); }
-                        }
-                    }
-                    catch (IOException | OverlappingFileLockException e) { return occupied(); }
-                }
+                if (registry.workspaceLockState() != EndpointRegistry.LockState.FREE) { return occupied(); }
                 // An EDT started outside the bootstrap takes the workspace lock seconds after launch.
                 Long running = runningFor();
                 if (running != null) { return startingElsewhere(running); }

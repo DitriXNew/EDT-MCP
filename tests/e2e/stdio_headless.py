@@ -51,6 +51,67 @@ def call(client, name, arguments):
     return response["result"]
 
 
+def bootstrap_runtime(jar):
+    """Resolve the ABI-1 launcher runtime through its stable legacy pointer.
+
+    ABI-1 keeps ``current``; pointers belonging to other launcher ABIs are unrelated.
+    """
+    directory = Path(jar).parent
+    return directory / directory.joinpath("current").read_text(encoding="utf-8").strip()
+
+
+def run_command_stop(java, install, root):
+    """The external stop command against its own real host: the wrapper's exact call.
+
+    A second host and workspace, because the first one has already saved and stopped. Exit 0 is the
+    only code that says the workspace was closed cleanly, so a kill or a timeout must not pass.
+    """
+    workspace = root / "command-stop-workspace"
+    workspace.mkdir()
+    log = root / "command-stop.log"
+    environment = host_environment(root / "project")
+    platform_home = root / "command-stop-home"
+    platform_home.mkdir()
+    environment["HOME"] = str(platform_home)
+    with log.open("wb") as output:
+        host = subprocess.Popen(launch_command(java, install, workspace), env=environment,
+                                stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.STDOUT)
+        try:
+            deadline = time.monotonic() + int(os.environ.get("E2E_PROJECT_READY_TIMEOUT", "1200"))
+            while True:
+                if host.poll() is not None:
+                    raise AssertionError("Command-stop host exited before IPC; inspect " + str(log))
+                try:
+                    jar, _ = discover(workspace)
+                    break
+                except (AssertionError, OSError):
+                    if time.monotonic() >= deadline:
+                        raise AssertionError("Command-stop host did not publish IPC; inspect " + str(log)) from None
+                    time.sleep(1)
+            runtime = bootstrap_runtime(jar)
+            # Invoke the CLI synchronously. Do not poll or reap the host until it returns:
+            # Linux keeps the exited host's PID as a zombie, which must not block clean stop.
+            stop = subprocess.run(
+                [str(java), "-cp", str(runtime), "com.ditrix.edt.mcp.server.ipc.HostShutdownClient",
+                 "-data", str(workspace), "-timeout", "180"],
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                text=True, timeout=300,
+            )
+            assert stop.returncode == 0, (
+                "The stop command must succeed before the parent reaps the host: exit "
+                + str(stop.returncode) + " stderr=" + stop.stderr.strip())
+            # Check that the host already exited when the CLI returned, without reaping it yet.
+            status = os.waitid(os.P_PID, host.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+            assert status is not None, "The stop command returned before the host exited"
+            assert host.wait(timeout=5) == 0, "An accepted stop must be a clean exit, not a kill"
+            command_log = (workspace / ".metadata/.log").read_text(encoding="utf-8", errors="replace")
+            assert "EDT MCP headless workspace saved" in command_log, "The stop command must save the workspace"
+        finally:
+            if host.poll() is None:
+                host.kill()
+                host.wait(timeout=60)
+
+
 def main():
     if os.name != "posix":
         raise AssertionError("This acceptance starts a Linux host directly; Windows cold start is a separate live check")
@@ -160,7 +221,8 @@ def main():
             assert "EDT MCP headless host failed" not in workspace_log
             assert "Failed to auto-start MCP Server" not in workspace_log
             assert "MCP Server auto-started on port" not in workspace_log
-            print("stdio headless: real BSL/BM reads, confirmed writes checked on disk, read-only preset bypass, UI refusal, pure stdout, idle save PASS")
+            run_command_stop(java, install, root)
+            print("stdio headless: real BSL/BM reads, confirmed writes checked on disk, read-only preset bypass, UI refusal, pure stdout, idle save, command stop with clean save PASS")
         finally:
             if client is not None:
                 client.close()

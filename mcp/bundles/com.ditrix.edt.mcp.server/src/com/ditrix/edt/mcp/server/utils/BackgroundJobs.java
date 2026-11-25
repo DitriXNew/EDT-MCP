@@ -792,7 +792,8 @@ public final class BackgroundJobs implements AutoCloseable
                     + maxStoredJobs + " running jobs"); //$NON-NLS-1$
             }
             var lifetime = Activator.getDefault() == null ? null : Activator.getDefault().getHeadlessLifetime();
-            lease = lifetime == null ? null : lifetime.tool();
+            // Nested: the registry is starting work on behalf of a call that is already running.
+            lease = lifetime == null ? null : lifetime.nestedTool();
             if (lifetime != null && lease == null) { throw new RejectedExecutionException("Headless EDT is shutting down"); }
             jobs.put(record.id, record);
             inFlight.incrementAndGet();
