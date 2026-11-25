@@ -96,10 +96,28 @@ public class IpcConnectionTest extends StdioTestSupport
             assertEquals(2, frames.size());
             var reply = JsonParser.parseString(frames.get(1)).getAsJsonObject();
             assertEquals(2, reply.get("id").getAsInt());
-            assertEquals("Headless EDT is shutting down", reply.getAsJsonObject("error").get("message").getAsString());
+            assertTrue(reply.toString(), reply.has("result"));
+            var result = reply.getAsJsonObject("result");
+            assertTrue(result.get("isError").getAsBoolean());
+            assertTrue(result.toString(), result.toString().contains("reconnect and retry a read"));
             running.close();
             assertEquals(0, drained.getCount());
         }
+    }
+
+    @Test public void ordinaryBackpressureIsNotTimedOut() throws Exception
+    {
+        var deadlines = Executors.newSingleThreadScheduledExecutor();
+        var detached = new CountDownLatch(1);
+        try
+        {
+            IpcListener.withWriteDeadline(deadlines, 50, () -> false, detached::countDown, () -> {
+                try { assertFalse("ordinary backpressure must survive the drain budget",
+                    detached.await(200, TimeUnit.MILLISECONDS)); }
+                catch (InterruptedException e) { throw new AssertionError(e); }
+            });
+        }
+        finally { deadlines.shutdownNow(); }
     }
 
     @Test public void aStalledResponseReleasesTheDrainLeaseAfterDetaching() throws Exception
@@ -110,10 +128,13 @@ public class IpcConnectionTest extends StdioTestSupport
         try (var lifetime = new com.ditrix.edt.mcp.server.HeadlessLifetime(java.time.Duration.ZERO, () -> { });
              var lease = lifetime.tool())
         {
-            lifetime.requestShutdown(drained::countDown);
-            IpcListener.withWriteDeadline(deadlines, 100, detached::countDown, () -> {
+            IpcListener.withWriteDeadline(deadlines, 100, lifetime::isStopping, detached::countDown, () -> {
                 assertEquals(1, drained.getCount());
-                try { assertTrue(detached.await(3, TimeUnit.SECONDS)); }
+                try {
+                    assertFalse("write already blocked before draining", detached.await(250, TimeUnit.MILLISECONDS));
+                    lifetime.requestShutdown(drained::countDown);
+                    assertTrue(detached.await(3, TimeUnit.SECONDS));
+                }
                 catch (InterruptedException e) { throw new AssertionError(e); }
             });
             lease.close();
@@ -432,10 +453,17 @@ public class IpcConnectionTest extends StdioTestSupport
             List<String> frames = new CopyOnWriteArrayList<>();
             // The windowed IDE: no channel armed, so the request is refused in the log - and the
             // session is untouched, which is the half that matters to the user.
-            try (var connection = new IpcConnection(new com.ditrix.edt.mcp.server.McpServer(), new McpProtocolHandler(), frames::add))
+            var refusals = new java.util.concurrent.atomic.AtomicInteger();
+            var refusingServer = new McpServer() {
+                @Override public boolean requestHostShutdown(java.util.function.Consumer<Boolean> completion) {
+                    refusals.incrementAndGet(); return super.requestHostShutdown(completion);
+                }
+            };
+            try (var connection = new IpcConnection(refusingServer, new McpProtocolHandler(), frames::add))
             {
                 connection.accept(init(1, false)); connection.accept(initialized());
                 connection.accept(SHUTDOWN);
+                assertEquals("refusal must reach the server's logging path", 1, refusals.get());
                 awaitFrames(frames, 2);
                 assertEquals("A refused shutdown is answered", 2, frames.size());
                 assertEquals(McpConstants.METHOD_HOST_SHUTDOWN_REFUSED,

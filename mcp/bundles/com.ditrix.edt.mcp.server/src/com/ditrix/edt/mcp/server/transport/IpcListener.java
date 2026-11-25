@@ -138,18 +138,27 @@ public final class IpcListener implements AutoCloseable
     {
         // Tool response waiters hold a drain lease. A peer that stops reading must not
         // pin that lease, so close the socket from the independent deadline thread.
-        withWriteDeadline(deadlines, 5000, () -> closePeer(peer), () -> {
+        withWriteDeadline(deadlines, 5000, () -> lifetime != null && lifetime.isStopping(),
+            () -> closePeer(peer), () -> {
             try { peer.write(json); }
             catch (IOException e) { closePeer(peer); throw new UncheckedIOException(e); }
         });
     }
 
-    static void withWriteDeadline(ScheduledExecutorService scheduler, long millis, Runnable detach, Runnable write)
+    static void withWriteDeadline(ScheduledExecutorService scheduler, long millis,
+        java.util.function.BooleanSupplier draining, Runnable detach, Runnable write)
     {
+        // Poll independently of the blocked writer: draining may start after write() blocks.
+        // Windowed hosts never arm this deadline. Ordinary backpressure has no time limit.
         var pending = new java.util.concurrent.atomic.AtomicBoolean(true);
-        var timeout = scheduler.schedule(() -> {
-            if (pending.getAndSet(false)) { detach.run(); }
-        }, millis, TimeUnit.MILLISECONDS);
+        var drainStarted = new java.util.concurrent.atomic.AtomicLong(0);
+        var timeout = scheduler.scheduleWithFixedDelay(() -> {
+            if (!pending.get() || !draining.getAsBoolean()) { return; }
+            long now = System.nanoTime();
+            drainStarted.compareAndSet(0, now);
+            if (now - drainStarted.get() >= TimeUnit.MILLISECONDS.toNanos(millis)
+                && pending.getAndSet(false)) { detach.run(); }
+        }, 0, Math.min(50, Math.max(1, millis)), TimeUnit.MILLISECONDS);
         try { write.run(); }
         finally { pending.set(false); timeout.cancel(false); }
     }

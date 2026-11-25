@@ -39,6 +39,35 @@ import com.ditrix.edt.mcp.server.utils.BackgroundJobs.Status;
 /** Focused lifecycle and capacity tests for {@link BackgroundJobs}. */
 public class BackgroundJobsTest
 {
+    @Test public void backgroundFollowUpKeepsTheDrainOpen() throws Exception
+    {
+        var field = com.ditrix.edt.mcp.server.Activator.class.getDeclaredField("plugin");
+        field.setAccessible(true); var previous = field.get(null);
+        var lifetime = new com.ditrix.edt.mcp.server.HeadlessLifetime(java.time.Duration.ZERO, () -> { });
+        var activator = mock(com.ditrix.edt.mcp.server.Activator.class);
+        when(activator.getHeadlessLifetime()).thenReturn(lifetime);
+        var running = lifetime.tool();
+        var drained = new CountDownLatch(1);
+        var entered = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        try (var jobs = new BackgroundJobs(20, 1)) {
+            field.set(null, activator);
+            lifetime.requestShutdown(drained::countDown);
+            var started = jobs.start(10_000L, "follow-up", progress -> {
+                entered.countDown(); release.await(10, TimeUnit.SECONDS); return "finished";
+            });
+            assertTrue(entered.await(5, TimeUnit.SECONDS));
+            running.close();
+            assertEquals(1, drained.getCount());
+            release.countDown();
+            assertEquals(Status.DONE, jobs.await(started.getId(), 5000).getStatus());
+            assertTrue(drained.await(5, TimeUnit.SECONDS));
+            org.junit.Assert.assertThrows(RejectedExecutionException.class,
+                () -> jobs.start(1000L, "too late", progress -> "must not run"));
+        }
+        finally { release.countDown(); running.close(); lifetime.close(); field.set(null, previous); }
+    }
+
     /**
      * One budget for every wait of a test that asserts ORDER rather than speed, so a machine slow
      * enough to blow it slows the whole test uniformly instead of failing the one step that was

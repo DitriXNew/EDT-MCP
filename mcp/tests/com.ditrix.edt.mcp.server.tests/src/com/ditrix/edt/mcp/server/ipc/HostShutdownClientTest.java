@@ -71,6 +71,10 @@ public class HostShutdownClientTest
          *            null names this test JVM, which never exits
          */
         FakeHost(EndpointRegistry registry, Boolean initializes, Boolean receipt, boolean accepted, Process process) throws Exception
+        { this(registry, initializes, receipt, accepted, process, true); }
+
+        FakeHost(EndpointRegistry registry, Boolean initializes, Boolean receipt, boolean accepted,
+            Process process, boolean sendsDecision) throws Exception
         {
             Path socket = registry.directory().resolve("s-client-test");
             long pid = process == null ? ProcessHandle.current().pid() : process.pid();
@@ -81,7 +85,7 @@ public class HostShutdownClientTest
                 pid, start, "2.26.1", EndpointRegistry.IPC_VERSION, socket.toString(), "test-secret"));
             server = ServerSocketChannel.open(StandardProtocolFamily.UNIX);
             server.bind(UnixDomainSocketAddress.of(socket));
-            worker.execute(() -> serve(registry, initializes, receipt, accepted));
+            worker.execute(() -> serve(registry, initializes, receipt, accepted, sendsDecision));
         }
 
         /** The host's decision frame: accepted means it is closing, refused means it keeps running. */
@@ -92,7 +96,8 @@ public class HostShutdownClientTest
                 : "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/host_shutdown_refused\"}";
         }
 
-        private void serve(EndpointRegistry registry, Boolean initializes, Boolean receipt, boolean accepted)
+        private void serve(EndpointRegistry registry, Boolean initializes, Boolean receipt, boolean accepted,
+            boolean sendsDecision)
         {
             try (var channel = server.accept(); var socket = new JsonFrames.Socket(channel))
             {
@@ -112,6 +117,7 @@ public class HostShutdownClientTest
                     if (SHUTDOWN_METHOD.equals(method)) {
                         shutdown.countDown();
                         // The decision comes first, exactly as the real host sends it.
+                        if (!sendsDecision) { continue; }
                         socket.write(decision(accepted));
                         if (!accepted || receipt == null) { return; }
                         socket.write("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/tools/list_changed\"}");
@@ -136,6 +142,34 @@ public class HostShutdownClientTest
     private static String text(ByteArrayOutputStream bytes)
     { return bytes.toString(StandardCharsets.UTF_8); }
 
+    @Test public void releasedHostIgnoringNotificationTimesOutWithoutRefusal() throws Exception
+    {
+        var registry = registry(); var messages = new ByteArrayOutputStream();
+        try (var host = new FakeHost(registry, true, null, true, null, false)) {
+            assertEquals(HostShutdownClient.NOT_STOPPED,
+                HostShutdownClient.stop(registry.directory(), registry.workspace(), 300, sink(messages)));
+            assertTrue(host.sawShutdown());
+            assertFalse(text(messages), text(messages).contains("refused"));
+        }
+    }
+
+    @Test public void zeroProgrammaticBudgetIsRejected() throws Exception
+    {
+        var messages = new ByteArrayOutputStream();
+        var registry = registry();
+        assertEquals(HostShutdownClient.NOT_STOPPED,
+            HostShutdownClient.stop(registry.directory(), registry.workspace(), 0, sink(messages)));
+        assertTrue(text(messages), text(messages).contains("positive"));
+    }
+
+    @Test public void zeroTimeoutIsRejectedBeforeDiscovery() throws Exception
+    {
+        var messages = new ByteArrayOutputStream();
+        assertEquals(HostShutdownClient.NOT_STOPPED, HostShutdownClient.run(new String[] {
+            "-data", temporary.getRoot().toString(), "-timeout", "0" }, sink(messages)));
+        assertTrue(text(messages), text(messages).contains("positive number of seconds"));
+    }
+
     @Test public void stopReplaysTheHandshakeAndSendsTheShutdownNotification() throws Exception
     {
         var registry = registry();
@@ -143,7 +177,7 @@ public class HostShutdownClientTest
         try (var host = new FakeHost(registry, true, true))
         {
             // Exit code 1: this FakeHost accepts but never exits, which is the "did not stop"
-            // outcome - the state the caller may still force-kill.
+            // outcome. It never proves headless ownership or authorizes a force-kill.
             assertEquals(HostShutdownClient.NOT_STOPPED,
                 HostShutdownClient.stop(registry.directory(), registry.workspace(), 500, sink(messages)));
             assertTrue(host.sawShutdown());

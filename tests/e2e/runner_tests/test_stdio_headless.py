@@ -17,6 +17,16 @@ import harness as H
 
 
 class HeadlessDriverTest(unittest.TestCase):
+    def test_runtime_uses_legacy_abi_one_pointer_despite_other_abis(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "current").write_text("abi-one.jar", encoding="utf-8")
+            (root / "abi-one.jar").touch()
+            for abi in (2, 10):
+                (root / f"current-abi-{abi}").write_text(f"abi-{abi}.jar", encoding="utf-8")
+                (root / f"abi-{abi}.jar").touch()
+            self.assertEqual(root / "abi-one.jar", S.bootstrap_runtime(root / "edt-mcp-bootstrap.jar"))
+
     def test_quick_fix_waits_for_ready_then_checks_disk_before_another_call(self):
         with tempfile.TemporaryDirectory() as directory:
             project = Path(directory)

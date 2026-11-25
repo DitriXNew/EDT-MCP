@@ -115,8 +115,8 @@ public final class IpcConnection implements AutoCloseable
                 boolean accepted = server.hostShutdownArmed();
                 sendBounded(receipt(accepted ? McpConstants.METHOD_HOST_SHUTDOWN_ACCEPTED
                     : McpConstants.METHOD_HOST_SHUTDOWN_REFUSED, null));
-                if (accepted) { server.requestHostShutdown(success -> sendBounded(receipt(
-                    McpConstants.METHOD_HOST_SHUTDOWN_COMPLETE, "\"success\":" + success))); }
+                server.requestHostShutdown(success -> sendBounded(receipt(
+                    McpConstants.METHOD_HOST_SHUTDOWN_COMPLETE, "\"success\":" + success)));
             }
             else
             {
@@ -138,7 +138,14 @@ public final class IpcConnection implements AutoCloseable
         var admission = lifetime == null ? null : lifetime.toolRequest();
         if (lifetime != null && admission == null)
         {
-            if (!id.isJsonNull()) { send(StdioBootstrap.error(id, -32603, "Headless EDT is shutting down")); }
+            if (!id.isJsonNull()) {
+                var payload = JsonParser.parseString(com.ditrix.edt.mcp.server.protocol.ToolResult.error(
+                    "Headless EDT is shutting down; reconnect and retry a read.").toJson());
+                var result = capabilities.allowsStructuredContent()
+                    ? com.ditrix.edt.mcp.server.protocol.jsonrpc.ToolCallResult.textWithStructured(payload, true)
+                    : com.ditrix.edt.mcp.server.protocol.jsonrpc.ToolCallResult.errorText(payload);
+                send(GsonProvider.toJson(com.ditrix.edt.mcp.server.protocol.jsonrpc.JsonRpcResponse.success(id, result)));
+            }
             return;
         }
         var execution = admission == null ? null : admission.execution();

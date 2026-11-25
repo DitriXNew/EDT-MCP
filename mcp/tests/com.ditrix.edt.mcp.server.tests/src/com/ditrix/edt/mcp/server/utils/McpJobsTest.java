@@ -22,6 +22,39 @@ import org.junit.Test;
  */
 public class McpJobsTest
 {
+    @Test public void scheduledFollowUpKeepsTheDrainOpen() throws Exception
+    {
+        var field = com.ditrix.edt.mcp.server.Activator.class.getDeclaredField("plugin");
+        field.setAccessible(true); var previous = field.get(null);
+        var lifetime = new com.ditrix.edt.mcp.server.HeadlessLifetime(java.time.Duration.ZERO, () -> { });
+        var activator = org.mockito.Mockito.mock(com.ditrix.edt.mcp.server.Activator.class);
+        org.mockito.Mockito.when(activator.getHeadlessLifetime()).thenReturn(lifetime);
+        var running = lifetime.tool();
+        var drained = new java.util.concurrent.CountDownLatch(1);
+        var entered = new java.util.concurrent.CountDownLatch(1);
+        var release = new java.util.concurrent.CountDownLatch(1);
+        Job job = new Job("Drain follow-up") {
+            @Override protected IStatus run(IProgressMonitor monitor) {
+                entered.countDown();
+                try { release.await(10, java.util.concurrent.TimeUnit.SECONDS); }
+                catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+                return Status.OK_STATUS;
+            }
+        };
+        try {
+            field.set(null, activator);
+            lifetime.requestShutdown(drained::countDown);
+            McpJobs.schedule(job);
+            org.junit.Assert.assertTrue(entered.await(5, java.util.concurrent.TimeUnit.SECONDS));
+            running.close();
+            assertEquals(1, drained.getCount());
+            release.countDown(); job.join();
+            org.junit.Assert.assertTrue(drained.await(5, java.util.concurrent.TimeUnit.SECONDS));
+            org.junit.Assert.assertThrows(IllegalStateException.class, () -> McpJobs.schedule(failingJob()));
+        }
+        finally { release.countDown(); job.join(); running.close(); lifetime.close(); field.set(null, previous); }
+    }
+
     private static Job failingJob()
     {
         return new Job("test") //$NON-NLS-1$

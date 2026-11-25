@@ -47,6 +47,9 @@ public final class HeadlessLifetime implements AutoCloseable
         arm();
     }
 
+    /** Whether shutdown has stopped admitting new operations. */
+    public synchronized boolean isStopping() { return stopping; }
+
     public synchronized Lease connect() { return acquire(true); }
 
     /**

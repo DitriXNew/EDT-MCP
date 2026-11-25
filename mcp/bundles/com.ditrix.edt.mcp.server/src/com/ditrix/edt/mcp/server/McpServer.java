@@ -324,6 +324,15 @@ public class McpServer
     }
 
     /**
+     * Whether this host will honour a shutdown request. Checked before the request is made, so the
+     * caller can answer the client first: the receipt must reach it before the host starts
+     * closing, or the answer races the teardown it describes.
+     *
+     * @return whether a shutdown channel is armed
+     */
+    public boolean hostShutdownArmed() { return hostShutdown.get() != null; }
+
+    /**
      * Begins a clean host shutdown on a client's request ({@code notifications/host_shutdown}).
      * <p>
      * Idempotent and safe to call from any transport thread: the first request runs the action,
@@ -336,15 +345,6 @@ public class McpServer
      * @param completion receives the cleanup result once the host finishes
      * @return whether this host accepted the request; {@code false} means it keeps running
      */
-    /**
-     * Whether this host will honour a shutdown request. Checked before the request is made, so the
-     * caller can answer the client first: the receipt must reach it before the host starts
-     * closing, or the answer races the teardown it describes.
-     *
-     * @return whether a shutdown channel is armed
-     */
-    public boolean hostShutdownArmed() { return hostShutdown.get() != null; }
-
     public boolean requestHostShutdown(Consumer<Boolean> completion)
     {
         var shutdown = hostShutdown.get();

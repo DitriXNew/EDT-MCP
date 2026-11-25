@@ -28,6 +28,22 @@ public class StartupCoordinatorTest extends StdioTestSupport
         assertEquals(0, starts.get());
     }
 
+    @Test public void corruptReadableClaimFallsThroughToWorkspaceOccupancy() throws Exception
+    {
+        var registry = registry(); var starts = new AtomicInteger();
+        var coordinator = new StartupCoordinator(registry, () -> { starts.incrementAndGet(); return null; });
+        EndpointRegistry.atomicWrite(registry.claimPath(), "not a startup claim");
+        var metadata = Files.createDirectories(registry.workspace().resolve(".metadata"));
+        try (var channel = FileChannel.open(metadata.resolve(".lock"), StandardOpenOption.CREATE, StandardOpenOption.WRITE);
+             var lock = channel.lock())
+        {
+            assertTrue(coordinator.ensureStarted().contains("already open"));
+            assertEquals(0, starts.get());
+        }
+        assertEquals(StartupCoordinator.STARTING, coordinator.ensureStarted());
+        assertEquals(1, starts.get());
+    }
+
     @Test public void recentClaimWithKnownDeadIdentityRecoversImmediately() throws Exception
     {
         var registry = registry(); AtomicInteger starts = new AtomicInteger();

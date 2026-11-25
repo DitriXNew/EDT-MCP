@@ -42,10 +42,11 @@ import com.google.gson.JsonParser;
  * <ul>
  * <li>{@value #STOPPED} - the host accepted the request and exited.</li>
  * <li>{@value #REFUSED} - the host answered that it will not shut down. It keeps running, and
- * killing it is wrong: this is an interactive EDT, or a host that does not implement the
- * notification.</li>
+ * killing it is wrong: this is an interactive EDT or another host refusing shutdown.</li>
  * <li>{@value #NOT_STOPPED} - the host accepted but did not exit, or the answer never arrived, so
- * the state is unknown. A bounded force-kill is the caller's reserve.</li>
+ * the state is unknown. A bounded force-kill requires independently verified ownership of a
+ * headless host; this code alone never authorizes killing a process. Released hosts that ignore
+ * the notification time out with this code, not {@link #REFUSED}.</li>
  * <li>{@value #ABSENT} - there was nothing to stop. Not an error: the caller may start the host
  * next.</li>
  * </ul>
@@ -64,13 +65,14 @@ public final class HostShutdownClient
     public static final int STOPPED = 0;
     /**
      * The stop was not confirmed: the host accepted but did not exit, or the registry could not be
-     * read so the host state is unknown. The caller may force-kill.
+     * read so the host state is unknown. Force-kill requires independently verified headless
+     * ownership; the exit code and registry do not establish the host kind.
      */
     public static final int NOT_STOPPED = 1;
 
     /**
      * The host answered that it will not shut down. It is still running deliberately - an
-     * interactive EDT, or one that ignores the notification - so a wrapper must NOT kill it.
+     * interactive EDT or another host refusing shutdown - so a wrapper must NOT kill it.
      */
     public static final int REFUSED = 3;
     /** No host is registered for this workspace: the registry and its record do not exist. */
@@ -124,12 +126,12 @@ public final class HostShutdownClient
             try
             {
                 long seconds = Long.parseLong(requested);
-                if (seconds < 0) { throw new NumberFormatException(requested); }
+                if (seconds <= 0) { throw new NumberFormatException(requested); }
                 timeout = TimeUnit.SECONDS.toMillis(seconds);
             }
             catch (NumberFormatException e)
             {
-                usage(err, "-timeout must be a nonnegative number of seconds, not " + requested);
+                usage(err, "-timeout must be a positive number of seconds, not " + requested);
                 return NOT_STOPPED;
             }
         }
@@ -221,12 +223,16 @@ public final class HostShutdownClient
      *
      * @param ipc the per-user IPC registry directory the host published its endpoint into
      * @param workspace the workspace directory, as the host was started with
-     * @param timeoutMillis how long to wait for the process to disappear
+     * @param timeoutMillis positive budget for the decision and, separately, process exit
      * @param err where a non-zero outcome is explained
      * @return the exit code
      */
     public static int stop(Path ipc, Path workspace, long timeoutMillis, PrintStream err)
     {
+        if (timeoutMillis <= 0) {
+            err.println("edt-mcp-shutdown: timeoutMillis must be positive; no host was asked to stop.");
+            return NOT_STOPPED;
+        }
         int registryState = checkDirectory(ipc, "MCP endpoint registry", err, LinkOption.NOFOLLOW_LINKS);
         // A directly launched host can acquire the lock before creating its IPC directory.
         // Sample occupancy after observing absence, not before the directory check can race it.
@@ -345,15 +351,7 @@ public final class HostShutdownClient
                     + " is still running; the host may still be saving.");
                 return NOT_STOPPED;
             }
-            // A host running an older plugin answers the completion receipt without a decision.
-            if (!isShutdownReceipt(decision))
-            {
-                err.println("edt-mcp-shutdown: shutdown receipt was missing or reported failure.");
-                return NOT_STOPPED;
-            }
-            long legacyDeadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(Math.max(0, timeoutMillis));
-            if (exitedBy(endpoint, legacyDeadline, true)) { return STOPPED; }
-            err.println("edt-mcp-shutdown: PID " + endpoint.pid() + " is still running after the shutdown request; the host did not close.");
+            err.println("edt-mcp-shutdown: the host did not provide a shutdown decision; the host state is unknown.");
             return NOT_STOPPED;
         }
         catch (IOException | RuntimeException e)

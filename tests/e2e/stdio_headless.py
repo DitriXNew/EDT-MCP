@@ -52,13 +52,11 @@ def call(client, name, arguments):
 
 
 def bootstrap_runtime(jar):
-    """The runtime the given launcher resolves: its own ABI pointer, else the legacy pointer."""
+    """Resolve the ABI-1 launcher runtime through its stable legacy pointer.
+
+    ABI-1 keeps ``current``; pointers belonging to other launcher ABIs are unrelated.
+    """
     directory = Path(jar).parent
-    for pointer in sorted(directory.glob("current-abi-*")):
-        name = pointer.read_text(encoding="utf-8").strip()
-        runtime = directory / name
-        if runtime.is_file():
-            return runtime
     return directory / directory.joinpath("current").read_text(encoding="utf-8").strip()
 
 
