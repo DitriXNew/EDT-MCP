@@ -24,6 +24,7 @@ import java.util.function.Supplier;
 import org.eclipse.xtext.util.CancelIndicator;
 
 import com.ditrix.edt.mcp.server.Activator;
+import com.ditrix.edt.mcp.server.HeadlessLifetime;
 import com.ditrix.edt.mcp.server.HeadlessLifetime.Lease;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobs.CancellationOutcome;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobs.CancellationResult;
@@ -304,8 +305,13 @@ public final class QueryValidationJobs implements AutoCloseable
     private static Lease acquireHostLease()
     {
         var activator = Activator.getDefault();
-        var lifetime = activator == null ? null : activator.getHeadlessLifetime();
-        Lease lease = lifetime == null ? null : lifetime.tool();
+        return hostLease(activator == null ? null : activator.getHeadlessLifetime());
+    }
+
+    /** Validation runs on behalf of an admitted call, so a drain must still let it start. */
+    static Lease hostLease(HeadlessLifetime lifetime)
+    {
+        Lease lease = lifetime == null ? null : lifetime.nestedTool();
         if (lifetime != null && lease == null)
         {
             throw new RejectedExecutionException("Headless EDT is shutting down."); //$NON-NLS-1$

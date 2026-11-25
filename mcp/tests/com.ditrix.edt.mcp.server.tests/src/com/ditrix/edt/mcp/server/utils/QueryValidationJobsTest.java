@@ -23,6 +23,26 @@ import com.ditrix.edt.mcp.server.utils.BackgroundJobs.Status;
 
 public class QueryValidationJobsTest
 {
+    @Test
+    public void validationStartedByAnAdmittedCallIsAdmittedDuringHeadlessDrain() throws Exception
+    {
+        var drained = new AtomicInteger();
+        try (var lifetime = new com.ditrix.edt.mcp.server.HeadlessLifetime(java.time.Duration.ofHours(1),
+            (task, delay) -> () -> { }, () -> fail("Idle shutdown")))
+        {
+            var call = lifetime.tool();
+            lifetime.requestShutdown(drained::incrementAndGet);
+            try (var lease = QueryValidationJobs.hostLease(lifetime))
+            {
+                assertNotNull("Validation of an in-flight call must not fail halfway through a drain", lease);
+            }
+            assertEquals(0, drained.get());
+            call.close();
+            assertEquals(1, drained.get());
+            assertThrows(RejectedExecutionException.class, () -> QueryValidationJobs.hostLease(lifetime));
+        }
+    }
+
     private static final long WAIT_MS = 5_000;
 
     @Test
