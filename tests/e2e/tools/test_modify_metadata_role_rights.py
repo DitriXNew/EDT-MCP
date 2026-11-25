@@ -431,6 +431,7 @@ def test_role_rights_combined_with_properties_is_refused_and_writes_nothing():
                           "seed left it")
 
 
+@e2e_test(tool="modify_metadata", kind="write-metadata")
 def test_role_rights_two_valid_rights_commit_in_a_single_call():
     """Two rights on ONE object submitted in a single call must both land - the per-right plan
     applies each entry through its own AddRightValuesTask, so a regression that drops the second
@@ -457,7 +458,7 @@ def test_role_rights_two_valid_rights_commit_in_a_single_call():
         "both rights entries must be reported applied: %r" % (structured,)
 
     poll_disk_contains(_rights_file(name), "<name>%s</name>" % GUARDED_OBJECT,
-                       "the guarded object must land on disk")
+                       ctx="the guarded object must land on disk")
     text = _rights_file_text(name)
     assert_contains(text, "<name>Read</name>", "the Read cell must be authored")
     assert_contains(text, "<name>Update</name>", "the Update cell must be authored")
@@ -467,6 +468,7 @@ def test_role_rights_two_valid_rights_commit_in_a_single_call():
         "both rights must render in the matrix: %r" % (got,)
 
 
+@e2e_test(tool="modify_metadata", kind="write-metadata")
 def test_role_rights_out_of_class_right_is_refused_and_writes_nothing():
     """Class-scoped resolution: a right the object's class does not carry (Use belongs to HTTP/web
     services, not to catalogs) must be REFUSED before any write, with the refusal naming the

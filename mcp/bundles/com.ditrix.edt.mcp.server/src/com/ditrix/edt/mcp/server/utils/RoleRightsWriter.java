@@ -456,8 +456,9 @@ public final class RoleRightsWriter
             EObject target = targetMd;
 
             String rightName = str(entry.get(KEY_RIGHT));
-            // The right is resolved by walking rightInfos.getRights(object) - a model read - so it runs
-            // inside a read boundary; only the resolved Right handle (a task input) escapes.
+            // The right is resolved by walking rightInfos.getEClassRights(object, eClass()) - a
+            // model read - so it runs inside a read boundary; only the resolved Right handle (a
+            // task input) escapes.
             Right right = resolveRight(ctx.rightInfos, target, rightName);
             if (right == null)
             {
@@ -1534,7 +1535,7 @@ public final class RoleRightsWriter
             }
             else if ("WebService".equals(object.eClass().getName()))
             {
-                hint = " Access is granted at its operations (Method.Use).";
+                hint = " Access is granted at its operations (Operation.Use).";
             }
             else
             {

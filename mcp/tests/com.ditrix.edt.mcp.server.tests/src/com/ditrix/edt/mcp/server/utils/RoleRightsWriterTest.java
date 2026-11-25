@@ -1247,6 +1247,14 @@ public class RoleRightsWriterTest
         return object;
     }
 
+    /** An object whose {@code eClass().getName()} answers with the given kind name. */
+    private static EObject objectOfClass(String eclassName) throws Exception
+    {
+        EObject object = objectOfAnyClass(); //$NON-NLS-1$
+        when(object.eClass().getName()).thenReturn(eclassName); //$NON-NLS-1$
+        return object;
+    }
+
     private static Right rightNamed(String en, String ru) throws Exception
     {
         Right right = mock(Right.class); //$NON-NLS-1$
@@ -1294,6 +1302,35 @@ public class RoleRightsWriterTest
 
         String noRights = RoleRightsWriter.rightNotFound(empty, object, "Update", "Catalog.X"); //$NON-NLS-1$ //$NON-NLS-2$
         assertErrorMentions(noRights, "has no rights of its own"); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testRightNotFoundEmptySetHintsNameTheKindSpecificGrantLevel() throws Exception
+    {
+        IRightInfosService empty = mock(IRightInfosService.class);
+
+        EObject httpService = objectOfClass("HTTPService"); //$NON-NLS-1$
+        when(empty.getEClassRights(httpService, httpService.eClass())).thenReturn(Collections.<Right>emptySet()); //$NON-NLS-1$
+        String httpRefusal = RoleRightsWriter.rightNotFound(empty, httpService, "Read", "HTTPService.X"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertErrorMentions(httpRefusal, "URL-template methods (Method.Use)"); //$NON-NLS-1$
+        assertFalse("the HTTP-service hint must not name the web-service grant level", //$NON-NLS-1$
+            httpRefusal.contains("Operation.Use")); //$NON-NLS-1$
+
+        EObject webService = objectOfClass("WebService"); //$NON-NLS-1$
+        when(empty.getEClassRights(webService, webService.eClass())).thenReturn(Collections.<Right>emptySet()); //$NON-NLS-1$
+        String webRefusal = RoleRightsWriter.rightNotFound(empty, webService, "Read", "WebService.X"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertErrorMentions(webRefusal, "operations (Operation.Use)"); //$NON-NLS-1$
+        assertFalse("the web-service hint must not point at URL-template methods", //$NON-NLS-1$
+            webRefusal.contains("Method.Use")); //$NON-NLS-1$
+
+        // An EClass whose name is null (the objectOfAnyClass shape - like Enum or CommonModule)
+        // gets only the neutral base: no service grant level may leak into its refusal.
+        EObject neutral = objectOfAnyClass(); //$NON-NLS-1$
+        when(empty.getEClassRights(neutral, neutral.eClass())).thenReturn(Collections.<Right>emptySet()); //$NON-NLS-1$
+        String neutralRefusal = RoleRightsWriter.rightNotFound(empty, neutral, "Read", "Enum.X"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertErrorMentions(neutralRefusal, "has no rights of its own"); //$NON-NLS-1$
+        assertFalse("a non-service class must not get a service hint", //$NON-NLS-1$
+            neutralRefusal.contains("Method.Use") || neutralRefusal.contains("Operation.Use")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     private static void assertErrorMentions(String errorJson, String needle)
