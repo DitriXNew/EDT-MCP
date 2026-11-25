@@ -47,6 +47,7 @@ import com.ditrix.edt.mcp.server.bridge.EdtMcpBridge;
 import com.ditrix.edt.mcp.server.bridge.IEdtMcpBridge;
 import com.ditrix.edt.mcp.server.history.McpCallHistoryFileLog;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobs;
+import com.ditrix.edt.mcp.server.utils.QueryValidationJobs;
 import com.ditrix.edt.mcp.server.utils.FormAttributeDeletion;
 import com.ditrix.edt.mcp.server.utils.Log;
 import com.ditrix.edt.mcp.server.utils.NativeRenderModeProbe;
@@ -97,6 +98,7 @@ public class Activator extends AbstractUIPlugin
     public void start(BundleContext context) throws Exception
     {
         super.start(context);
+        QueryValidationJobs.startShared();
         if (HostKind.current() == HostKind.WINDOWED) { NativeRenderModeProbe.captureStartupModes(); }
         plugin = this; // NOSONAR Eclipse singleton/Activator init pattern; method cannot be static
         mcpServer = new McpServer();
@@ -177,6 +179,9 @@ public class Activator extends AbstractUIPlugin
     @Override
     public void stop(BundleContext context) throws Exception
     {
+        // Stop query admission before clearing the lease source. A racing HTTP call must
+        // not mistake a shutting-down headless host for a windowed host with no lease.
+        QueryValidationJobs.shutdownShared();
         com.ditrix.edt.mcp.server.transport.StdioPluginSupport.stop();
         HeadlessLifetime lifetime = headlessLifetime.getAndSet(null);
         if (lifetime != null) { lifetime.close(); }

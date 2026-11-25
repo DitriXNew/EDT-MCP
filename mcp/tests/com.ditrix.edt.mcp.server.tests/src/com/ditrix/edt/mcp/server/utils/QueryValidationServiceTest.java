@@ -19,6 +19,22 @@ import com._1c.g5.v8.dt.ql.typesystem.IDynamicDbViewFieldComputer;
 public class QueryValidationServiceTest
 {
     @Test
+    public void cancelledCallerDoesNotEnterNativeValidation()
+    {
+        var tool = new QueryValidationService()
+        {
+            @Override
+            protected void dispatch(Runnable work)
+            {
+                fail("Cancelled work must not open a model read");
+            }
+        };
+        var result = tool.validate(null, "SELECT 1", false, () -> true);
+        assertFalse(result.available());
+        assertFalse(result.complete());
+    }
+
+    @Test
     public void nativeResolvedFieldErrorRemainsInvalid()
     {
         XtextResource resource = resource();

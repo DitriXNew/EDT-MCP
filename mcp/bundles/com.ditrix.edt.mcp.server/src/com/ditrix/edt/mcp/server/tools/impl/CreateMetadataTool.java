@@ -69,6 +69,7 @@ import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
 import com.ditrix.edt.mcp.server.tools.base.WriteScope;
+import com.ditrix.edt.mcp.server.utils.QueryValidationJobs;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.MetadataWriteServices;
 import com.ditrix.edt.mcp.server.utils.BmModelResolver;
@@ -114,6 +115,18 @@ import com.google.gson.JsonObject;
  */
 public class CreateMetadataTool extends AbstractMetadataWriteTool
 {
+    static String describeCreateFailure(String message, String projectName, QueryValidationJobs jobs)
+    {
+        // Only the top-level Configuration write is diagnosed here. Other writers can lock
+        // different resources or scopes; the same-project read job is a candidate, not proof.
+        if (message != null && message.contains("failed to lock resource") //$NON-NLS-1$
+            && message.contains("\"Configuration\"") && message.contains("for writing")) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            return message + ValidateQueryTool.activeValidationHint(jobs, projectName);
+        }
+        return message;
+    }
+
     public static final String NAME = "create_metadata"; //$NON-NLS-1$
 
     /** Canonical English singular type name for the CommonModule object. */
@@ -1493,7 +1506,9 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             catch (Exception e)
             {
                 Activator.logError("Error creating metadata object", e); //$NON-NLS-1$
-                return ToolResult.error("Failed to create object: " + unwrapCauseMessage(e)).toJson(); //$NON-NLS-1$
+                String message = describeCreateFailure(unwrapCauseMessage(e), req.project.getName(),
+                    QueryValidationJobs.shared());
+                return ToolResult.error("Failed to create object: " + message).toJson(); //$NON-NLS-1$
             }
 
             List<String> exportFqns = dirtyFqns(req.normFqn, configFqn);

@@ -7,6 +7,7 @@
 package com.ditrix.edt.mcp.server.tools.impl;
 
 import java.util.Map;
+import java.util.function.Supplier;
 
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
@@ -15,6 +16,7 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobPolling;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobRenderer;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobs;
+import com.ditrix.edt.mcp.server.utils.QueryValidationJobs;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobs.JobSnapshot;
 
 /** Read-only polling surface shared by every {@link BackgroundJobs} owner. */
@@ -26,15 +28,27 @@ public class GetJobStatusTool implements IMcpTool
     private static final String KEY_WAIT_SECONDS = "waitSeconds"; //$NON-NLS-1$
 
     private final BackgroundJobs jobs;
+    private final Supplier<QueryValidationJobs> queryJobs;
 
     public GetJobStatusTool()
     {
-        this(BackgroundJobs.shared());
+        this(BackgroundJobs.shared(), QueryValidationJobs::shared);
     }
 
     GetJobStatusTool(BackgroundJobs jobs)
     {
+        this(jobs, () -> null);
+    }
+
+    GetJobStatusTool(BackgroundJobs jobs, QueryValidationJobs queryJobs)
+    {
+        this(jobs, () -> queryJobs);
+    }
+
+    private GetJobStatusTool(BackgroundJobs jobs, Supplier<QueryValidationJobs> queryJobs)
+    {
         this.jobs = jobs;
+        this.queryJobs = queryJobs;
     }
 
     @Override
@@ -97,6 +111,11 @@ public class GetJobStatusTool implements IMcpTool
         }
 
         JobSnapshot snapshot = BackgroundJobPolling.await(jobs, jobId, waitSeconds.intValue());
+        var validations = queryJobs.get();
+        if (snapshot == null && validations != null)
+        {
+            snapshot = validations.await(jobId, java.util.concurrent.TimeUnit.SECONDS.toMillis(waitSeconds));
+        }
         if (snapshot == null)
         {
             return unknownJobError(jobId);

@@ -78,7 +78,7 @@ public final class BackgroundJobs implements AutoCloseable
     /** Result of an explicit cancellation request. */
     public enum CancellationOutcome
     {
-        /** The job was stopped before its work crossed the commit handshake. */
+        /** Cancellation was accepted before commit; the worker may still be unwinding. */
         CANCELLED("cancelled"), //$NON-NLS-1$
         /** The owning tool stopped committed work through its declared cancellation capability. */
         TERMINATED("terminated"), //$NON-NLS-1$
@@ -1503,7 +1503,7 @@ public final class BackgroundJobs implements AutoCloseable
             }
 
             progress.add(new ProgressEntry(System.currentTimeMillis(),
-                "Cancelled before the owning tool handed the work over.")); //$NON-NLS-1$
+                "Cancellation requested before the owning tool handed the work over.")); //$NON-NLS-1$
             cancellationRequested = true;
             cancellationOutcome = CancellationOutcome.CANCELLED;
             return new CancellationAttempt(CancellationOutcome.CANCELLED, null);

@@ -6,23 +6,32 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.function.BooleanSupplier;
+import java.util.function.Function;
 
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
+import org.eclipse.xtext.util.CancelIndicator;
 
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.Activator;
+import com.ditrix.edt.mcp.server.ActiveToolCall;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
 import com.ditrix.edt.mcp.server.utils.ModuleQueryExtractor;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.QueryValidationService;
+import com.ditrix.edt.mcp.server.utils.QueryValidationJobs;
 
 /**
  * Tool to validate 1C:Enterprise query language (QL) text in the context of a project.
@@ -31,8 +40,9 @@ import com.ditrix.edt.mcp.server.utils.QueryValidationService;
  */
 public class ValidateQueryTool implements IMcpTool
 {
-    public static final String NAME = "validate_query"; //$NON-NLS-1$
+    public static final String NAME = QueryValidationJobs.TOOL;
     
+    private static final long TIMEOUT_MS = TimeUnit.SECONDS.toMillis(30);
     private static final String PROJECT_NAME = "projectName"; //$NON-NLS-1$
     private static final String QUERY_TEXT = "queryText"; //$NON-NLS-1$
     private static final String DCS_MODE = "dcsMode"; //$NON-NLS-1$
@@ -148,16 +158,84 @@ public class ValidateQueryTool implements IMcpTool
             return ToolResult.error("Project is closed: " + projectName).toJson(); //$NON-NLS-1$
         }
 
-        return hasModule ? doValidateModule(ctx.project(), modulePath, method, dcsMode)
-            : doValidateQuery(ctx.project(), queryText, dcsMode);
+        var activator = Activator.getDefault();
+        var server = activator == null ? null : activator.getMcpServer();
+        ActiveToolCall call = server == null ? null : server.getExecutingToolCall();
+        var progress = hasModule ? new ModuleProgress(modulePath, dcsMode) : null;
+        return validateWithDeadline(QueryValidationJobs.shared(), TIMEOUT_MS, ctx.project().getName(),
+            () -> call != null && call.isResponseDelivered(), cancel -> hasModule
+                ? doValidateModule(ctx.project(), modulePath, method, dcsMode, cancel, progress)
+                : doValidateQuery(ctx.project(), queryText, dcsMode, cancel), progress);
     }
 
-    String doValidateQuery(IProject project, String queryText, boolean dcsMode)
+    /** Waits for the whole tool, not for each literal separately. Writer preflight stays synchronous. */
+    static String validateWithDeadline(QueryValidationJobs jobs, long timeoutMs, String projectName,
+        BooleanSupplier responseDelivered, Function<CancelIndicator, String> work)
     {
-        return validator.validate(project, queryText, dcsMode).toJson();
+        return validateWithDeadline(jobs, timeoutMs, projectName, responseDelivered, work, null);
     }
 
-    String doValidateModule(IProject project, String modulePath, String method, boolean dcsMode)
+    static String validateWithDeadline(QueryValidationJobs jobs, long timeoutMs, String projectName,
+        BooleanSupplier responseDelivered, Function<CancelIndicator, String> work, ModuleProgress progress)
+    {
+        try
+        {
+            QueryValidationJobs.Result result = jobs.run(projectName, timeoutMs, responseDelivered, work);
+            if (result.response() != null)
+            {
+                return result.response();
+            }
+            if (result.jobId() != null)
+            {
+                return incomplete(progress, "Query validation did not finish in time or was interrupted. " //$NON-NLS-1$
+                    + "Cancellation was requested, but EDT may still hold a read lock until the worker exits. " //$NON-NLS-1$
+                    + "Check get_job_status for jobId '" + result.jobId() + "' before retrying."); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            return incomplete(progress, "Query validation did not return a result before timeout or cancellation."); //$NON-NLS-1$
+        }
+        catch (QueryValidationJobs.CapacityException e)
+        {
+            return incomplete(progress, "No query validation slot is available. Detached validation still occupies "
+                + "capacity. Check get_job_status for job IDs: " + String.join(", ", e.blockingJobIds()) + ".");
+        }
+        catch (RejectedExecutionException e)
+        {
+            return incomplete(progress, "Query validation could not start: " + e.getMessage());
+        }
+        catch (RuntimeException e)
+        {
+            return ToolResult.error("Native query validation failed: " + e.getMessage()).toJson(); //$NON-NLS-1$
+        }
+    }
+
+    private static String incomplete(ModuleProgress progress, String message)
+    {
+        ToolResult result = ToolResult.error(message);
+        return (progress == null ? result : progress.populate(result).put("validationComplete", false)).toJson();
+    }
+
+    /** This is a same-project candidate, not verified ownership of the Configuration lock. */
+    static String activeValidationHint(QueryValidationJobs jobs, String projectName)
+    {
+        var job = jobs.runningForProject(projectName);
+        return job == null ? "" : "\nA validate_query job for this project is still active (started " //$NON-NLS-1$ //$NON-NLS-2$
+            + Instant.ofEpochMilli(job.getStartedAtMs()) + "). It may be holding a read lock. " //$NON-NLS-1$
+            + "Check get_job_status for jobId '" + job.getId() + "' before retrying."; //$NON-NLS-1$
+    }
+
+    String doValidateQuery(IProject project, String queryText, boolean dcsMode, CancelIndicator cancel)
+    {
+        return validator.validate(project, queryText, dcsMode, cancel).toJson();
+    }
+
+    String doValidateModule(IProject project, String modulePath, String method, boolean dcsMode,
+        CancelIndicator cancel)
+    {
+        return doValidateModule(project, modulePath, method, dcsMode, cancel, new ModuleProgress(modulePath, dcsMode));
+    }
+
+    String doValidateModule(IProject project, String modulePath, String method, boolean dcsMode,
+        CancelIndicator cancel, ModuleProgress progress)
     {
         try
         {
@@ -165,7 +243,7 @@ public class ValidateQueryTool implements IMcpTool
             if (file == null || !file.exists())
                 return ToolResult.error("Module '" + modulePath
                     + "' not found. Use list_modules to choose a stored BSL modulePath.").toJson();
-            return validateModuleText(project, modulePath, BslModuleUtils.readFileText(file), method, dcsMode);
+            return validateModuleText(project, BslModuleUtils.readFileText(file), method, dcsMode, cancel, progress);
         }
         catch (Exception e)
         {
@@ -181,39 +259,73 @@ public class ValidateQueryTool implements IMcpTool
             : message + ". Check read_module_source or pass queryText directly.";
     }
 
-    String validateModuleText(IProject project, String modulePath, String source, String method, boolean dcsMode)
+    String validateModuleText(IProject project, String modulePath, String source, String method,
+        boolean dcsMode, CancelIndicator cancel)
     {
-        List<Map<String, Object>> queries = new ArrayList<>();
-        List<Map<String, Object>> skipped = new ArrayList<>();
+        return validateModuleText(project, source, method, dcsMode, cancel, new ModuleProgress(modulePath, dcsMode));
+    }
+
+    private String validateModuleText(IProject project, String source, String method,
+        boolean dcsMode, CancelIndicator cancel, ModuleProgress progress)
+    {
         boolean available = true;
         for (var literal : ModuleQueryExtractor.extract(source, method))
         {
+            if (cancel.isCanceled())
+            {
+                return incomplete(progress, "Module query validation was interrupted."); //$NON-NLS-1$
+            }
             Map<String, Object> entry = literal.location();
             if (literal.reason() != null)
             {
                 entry.put("reason", literal.reason());
-                skipped.add(entry);
+                progress.addSkipped(entry);
                 continue;
             }
-            var validation = validator.validate(project, literal.queryText(), dcsMode);
+            var validation = validator.validate(project, literal.queryText(), dcsMode, cancel);
+            if (cancel.isCanceled())
+            {
+                return incomplete(progress, "Module query validation was interrupted.");
+            }
             available &= validation.available();
             Map<String, Object> values = new LinkedHashMap<>(validation.values());
             @SuppressWarnings("unchecked")
             var issues = (List<Map<String, Object>>)values.get("issues");
             values.put("issues", issues.stream().map(literal::mapIssue).toList());
             entry.putAll(values);
-            queries.add(entry);
+            progress.addQuery(entry);
         }
         ToolResult result = available ? ToolResult.success()
             : ToolResult.error("Native query validation was unavailable for some literals. "
                 + "Check each incompleteReason, wait for project loading and retry.");
-        result.put(McpKeys.MODULE_PATH, modulePath).put(DCS_MODE, dcsMode)
-            .put("queries", queries).put("skipped", skipped)
-            .put("foundCount", queries.size()).put("skippedCount", skipped.size());
-        if (queries.isEmpty())
-            result.put("message", skipped.isEmpty() ? "no query literal found. Pass queryText to validate a query directly."
+        progress.populate(result);
+        if (progress.queries.isEmpty())
+            result.put("message", progress.skipped.isEmpty() ? "no query literal found. Pass queryText to validate a query directly."
                 : "No standalone query literal validated. Check skipped reasons or pass queryText directly.");
         return result.toJson();
     }
-    
+
+    static final class ModuleProgress
+    {
+        private final String modulePath;
+        private final boolean dcsMode;
+        private final List<Map<String, Object>> queries = new ArrayList<>();
+        private final List<Map<String, Object>> skipped = new ArrayList<>();
+
+        ModuleProgress(String modulePath, boolean dcsMode)
+        {
+            this.modulePath = modulePath;
+            this.dcsMode = dcsMode;
+        }
+
+        synchronized void addQuery(Map<String, Object> entry) { queries.add(entry); }
+        synchronized void addSkipped(Map<String, Object> entry) { skipped.add(entry); }
+
+        synchronized ToolResult populate(ToolResult result)
+        {
+            return result.put(McpKeys.MODULE_PATH, modulePath).put(DCS_MODE, dcsMode)
+                .put("queries", List.copyOf(queries)).put("skipped", List.copyOf(skipped))
+                .put("foundCount", queries.size()).put("skippedCount", skipped.size());
+        }
+    }
 }

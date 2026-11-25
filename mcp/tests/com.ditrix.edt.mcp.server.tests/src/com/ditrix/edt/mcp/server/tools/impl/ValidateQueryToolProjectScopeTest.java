@@ -7,6 +7,7 @@ import static org.mockito.Mockito.*;
 import java.lang.reflect.Field;
 
 import org.eclipse.core.resources.IProject;
+import org.eclipse.xtext.util.CancelIndicator;
 import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.Activator;
@@ -34,9 +35,9 @@ public class ValidateQueryToolProjectScopeTest
             };
             var unavailable = headless.validate(project, "SELECT 1", true);
             QueryValidationService service = mock(QueryValidationService.class);
-            when(service.validate(project, "SELECT 1", true)).thenReturn(unavailable);
+            when(service.validate(project, "SELECT 1", true, CancelIndicator.NullImpl)).thenReturn(unavailable);
 
-            String json = new ValidateQueryTool(service).doValidateQuery(project, "SELECT 1", true);
+            String json = new ValidateQueryTool(service).doValidateQuery(project, "SELECT 1", true, CancelIndicator.NullImpl);
 
             assertEquals(unavailable.toJson(), json);
             var result = JsonParser.parseString(json).getAsJsonObject();
@@ -45,7 +46,7 @@ public class ValidateQueryToolProjectScopeTest
             assertFalse(result.get("valid").getAsBoolean());
             assertTrue(result.get("dcsMode").getAsBoolean());
             assertTrue(result.get("error").getAsString().contains("MyExt"));
-            verify(service).validate(project, "SELECT 1", true);
+            verify(service).validate(project, "SELECT 1", true, CancelIndicator.NullImpl);
         }
         finally
         {

@@ -47,3 +47,16 @@ Module mode returns `queries`, `skipped`, `foundCount`, and `skippedCount`. Each
 - `success:true` means validation ran, not that queries are valid. Check the top-level verdict in text mode, or each `queries[]` verdict in module mode; module mode has no aggregate `valid`. Skips/counts do not prove coverage of runtime-generated queries.
 - For an extension project, the union scope resolves both extension-owned objects and base-configuration objects, including inherited fields of borrowed objects.
 - If QL language support is unavailable the tool returns an error rather than a validation result.
+
+## Timeout and cancellation
+
+The read tool waits up to 30 seconds for the entire call, including waiting for an available worker and all literals in module mode. If detached validations occupy both workers, the error names their job IDs. A partial module response is marked incomplete and contains only the literals already processed.
+Query validation has its own bounded worker pool, separate from other MCP background jobs.
+An ordinary completed validation does not create a job record. If the caller reaches its deadline
+or is interrupted (including by a delivered interrupt response) while validation is active, the outstanding
+work appears in `get_server_status.runningJobs`. A timeout response is an error, not a validation
+verdict; if it includes a job ID, track that same ID with `get_job_status`.
+`cancel_job` with that ID and `confirm=true` requests cancellation. The deadline requests it
+automatically. Cancellation is cooperative: EDT can still hold a read transaction until its native
+callback exits. While the job is `running`, do not assume the lock has been released or start another
+validation for the same query. If the native validator does not return, EDT may still need to be restarted.
