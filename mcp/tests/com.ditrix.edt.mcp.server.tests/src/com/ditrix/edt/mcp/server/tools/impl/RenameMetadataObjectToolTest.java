@@ -388,6 +388,31 @@ public class RenameMetadataObjectToolTest
         }
     }
 
+    @Test
+    public void testTimeoutDuringPostConsentCheckReportsTheSafetyCheck()
+    {
+        CountDownLatch release = new CountDownLatch(1);
+        try
+        {
+            String error = RenameMetadataObjectTool.runRenameBounded("DataProcessor.Old", "New",
+                true, SHORT_TIMEOUT_MS, (progress, monitor) -> {
+                    progress.enter(RenameProgress.Phase.CHECKING_SAFETY);
+                    awaitQuietly(release);
+                    return WEDGED_PAYLOAD;
+                });
+            assertTrue(error, error.contains("Consent was granted"));
+            assertTrue(error, error.contains("was checking whether it was safe"));
+            assertTrue(error, error.contains("may still apply if the check succeeds"));
+            assertTrue(error, error.contains("\"mutationOutcomeUnknown\":true"));
+            assertFalse(error, error.contains("answer arriving later"));
+            assertFalse(error, error.contains("PARTIALLY renamed"));
+        }
+        finally
+        {
+            release.countDown();
+        }
+    }
+
     /**
      * The safety-critical distinction. A rename that timed out BEFORE the cascade started rewriting
      * anything and one that timed out MID-cascade need opposite reactions from the caller, so the
