@@ -584,7 +584,11 @@ public class WriteModuleSourceReplaceAllTest
     {
         tree.module("src/" + MODULE, ENGLISH); //$NON-NLS-1$
         String error = refused(write(Map.of("mode", "replaceEverything", "oldSource", "OldName", "source", "NewName"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
-        assertTrue(error, error.endsWith("insertAfter, deleteMethods, replaceAll")); //$NON-NLS-1$
+        String prefix = "invalid mode 'replaceEverything'. Allowed: "; //$NON-NLS-1$
+        assertTrue(error, error.startsWith(prefix));
+        List<String> allowedModes = List.of(error.substring(prefix.length()).split(", ")); //$NON-NLS-1$
+        assertTrue(error, allowedModes.containsAll(
+            List.of("insertAfter", "deleteMethods", "replaceAll", "deleteModule"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
     }
     private static String refused(String response)
     {

@@ -141,14 +141,15 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
      * for the same-path rewrite) and {@code evaluate_expression} (gated always, because
      * arbitrary BSL cannot be classified), {@code business_process_route_map} (gated for
      * replace/remove), plus {@code project_checks} (gated only for
-     * set/switch that change something and create/copy/delete profile writes).
+     * set/switch that change something and create/copy/delete profile writes), and
+     * {@code write_module_source} (only to delete a blank module file).
      * Each tool decides when to call, the gate does not.
      *
      * <p>Related to but deliberately NOT equal to
      * {@code ToolAnnotationClassifier.DESTRUCTIVE_TOOLS}: that MCP-hint list carries
      * {@code delete_launch_config} (which is cheap/recoverable and NOT gated) and
-     * omits five gated tools ({@code modify_metadata}, {@code dcs}, {@code git},
-     * {@code evaluate_expression} and {@code project_checks}). {@code modify_metadata} and
+     * omits gated tools such as {@code modify_metadata}, {@code dcs}, {@code git},
+     * {@code evaluate_expression}, {@code project_checks}, and {@code write_module_source}. {@code modify_metadata} and
      * {@code evaluate_expression} fall to the classifier's non-destructive-write default because
      * their typical call destroys nothing. {@code dcs}, {@code git} and {@code project_checks}
      * override {@code getAnnotations} with {@code destructiveHint:true} because one action can
@@ -170,6 +171,8 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
         // server end nothing.
         "standalone_server", //$NON-NLS-1$
         "modify_metadata", //$NON-NLS-1$
+        // deleteModule only, not source edits.
+        "write_module_source", //$NON-NLS-1$
         "dcs", //$NON-NLS-1$
         "business_process_route_map", //$NON-NLS-1$
         // Settings/profile writes ask, including destructive deletion; reads and effective no-ops do not.
