@@ -86,7 +86,10 @@ public final class BootstrapBuild
                     { add(jar, classes.relativize(path).toString().replace('\\', '/'), Files.readAllBytes(path)); }
                 }
             }
-            add(jar, "META-INF/LICENSE-edt-mcp.txt", Files.readAllBytes(Path.of(args[4])));
+            // Keep the stable entry byte-identical across LF and CRLF checkouts.
+            add(jar, "META-INF/LICENSE-edt-mcp.txt", Files.readString(Path.of(args[4]))
+                .replace(String.valueOf((char)13) + (char)10, String.valueOf((char)10))
+                .getBytes(java.nio.charset.StandardCharsets.UTF_8));
         }
         System.out.println("Embedded bootstrap generated from " + McpToolRegistry.getInstance().getToolCount() + " registered tools");
     }

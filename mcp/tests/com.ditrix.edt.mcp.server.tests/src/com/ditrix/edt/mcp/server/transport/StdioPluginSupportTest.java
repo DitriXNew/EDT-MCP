@@ -13,6 +13,7 @@ import org.eclipse.core.runtime.IStatus;
 import org.eclipse.core.runtime.Platform;
 import org.junit.*;
 import org.osgi.framework.FrameworkUtil;
+import com.ditrix.edt.mcp.server.ipc.EndpointRegistry;
 import com.ditrix.edt.mcp.server.ipc.PrivatePaths;
 import com.ditrix.edt.mcp.server.utils.Log;
 
@@ -44,6 +45,70 @@ public class StdioPluginSupportTest extends StdioTestSupport
     private static Path extract(Path directory, byte[] runtime) throws IOException
     { return StdioPluginSupport.extractBootstrap(directory, runtime, ENTRY, Files::delete); }
 
+    @Test public void upgradingPublishesTheNewRuntimeToAPreloadedLegacyEntry() throws Exception
+    {
+        Path directory = seeded();
+        String legacyName = runtimeName(PREVIOUS);
+        EndpointRegistry.atomicWrite(directory.resolve("previous"), "");
+        String otherAbi = "abi-2-" + legacyName;
+        PrivatePaths.atomicWrite(directory.resolve(otherAbi), PREVIOUS);
+        EndpointRegistry.atomicWrite(directory.resolve("current-abi-2"), otherAbi + "\n");
+
+        extract(directory, CURRENT);
+        assertEquals("A preloaded legacy entry must discover the compatible update",
+            runtimeName(CURRENT) + "\n",
+            Files.readString(directory.resolve("current")));
+        assertEquals(legacyName + "\n", Files.readString(directory.resolve("previous")));
+        assertArrayEquals(PREVIOUS, Files.readAllBytes(directory.resolve(legacyName)));
+        // Another ABI namespace is not this release's business: neither repointed nor cleaned.
+        assertEquals(otherAbi + "\n", Files.readString(directory.resolve("current-abi-2")));
+        assertArrayEquals(PREVIOUS, Files.readAllBytes(directory.resolve(otherAbi)));
+    }
+
+    @Test public void aLockedLegacyEntryKeepsItsRuntimeAndCanBeReplacedAfterClosing() throws Exception
+    {
+        Assume.assumeTrue(System.getProperty("os.name").startsWith("Windows"));
+        Path directory = PrivatePaths.directory(temporary.newFolder().toPath());
+        Path entry = directory.resolve("edt-mcp-bootstrap.jar");
+        PrivatePaths.atomicWrite(entry, OLD);
+        String name = runtimeName(PREVIOUS);
+        PrivatePaths.atomicWrite(directory.resolve(name), PREVIOUS);
+        PrivatePaths.atomicWrite(directory.resolve("current"), (name + "\n").getBytes(StandardCharsets.UTF_8));
+        var noDelete = (OpenOption)Class.forName("com.sun.nio.file.ExtendedOpenOption", true,
+            ClassLoader.getPlatformClassLoader()).getField("NOSHARE_DELETE").get(null);
+        try (var held = Files.newByteChannel(entry, Set.of(StandardOpenOption.READ, noDelete)))
+        {
+            assertThrows(IOException.class, () -> extract(directory, CURRENT));
+            assertArrayEquals(OLD, Files.readAllBytes(entry));
+            String published = Files.readString(directory.resolve("current")).trim();
+            assertEquals(runtimeName(CURRENT), published);
+            assertArrayEquals(CURRENT, Files.readAllBytes(directory.resolve(published)));
+            assertEquals(name + "\n", Files.readString(directory.resolve("previous")));
+            assertArrayEquals(PREVIOUS, Files.readAllBytes(directory.resolve(name)));
+        }
+        assertEquals(entry, extract(directory, CURRENT));
+        assertArrayEquals(ENTRY, Files.readAllBytes(entry));
+        assertEquals(runtimeName(CURRENT) + "\n", Files.readString(directory.resolve("current")));
+        assertEquals(name + "\n", Files.readString(directory.resolve("previous")));
+    }
+
+    @Test public void deniedEntryReplacementStillPublishesAndCleansCompatibleRuntimes() throws Exception
+    {
+        Path directory = seeded();
+        Path entry = directory.resolve("edt-mcp-bootstrap.jar");
+        PrivatePaths.atomicWrite(entry, ENTRY);
+        var failure = assertThrows(AccessDeniedException.class, () ->
+            StdioPluginSupport.extractBootstrap(directory, CURRENT, OLD, Files::delete, (target, bytes) -> {
+                throw new AccessDeniedException(target.toString());
+            }));
+        assertEquals(entry.toString(), failure.getFile());
+        assertArrayEquals(ENTRY, Files.readAllBytes(entry));
+        assertEquals(runtimeName(CURRENT) + "\n", Files.readString(directory.resolve("current")));
+        assertEquals(runtimeName(PREVIOUS) + "\n", Files.readString(directory.resolve("previous")));
+        assertFalse("Cleanup must run even when entry replacement fails",
+            Files.exists(directory.resolve(runtimeName(OLD))));
+    }
+
     @Test public void removesOldRuntimeAfterPublishingCurrent() throws Exception
     {
         Path directory = seeded();
@@ -65,7 +130,7 @@ public class StdioPluginSupportTest extends StdioTestSupport
     @Test public void leavesEveryNonmatchingNameAlone() throws Exception
     {
         Path directory = seeded();
-        var other = List.of("notes.jar", "a".repeat(63) + ".jar", "a".repeat(65) + ".jar",
+        var other = List.of("abi-2-" + "a".repeat(64) + ".jar", "notes.jar", "a".repeat(63) + ".jar", "a".repeat(65) + ".jar",
             "A".repeat(64) + ".jar", "g".repeat(64) + ".jar", "b".repeat(64) + ".JAR",
             "a".repeat(64) + ".jar.bak");
         for (String name : other) { PrivatePaths.atomicWrite(directory.resolve(name), OLD); }

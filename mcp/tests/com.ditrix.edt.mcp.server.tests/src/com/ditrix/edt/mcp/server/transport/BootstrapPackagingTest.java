@@ -5,7 +5,6 @@ import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.nio.file.attribute.*;
-import java.security.MessageDigest;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.jar.*;
@@ -151,6 +150,11 @@ public class BootstrapPackagingTest extends StdioTestSupport
     private byte[] fakeRuntime() throws Exception
     {
         if (fakeRuntime != null) { return fakeRuntime; }
+        fakeRuntime = fakeRuntime("runtime executed"); return fakeRuntime;
+    }
+
+    private byte[] fakeRuntime(String message) throws Exception
+    {
         Path directory = temporary.newFolder().toPath(); Path source = directory.resolve("StdioBootstrap.java");
         Files.writeString(source, """
             package com.ditrix.edt.mcp.server.ipc;
@@ -162,6 +166,7 @@ public class BootstrapPackagingTest extends StdioTestSupport
                 public static void main(String[] args) { }
             }
             """);
+        Files.writeString(source, Files.readString(source).replace("runtime executed", message));
         var compiled = execute(directory, jdkBinary("javac").toString(), "--release", "17", "-d", directory.toString(), source.toString());
         assertEquals(compiled.stderr(), 0, compiled.exit());
         var bytes = new ByteArrayOutputStream();
@@ -171,7 +176,7 @@ public class BootstrapPackagingTest extends StdioTestSupport
             var entry = new JarEntry(name); entry.setTime(0); jar.putNextEntry(entry);
             jar.write(Files.readAllBytes(directory.resolve(name))); jar.closeEntry();
         }
-        fakeRuntime = bytes.toByteArray(); return fakeRuntime;
+        return bytes.toByteArray();
     }
 
     private EntryFiles entryFiles() throws Exception
@@ -187,7 +192,7 @@ public class BootstrapPackagingTest extends StdioTestSupport
             assertNotNull("Use the real entry jar built into the plugin", input); Files.copy(input, entry);
         }
         byte[] bytes = fakeRuntime();
-        String name = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes)) + ".jar";
+        String name = StdioPluginSupportTest.runtimeName(bytes);
         Path runtime = directory.resolve(name);
         PrivatePaths.atomicWrite(runtime, bytes);
         PrivatePaths.atomicWrite(directory.resolve("current"), (name + "\n").getBytes(StandardCharsets.UTF_8));
@@ -209,6 +214,27 @@ public class BootstrapPackagingTest extends StdioTestSupport
         assertEquals(result.stderr(), 1, result.stderr().lines().count());
     }
 
+    @Test public void builtEntryDoesNotUseAnotherAbiPointer() throws Exception
+    {
+        var files = entryFiles();
+        // A different ABI namespace must not substitute for the installed launcher's pointer.
+        PrivatePaths.atomicWrite(files.directory().resolve("current-abi-2"),
+            ("abi-2-" + files.runtime().getFileName() + "\n").getBytes(StandardCharsets.UTF_8));
+        PrivatePaths.atomicWrite(files.directory().resolve("abi-2-" + files.runtime().getFileName()), fakeRuntime());
+        Files.deleteIfExists(files.directory().resolve("current"));
+        assertRefused(files, runEntry(files));
+    }
+
+    @Test public void builtEntryRejectsAnExecutableRuntimeFromAnotherAbi() throws Exception
+    {
+        var files = entryFiles();
+        String otherAbi = "abi-2-" + files.runtime().getFileName();
+        PrivatePaths.atomicWrite(files.directory().resolve(otherAbi), fakeRuntime());
+        PrivatePaths.atomicWrite(files.directory().resolve("current"),
+            (otherAbi + "\n").getBytes(StandardCharsets.UTF_8));
+        assertRefused(files, runEntry(files));
+    }
+
     @Test public void builtEntryExecutesAValidRuntimeWithOnlyTheEntryJarOnItsClasspath() throws Exception
     {
         var files = entryFiles();
@@ -218,6 +244,24 @@ public class BootstrapPackagingTest extends StdioTestSupport
         assertEquals("runtime executed", Files.readString(files.marker()));
         assertEquals(result.stderr(), 0, result.exit());
         assertEquals("", result.stdout()); assertEquals("", result.stderr());
+    }
+
+    @Test public void retainedEntryExecutesTheNewRuntimeWhenReplacementIsDenied() throws Exception
+    {
+        var files = entryFiles();
+        byte[] oldEntry = Files.readAllBytes(files.entry());
+        Path destination = files.directory().resolve("edt-mcp-bootstrap.jar");
+        PrivatePaths.atomicWrite(destination, oldEntry);
+        byte[] replacement = fakeRuntime("updated runtime executed");
+        assertThrows(java.nio.file.AccessDeniedException.class, () ->
+            StdioPluginSupport.extractBootstrap(files.directory(), replacement, new byte[]{0}, Files::delete,
+                (target, bytes) -> { throw new java.nio.file.AccessDeniedException(target.toString()); }));
+        assertArrayEquals(oldEntry, Files.readAllBytes(destination));
+        var retained = new EntryFiles(files.directory(), destination, files.runtime(), files.marker());
+        var result = runEntry(retained);
+        assertEquals(result.stderr(), 0, result.exit());
+        assertEquals("", result.stdout()); assertEquals("", result.stderr());
+        assertEquals("updated runtime executed", Files.readString(files.marker()));
     }
 
     @Test public void builtEntryRejectsForeignWritableDirectoryBeforeRuntimeInitialization() throws Exception
@@ -376,6 +420,27 @@ public class BootstrapPackagingTest extends StdioTestSupport
             assertEquals("runtime executed", Files.readString(files.marker()));
             StdioPluginSupportTest.assertListing(files.directory(), "current", "previous", "extract.lock",
                 "entry.jar", "edt-mcp-bootstrap.jar", current, files.runtime().getFileName().toString(), "executed.marker");
+        }
+    }
+
+    @Test public void stableEntryRemainsByteIdenticalToThePublishedAbiOneLauncher() throws Exception
+    {
+        var files = entryFiles();
+        String hash = java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
+            .digest(Files.readAllBytes(files.entry())));
+        // edt-mcp-bootstrap.jar from the published MCP-EDT.v2.26.1.zip release.
+        assertEquals("A different stable entry requires an explicit ABI migration",
+            "26b2d4c1384cee32e8c5c56cf78b988b9b18a5ae79612d6558e8dbd4f92f3e6b", hash);
+    }
+
+    @Test public void stableEntryLicenseUsesReleaseLineEndings() throws Exception
+    {
+        var files = entryFiles();
+        try (var jar = new JarFile(files.entry().toFile());
+             var input = jar.getInputStream(jar.getJarEntry("META-INF/LICENSE-edt-mcp.txt")))
+        {
+            assertFalse("Checkout CRLF must not change the stable launcher bytes",
+                new String(input.readAllBytes(), StandardCharsets.UTF_8).contains("\r"));
         }
     }
 
