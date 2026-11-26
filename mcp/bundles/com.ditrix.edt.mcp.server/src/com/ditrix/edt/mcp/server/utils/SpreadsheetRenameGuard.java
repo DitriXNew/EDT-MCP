@@ -238,12 +238,14 @@ public final class SpreadsheetRenameGuard
         return refusal(projectName, ownerFqn, candidates, extension, reader, null);
     }
 
-    private static String refusal(String projectName, String ownerFqn, List<Candidate> candidates, boolean extension,
+    static String refusal(String projectName, String ownerFqn, List<Candidate> candidates, boolean extension,
         Function<Candidate, ProjectSpreadsheetReader.Evidence> reader, SpreadsheetRenameRepair.Scope repair)
     {
         List<SpreadsheetRenameRepair.Entry> entries = new ArrayList<>();
+        boolean mayRepair = !extension && repair != null && repair.canRestore();
         for (Candidate candidate : candidates)
         {
+            long stamp = mayRepair ? synchronizedStamp(candidate.file()) : IResource.NULL_STAMP;
             var evidence = reader.apply(candidate);
             if (evidence.availability() != ProjectSpreadsheetReader.Availability.SECURE)
             {
@@ -252,24 +254,32 @@ public final class SpreadsheetRenameGuard
                     + projectName
                     + "', and its saved description cannot be verified safely. Nothing was renamed. " //$NON-NLS-1$
                     + "Preserve unsaved work. Close the spreadsheet editors before retrying. If the error " //$NON-NLS-1$
-                    + "persists, use clean_project to reload the saved files without reopening the template."; //$NON-NLS-1$
+                    + "persists, use clean_project to reload the saved files without reopening the template, " //$NON-NLS-1$
+                    + "or provide a synonym for the language in EDT's active editing language before reopening."; //$NON-NLS-1$
             }
             LanguageKey lost = evidence.loss();
             if (lost != null)
             {
-                if (repair != null && repair.canRestore() && candidate.workbookId() != IBmObject.BM_NULL_ID
-                    && !evidence.descriptions().isEmpty())
+                if (mayRepair && candidate.workbookId() != IBmObject.BM_NULL_ID && stamp != IResource.NULL_STAMP
+                    && !evidence.descriptions().isEmpty() && stamp == synchronizedStamp(candidate.file()))
                 {
-                    entries.add(new SpreadsheetRenameRepair.Entry(candidate.workbookId(), candidate.file(),
-                        candidate.file().getModificationStamp(), evidence.descriptions()));
-                    continue;
+                    // Recheck secure bytes and the Eclipse stamp before admitting the native rename.
+                    var checked = reader.apply(candidate);
+                    if (checked.availability() == ProjectSpreadsheetReader.Availability.SECURE
+                        && checked.descriptions().equals(evidence.descriptions())
+                        && stamp == synchronizedStamp(candidate.file()))
+                    {
+                        entries.add(new SpreadsheetRenameRepair.Entry(candidate.workbookId(), checked.descriptions()));
+                        continue;
+                    }
                 }
                 return "Renaming '" + MetadataTypeUtils.toCanonicalEnglishFqn(ownerFqn) //$NON-NLS-1$
                     + "' would erase the saved language description for '" + lost.id() //$NON-NLS-1$
                     + "' in spreadsheet template '" + candidate.templateName() //$NON-NLS-1$
                     + "' in project '" + projectName + "'. Nothing was renamed. Preserve any unsaved work, " //$NON-NLS-1$ //$NON-NLS-2$
                     + "close the spreadsheet editors and retry. If the error persists, use clean_project " //$NON-NLS-1$
-                    + "to reload the saved files without reopening the template."; //$NON-NLS-1$
+                    + "to reload the saved files without reopening the template, or provide a synonym for the language " //$NON-NLS-1$
+                    + "in EDT's active editing language before reopening."; //$NON-NLS-1$
             }
         }
         if (!entries.isEmpty())
@@ -277,6 +287,12 @@ public final class SpreadsheetRenameGuard
             repair.arm(entries);
         }
         return null;
+    }
+
+    private static long synchronizedStamp(IFile file)
+    {
+        return file != null && file.exists() && file.isSynchronized(IResource.DEPTH_ZERO)
+            && !file.isLinked(IResource.CHECK_ANCESTORS) ? file.getModificationStamp() : IResource.NULL_STAMP;
     }
 
     /** Only the addressed owner's attached spreadsheets; never extend the scan to the project. */

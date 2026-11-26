@@ -4,22 +4,18 @@ package com.ditrix.edt.mcp.server.utils;
 
 import java.util.Collection;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
-import org.eclipse.core.resources.IResource;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.ltk.core.refactoring.Change;
 
 import com._1c.g5.v8.bm.core.IBmObject;
 import com._1c.g5.v8.bm.core.IBmTransaction;
-import com._1c.g5.v8.dt.core.platform.IDependentProject;
 import com._1c.g5.v8.dt.metadata.mdclass.DataProcessor;
 import com._1c.g5.v8.dt.metadata.mdclass.ExternalDataProcessor;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
@@ -30,7 +26,6 @@ import com._1c.g5.v8.dt.refactoring.core.IRenameRefactoringContributor;
 import com._1c.g5.v8.dt.refactoring.core.RefactoringOperationDescriptor;
 import com._1c.g5.v8.dt.refactoring.core.RefactoringSettings;
 import com._1c.g5.v8.dt.refactoring.core.RefactoringStatus;
-import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.HostKind;
 import com.ditrix.edt.mcp.server.utils.SpreadsheetRenameGuard.LanguageKey;
 
@@ -41,72 +36,31 @@ public final class SpreadsheetRenameRepair implements IRenameRefactoringContribu
     // EDT passes precisely the same settings from the direct pre-change hook to the BM visitor,
     // which can run on a different thread. Never associate a normal EDT editor rename with a plan.
     private static final Map<RefactoringSettings, Scope> BUILDING = new ConcurrentHashMap<>();
-    private static final String UNVERIFIED_MODELS =
-        "Could not verify the affected EDT models. Nothing was renamed."; //$NON-NLS-1$
-
-    record Entry(long workbookId, IFile file, long modificationStamp, Map<LanguageKey, String> descriptions)
+    record Entry(long workbookId, Map<LanguageKey, String> descriptions)
     {
     }
 
-    private static boolean supported(MdObject owner)
+    private static boolean supported(HostKind host, MdObject owner)
     {
-        return HostKind.current() == HostKind.WINDOWED && owner instanceof IBmObject
+        return host == HostKind.WINDOWED && owner instanceof IBmObject
             && (owner instanceof DataProcessor || owner instanceof ExternalDataProcessor);
-    }
-
-    private static Collection<IProject> dependents(IProject project)
-    {
-        var activator = Activator.getDefault();
-        return activator == null || activator.getV8ProjectManager() == null ? null
-            : IDependentProject.getDependent(project, activator.getV8ProjectManager().getProjects());
-    }
-
-    public static String dirtyRefusal(IProject project, MdObject owner)
-    {
-        if (!supported(owner))
-        {
-            return null;
-        }
-        try
-        {
-            var dependentProjects = dependents(project);
-            if (dependentProjects == null)
-            {
-                return UNVERIFIED_MODELS;
-            }
-            var projects = new LinkedHashSet<>(dependentProjects);
-            projects.add(project);
-            for (var affected : projects)
-            {
-                var resolution = BmModelResolver.resolve(affected);
-                if (!resolution.isAvailable())
-                {
-                    return UNVERIFIED_MODELS;
-                }
-                // EDT's native planner saves dirty local contexts before contributors run.
-                if (resolution.getModel().getAllLocalContexts().stream().anyMatch(context -> context.isDirty()))
-                {
-                    return "Save or preserve unsaved edits in project '" + affected.getName() //$NON-NLS-1$
-                        + "' before preparing this rename. Nothing was renamed."; //$NON-NLS-1$
-                }
-            }
-        }
-        catch (RuntimeException e)
-        {
-            return UNVERIFIED_MODELS;
-        }
-        return null;
     }
 
     public static Scope prepare(IProject project, MdObject owner, boolean confirm)
     {
-        var dependentProjects = confirm && supported(owner) ? dependents(project) : null;
+        return prepare(project, owner, confirm, HostKind.current(), RenameEditorGuard::dependents);
+    }
+
+    static Scope prepare(IProject project, MdObject owner, boolean confirm, HostKind host,
+        java.util.function.Function<IProject, Collection<IProject>> findDependents)
+    {
+        var dependentProjects = confirm && supported(host, owner) ? findDependents.apply(project) : null;
         if (dependentProjects == null || !dependentProjects.isEmpty()
             || CONSTRUCTING.get() != null || !(owner instanceof IBmObject bm))
         {
-            return new Scope(null, null, IBmObject.BM_NULL_ID);
+            return new Scope(null, null, IBmObject.BM_NULL_ID, findDependents);
         }
-        Scope scope = new Scope(project, owner, bm.bmGetId());
+        Scope scope = new Scope(project, owner, bm.bmGetId(), findDependents);
         CONSTRUCTING.set(scope);
         return scope;
     }
@@ -116,20 +70,23 @@ public final class SpreadsheetRenameRepair implements IRenameRefactoringContribu
         private final IProject project;
         private final MdObject original;
         private final long ownerId;
+        private final java.util.function.Function<IProject, Collection<IProject>> findDependents;
         private volatile RefactoringSettings settings;
         private final AtomicBoolean attached = new AtomicBoolean();
         private volatile List<Entry> entries = List.of();
 
-        private Scope(IProject project, MdObject original, long ownerId)
+        private Scope(IProject project, MdObject original, long ownerId,
+            java.util.function.Function<IProject, Collection<IProject>> findDependents)
         {
             this.project = project;
             this.original = original;
             this.ownerId = ownerId;
+            this.findDependents = findDependents;
         }
 
         public boolean canRestore()
         {
-            var currentDependents = project == null ? null : dependents(project);
+            var currentDependents = project == null ? null : findDependents.apply(project);
             return settings != null && attached.get() && currentDependents != null
                 && currentDependents.isEmpty();
         }
@@ -198,10 +155,11 @@ public final class SpreadsheetRenameRepair implements IRenameRefactoringContribu
         return List.of();
     }
 
-    private static final class RepairOperation implements IBmRefactoringOperation
+    static final class RepairOperation implements IBmRefactoringOperation
     {
         private final Scope scope;
         private IBmTransaction transaction;
+
         RepairOperation(Scope scope)
         {
             this.scope = scope;
@@ -216,66 +174,52 @@ public final class SpreadsheetRenameRepair implements IRenameRefactoringContribu
         @Override
         public void perform()
         {
-            if (scope.entries.isEmpty())
+            if (transaction == null)
             {
                 return;
             }
-            if (transaction == null || !(transaction.getObjectById(scope.ownerId) instanceof MdObject))
-            {
-                throw changed();
-            }
             for (Entry entry : scope.entries)
             {
-                if (!entry.file().exists() || !entry.file().isSynchronized(IResource.DEPTH_ZERO)
-                    || entry.file().getModificationStamp() != entry.modificationStamp()
-                    || entry.file().isLinked(IResource.CHECK_ANCESTORS)
-                    || entry.file().getProject().getLocation() == null || entry.file().getLocation() == null
-                    || !(transaction.getObjectById(entry.workbookId()) instanceof SpreadsheetDocument workbook))
+                // Native LTK pre-operations may already have written BSL reference updates.
+                // Never veto the main rename here. All disk verification ran before perform().
+                try
                 {
-                    throw changed();
+                    if (transaction.getObjectById(entry.workbookId()) instanceof SpreadsheetDocument workbook)
+                    {
+                        restore(workbook, entry.descriptions());
+                    }
                 }
-                var observed = ProjectSpreadsheetReader.read(entry.file().getProject().getLocation().toFile().toPath(),
-                    entry.file().getLocation().toFile().toPath(), entry.descriptions().keySet());
-                if (observed.availability() != ProjectSpreadsheetReader.Availability.SECURE
-                    || !observed.descriptions().equals(entry.descriptions()))
+                catch (RuntimeException ignored)
                 {
-                    throw changed();
+                    // A model invalidated by another participant cannot safely be repaired here.
                 }
-                restore(workbook, entry.descriptions());
             }
         }
     }
 
     static void restore(SpreadsheetDocument workbook, Map<LanguageKey, String> descriptions)
     {
-        if (workbook.getLanguageSettings() == null)
+        var settings = workbook.getLanguageSettings();
+        if (settings == null)
         {
-            throw changed();
+            return;
         }
-        Map<LanguageKey, LanguageInfo> restore = new LinkedHashMap<>();
-        for (LanguageInfo language : workbook.getLanguageSettings().getLanguages())
+        Map<LanguageKey, LanguageInfo> unique = new LinkedHashMap<>();
+        var duplicate = new java.util.HashSet<LanguageKey>();
+        for (LanguageInfo language : settings.getLanguages())
         {
             var key = new LanguageKey(language.getLanguageId(), language.getLanguageCode());
-            if (!descriptions.containsKey(key))
+            if (descriptions.containsKey(key) && unique.putIfAbsent(key, language) != null)
             {
-                continue;
+                duplicate.add(key);
             }
+        }
+        unique.forEach((key, language) -> {
             String current = language.getDescription();
-            if (restore.putIfAbsent(key, language) != null
-                || (current != null && !current.isEmpty() && !current.equals(descriptions.get(key))))
+            if (!duplicate.contains(key) && (current == null || current.isBlank()))
             {
-                throw changed();
+                language.setDescription(descriptions.get(key));
             }
-        }
-        if (restore.size() != descriptions.size())
-        {
-            throw changed();
-        }
-        restore.forEach((key, language) -> language.setDescription(descriptions.get(key)));
-    }
-
-    private static IllegalStateException changed()
-    {
-        return new IllegalStateException("Could not verify the saved spreadsheet language description during rename."); //$NON-NLS-1$
+        });
     }
 }

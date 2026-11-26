@@ -74,6 +74,7 @@ import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.ReferencedTopObjects;
+import com.ditrix.edt.mcp.server.utils.RenameEditorGuard;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.SpreadsheetRenameGuard;
@@ -156,6 +157,7 @@ public class MetadataRenameService
     private static final String SEARCH_IN_CLASS = "com._1c.g5.v8.dt.search.core.SearchIn"; //$NON-NLS-1$
 
     private final boolean excludeTextOccurrences;
+    private final java.util.function.Function<IProject, String> editorRefusal;
 
     /**
      * The monitor this call's preview passes poll; a never-cancelled one unless the adapter handed
@@ -173,7 +175,13 @@ public class MetadataRenameService
     /** Per-call policy; each adapter action owns its own service instance. */
     public MetadataRenameService(boolean excludeTextOccurrences)
     {
+        this(excludeTextOccurrences, RenameEditorGuard::refusal);
+    }
+
+    MetadataRenameService(boolean excludeTextOccurrences, java.util.function.Function<IProject, String> editorRefusal)
+    {
         this.excludeTextOccurrences = excludeTextOccurrences;
+        this.editorRefusal = editorRefusal;
     }
 
     /**
@@ -456,7 +464,7 @@ public class MetadataRenameService
         if (!modelResolution.isAvailable())
         {
             return () -> ToolResult.error(modelResolution.actionableError(TOOL_NAME,
-                "Nothing was renamed.")).toJson(); //$NON-NLS-1$
+                "Nothing was renamed.") + " If verification still fails, check get_server_status.").toJson(); //$NON-NLS-1$
         }
 
         return () -> createMdClassRename(project, objectFqn, newName, targetObject, confirm,
@@ -476,12 +484,12 @@ public class MetadataRenameService
         Collection<IRefactoring> refactorings;
         // EDT's pass below takes no monitor: a preview already stopped must not start it.
         checkCanceled();
-        var spreadsheetOwners = confirm ? SpreadsheetRenameOwners.capture(project, targetObject) : null;
-        String unsaved = SpreadsheetRenameRepair.dirtyRefusal(project, targetObject);
+        String unsaved = editorRefusal.apply(project);
         if (unsaved != null)
         {
             return ToolResult.error(unsaved).toJson();
         }
+        var spreadsheetOwners = confirm ? SpreadsheetRenameOwners.capture(project, targetObject) : null;
         var spreadsheetRepair = SpreadsheetRenameRepair.prepare(project, targetObject, confirm);
         try (spreadsheetRepair)
         {
@@ -525,11 +533,8 @@ public class MetadataRenameService
                 // Execute mode - perform the rename, applying any disabled indices
                 return (java.util.function.Supplier<String>)() -> performRename(project, objectFqn, newName,
                     refactorings, disableRequest, expectedHash, progress,
-                    "metadata object", () -> { //$NON-NLS-1$
-                        String dirty = SpreadsheetRenameRepair.dirtyRefusal(project, targetObject);
-                        return dirty != null ? dirty : SpreadsheetRenameGuard.refusal(project, targetObject, objectFqn,
-                            spreadsheetOwners, refactorings.size(), spreadsheetRepair);
-                    });
+                    "metadata object", () -> SpreadsheetRenameGuard.refusal(project, targetObject, objectFqn, //$NON-NLS-1$
+                        spreadsheetOwners, refactorings.size(), spreadsheetRepair));
             }
         }).get();
     }
@@ -667,6 +672,11 @@ public class MetadataRenameService
             IRefactoring refactoring;
             // EDT's form pass takes no monitor: a preview already stopped must not start it.
             checkCanceled();
+            String unsaved = editorRefusal.apply(project);
+            if (unsaved != null)
+            {
+                return ToolResult.error(unsaved).toJson();
+            }
             try
             {
                 refactoring = formRefactoringService.createFormRenameRefactoring(target, newName);
@@ -736,7 +746,8 @@ public class MetadataRenameService
         BmModelResolver.Resolution modelResolution = BmModelResolver.resolveForRefactoring(project);
         if (!modelResolution.isAvailable())
         {
-            return ToolResult.error(modelResolution.actionableError(TOOL_NAME, "Nothing was renamed.")).toJson(); //$NON-NLS-1$
+            return ToolResult.error(modelResolution.actionableError(TOOL_NAME, "Nothing was renamed.") //$NON-NLS-1$
+                + " If verification still fails, check get_server_status.").toJson(); //$NON-NLS-1$
         }
         String[] oldName = new String[1];
         String[] refusal = new String[1];
@@ -773,6 +784,11 @@ public class MetadataRenameService
             return refusal[0];
         }
         checkCanceled();
+        String unsaved = editorRefusal.apply(project);
+        if (unsaved != null)
+        {
+            return ToolResult.error(unsaved).toJson();
+        }
         IRefactoring refactoring;
         try
         {
@@ -3215,6 +3231,11 @@ public class MetadataRenameService
         // Check the current model and saved file after consent, on the same UI call before
         // any native rename operation has been performed.
         progress.enter(RenameProgress.Phase.CHECKING_SAFETY);
+        String unsaved = editorRefusal.apply(project);
+        if (unsaved != null)
+        {
+            return ToolResult.error(unsaved).toJson();
+        }
         String guardRefusal = beforeApply.get();
         if (guardRefusal != null)
         {

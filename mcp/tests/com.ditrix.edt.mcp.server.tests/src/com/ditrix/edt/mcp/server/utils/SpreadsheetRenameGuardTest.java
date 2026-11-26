@@ -97,7 +97,7 @@ public class SpreadsheetRenameGuardTest
     }
 
     @Test
-    public void repairDoesNotPartiallyApplyWhenAnotherLanguageHasChanged()
+    public void repairLeavesTheChangedDescriptionAloneAndRestoresTheMissingOne()
     {
         var book = MoxelFactory.eINSTANCE.createSpreadsheetDocument();
         var settings = MoxelFactory.eINSTANCE.createLanguageSettings();
@@ -107,11 +107,11 @@ public class SpreadsheetRenameGuardTest
         settings.getLanguages().add(english);
         book.setLanguageSettings(settings);
 
-        assertThrows(IllegalStateException.class, () -> SpreadsheetRenameRepair.restore(book, Map.of(
+        SpreadsheetRenameRepair.restore(book, Map.of(
             new SpreadsheetRenameGuard.LanguageKey("ru", "Russian"), "Saved Russian",
-            new SpreadsheetRenameGuard.LanguageKey("en", "English"), "Old English")));
+            new SpreadsheetRenameGuard.LanguageKey("en", "English"), "Old English"));
 
-        assertEquals("", russian.getDescription());
+        assertEquals("Saved Russian", russian.getDescription());
         assertEquals("New editor text", english.getDescription());
     }
 

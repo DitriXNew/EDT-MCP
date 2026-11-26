@@ -25,6 +25,7 @@ import org.eclipse.ltk.core.refactoring.NullChange;
 import org.junit.Test;
 
 import com._1c.g5.v8.dt.md.refactoring.core.IMdRefactoringService;
+import com._1c.g5.v8.dt.metadata.mdclass.Catalog;
 import com._1c.g5.v8.dt.metadata.mdclass.DataProcessor;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.refactoring.core.IRefactoring;
@@ -41,7 +42,7 @@ public class MetadataRenamePreviewReadBoundaryTest
     @Test
     public void testTheXtextPassesRunWithNoReadOfOursOpenAndTheRenderInsideOne() throws Exception
     {
-        MetadataRenameService service = new MetadataRenameService();
+        MetadataRenameService service = new MetadataRenameService(false, ignored -> null);
         List<String> seen = new ArrayList<>();
         service.xtextPasses = new MetadataRenameService.XtextPasses()
         {
@@ -84,7 +85,7 @@ public class MetadataRenamePreviewReadBoundaryTest
     @Test
     public void testThePreviewIsTheRenderOfThePassesOutput() throws Exception
     {
-        MetadataRenameService service = new MetadataRenameService();
+        MetadataRenameService service = new MetadataRenameService(false, ignored -> null);
         service.xtextPasses = new MetadataRenameService.XtextPasses()
         {
             @Override
@@ -150,9 +151,59 @@ public class MetadataRenamePreviewReadBoundaryTest
     }
 
     @Test
+    public void editorThatBecomesDirtyBeforeApplyStopsTheRefactoring()
+        throws Exception
+    {
+        Method apply = MetadataRenameService.class.getDeclaredMethod("performRename", IProject.class, String.class,
+            String.class, Collection.class, DisableRequest.class, String.class, RenameProgress.class, String.class,
+            Supplier.class);
+        apply.setAccessible(true);
+        List<IRefactoring> groups = refactorings();
+        RenameProgress progress = new RenameProgress();
+        String refusal = "An affected project has unsaved edits";
+        var service = new MetadataRenameService(false, ignored -> {
+            assertEquals(RenameProgress.Phase.CHECKING_SAFETY, progress.getPhase());
+            return refusal;
+        });
+        String property = "eclipse.application";
+        String original = System.setProperty(property, HostKind.APPLICATION_ID);
+        try
+        {
+            String result = (String)apply.invoke(service, null, "Catalog.Old", "New", groups,
+                DisableRequest.parse(null), null, progress, "metadata object", (Supplier<String>)() -> {
+                    throw new AssertionError("Must not prepare the spreadsheet repair when an editor is dirty");
+                });
+            assertTrue(result, result.contains(refusal));
+            verify(groups.get(0), never()).perform();
+        }
+        finally
+        {
+            if (original == null) System.clearProperty(property);
+            else System.setProperty(property, original);
+        }
+    }
+
+    @Test
+    public void dirtyCatalogRefusesBothModesBeforeTheNativePlanner()
+    {
+        IProject project = mock(IProject.class);
+        when(project.getName()).thenReturn("DirtyCatalogProject");
+        IMdRefactoringService nativePlanner = mock(IMdRefactoringService.class);
+        var service = new MetadataRenameService(false, p -> "Project '" + p.getName()
+            + "' has unsaved changes; nothing was renamed or saved.");
+        for (boolean confirm : List.of(false, true))
+        {
+            String result = service.createMdClassRename(project, "Catalog.Old", "New", mock(Catalog.class), confirm,
+                DisableRequest.parse(null), null, 0, new RenameProgress(), nativePlanner);
+            assertTrue(result, result.contains("DirtyCatalogProject") && result.contains("unsaved changes"));
+        }
+        verify(nativePlanner, never()).createMdObjectRenameRefactoring(any(), any());
+    }
+
+    @Test
     public void testAStoppedPreviewNeverStartsEdtsNativePass()
     {
-        MetadataRenameService service = new MetadataRenameService();
+        MetadataRenameService service = new MetadataRenameService(false, ignored -> null);
         service.useMonitor(cancelled());
         IMdRefactoringService mdService = mdService(refactorings());
 
@@ -165,7 +216,7 @@ public class MetadataRenamePreviewReadBoundaryTest
     @Test
     public void testAPreviewStoppedDuringEdtsNativePassIsAStopNotAnError()
     {
-        MetadataRenameService service = new MetadataRenameService();
+        MetadataRenameService service = new MetadataRenameService(false, ignored -> null);
         IProgressMonitor monitor = new NullProgressMonitor();
         service.useMonitor(monitor);
         IMdRefactoringService mdService = mock(IMdRefactoringService.class);
@@ -183,7 +234,7 @@ public class MetadataRenamePreviewReadBoundaryTest
     @Test
     public void testAFailedNativePassThatWasNotStoppedIsReported()
     {
-        MetadataRenameService service = new MetadataRenameService();
+        MetadataRenameService service = new MetadataRenameService(false, ignored -> null);
         IMdRefactoringService mdService = mock(IMdRefactoringService.class);
         when(mdService.createMdObjectRenameRefactoring(any(), any()))
             .thenThrow(new NullPointerException("fParticipants"));
