@@ -50,6 +50,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.ExternalDataProcessor;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.Template;
 import com._1c.g5.v8.dt.metadata.mdclass.TemplateType;
+import com._1c.g5.v8.dt.moxel.LanguageInfo;
 import com._1c.g5.v8.dt.moxel.MoxelFactory;
 import com._1c.g5.v8.dt.moxel.SpreadsheetDocument;
 import com.ditrix.edt.mcp.server.utils.SpreadsheetRenameGuard.Candidate;
@@ -75,6 +76,52 @@ public class SpreadsheetRenameGuardTest
             + "<languageInfo><id>en</id><code>English</code><description>English</description></languageInfo>"
             + "<languageInfo><id>ru</id><code>Русский</code>" + description + "</languageInfo>"
             + "</languageSettings></document>";
+    }
+
+    @Test
+    public void repairRestoresOnlyTheExactSavedMissingDescription()
+    {
+        var book = MoxelFactory.eINSTANCE.createSpreadsheetDocument();
+        var settings = MoxelFactory.eINSTANCE.createLanguageSettings();
+        var russian = languageInfo("ru", "Russian", "");
+        var english = languageInfo("en", "English", "Custom English");
+        settings.getLanguages().add(russian);
+        settings.getLanguages().add(english);
+        book.setLanguageSettings(settings);
+
+        SpreadsheetRenameRepair.restore(book, Map.of(new SpreadsheetRenameGuard.LanguageKey("ru", "Russian"),
+            "  Сохранено & без изменений  "));
+
+        assertEquals("  Сохранено & без изменений  ", russian.getDescription());
+        assertEquals("Custom English", english.getDescription());
+    }
+
+    @Test
+    public void repairDoesNotPartiallyApplyWhenAnotherLanguageHasChanged()
+    {
+        var book = MoxelFactory.eINSTANCE.createSpreadsheetDocument();
+        var settings = MoxelFactory.eINSTANCE.createLanguageSettings();
+        var russian = languageInfo("ru", "Russian", "");
+        var english = languageInfo("en", "English", "New editor text");
+        settings.getLanguages().add(russian);
+        settings.getLanguages().add(english);
+        book.setLanguageSettings(settings);
+
+        assertThrows(IllegalStateException.class, () -> SpreadsheetRenameRepair.restore(book, Map.of(
+            new SpreadsheetRenameGuard.LanguageKey("ru", "Russian"), "Saved Russian",
+            new SpreadsheetRenameGuard.LanguageKey("en", "English"), "Old English")));
+
+        assertEquals("", russian.getDescription());
+        assertEquals("New editor text", english.getDescription());
+    }
+
+    private static LanguageInfo languageInfo(String id, String code, String description)
+    {
+        var value = MoxelFactory.eINSTANCE.createLanguageInfo();
+        value.setLanguageId(id);
+        value.setLanguageCode(code);
+        value.setDescription(description);
+        return value;
     }
 
     @Test

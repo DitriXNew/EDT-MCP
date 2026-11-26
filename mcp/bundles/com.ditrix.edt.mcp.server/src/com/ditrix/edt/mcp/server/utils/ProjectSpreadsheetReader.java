@@ -11,6 +11,9 @@ import java.nio.file.Path;
 import java.nio.file.SecureDirectoryStream;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.BasicFileAttributeView;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Set;
 
 import javax.xml.stream.XMLStreamException;
@@ -23,8 +26,18 @@ final class ProjectSpreadsheetReader
     private static final int MAX_PATH_DEPTH = 128;
     enum Availability { SECURE, UNSUPPORTED_PROVIDER, UNVERIFIED }
 
-    record Evidence(Availability availability, LanguageKey loss)
+    record Evidence(Availability availability, LanguageKey loss, Map<LanguageKey, String> descriptions)
     {
+        Evidence(Availability availability, LanguageKey loss)
+        {
+            this(availability, loss, Map.of());
+        }
+
+        static Evidence securelyRead(Map<LanguageKey, String> descriptions)
+        {
+            return new Evidence(Availability.SECURE, descriptions.keySet().stream().findFirst().orElse(null),
+                Collections.unmodifiableMap(new LinkedHashMap<>(descriptions)));
+        }
     }
 
     private ProjectSpreadsheetReader()
@@ -48,7 +61,7 @@ final class ProjectSpreadsheetReader
             {
                 return new Evidence(Availability.UNSUPPORTED_PROVIDER, null);
             }
-            return new Evidence(Availability.SECURE, loss(safe, source, 0, blank));
+            return Evidence.securelyRead(descriptions(safe, source, 0, blank));
         }
         catch (XMLStreamException e)
         {
@@ -66,7 +79,7 @@ final class ProjectSpreadsheetReader
         }
     }
 
-    private static LanguageKey loss(SecureDirectoryStream<Path> directory, Path file, int index,
+    private static Map<LanguageKey, String> descriptions(SecureDirectoryStream<Path> directory, Path file, int index,
         Set<LanguageKey> blank) throws IOException, XMLStreamException
     {
         Path component = file.getName(index);
@@ -74,7 +87,7 @@ final class ProjectSpreadsheetReader
         {
             try (var child = directory.newDirectoryStream(component, LinkOption.NOFOLLOW_LINKS))
             {
-                return loss(child, file, index + 1, blank);
+                return descriptions(child, file, index + 1, blank);
             }
         }
 
@@ -86,7 +99,7 @@ final class ProjectSpreadsheetReader
         }
         try (var channel = directory.newByteChannel(component, Set.of(StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS)))
         {
-            return SpreadsheetRenameGuard.lostDescription(Channels.newInputStream(channel), blank);
+            return SpreadsheetRenameGuard.savedDescriptions(Channels.newInputStream(channel), blank);
         }
     }
 }
