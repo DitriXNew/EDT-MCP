@@ -157,7 +157,7 @@ public class MetadataRenameService
     private static final String SEARCH_IN_CLASS = "com._1c.g5.v8.dt.search.core.SearchIn"; //$NON-NLS-1$
 
     private final boolean excludeTextOccurrences;
-    private final java.util.function.Function<IProject, String> editorRefusal;
+    private final java.util.function.BiFunction<IProject, Collection<IProject>, String> editorRefusal;
 
     /**
      * The monitor this call's preview passes poll; a never-cancelled one unless the adapter handed
@@ -179,6 +179,12 @@ public class MetadataRenameService
     }
 
     MetadataRenameService(boolean excludeTextOccurrences, java.util.function.Function<IProject, String> editorRefusal)
+    {
+        this(excludeTextOccurrences, (project, dependents) -> editorRefusal.apply(project));
+    }
+
+    private MetadataRenameService(boolean excludeTextOccurrences,
+        java.util.function.BiFunction<IProject, Collection<IProject>, String> editorRefusal)
     {
         this.excludeTextOccurrences = excludeTextOccurrences;
         this.editorRefusal = editorRefusal;
@@ -484,7 +490,7 @@ public class MetadataRenameService
         Collection<IRefactoring> refactorings;
         // EDT's pass below takes no monitor: a preview already stopped must not start it.
         checkCanceled();
-        String unsaved = editorRefusal.apply(project);
+        String unsaved = editorRefusal.apply(project, List.of());
         if (unsaved != null)
         {
             return ToolResult.error(unsaved).toJson();
@@ -501,6 +507,18 @@ public class MetadataRenameService
         }
         try (spreadsheetRepair)
         {
+            // Preparation can see a different set of dependents than the first editor check.
+            // Before EDT's planner can implicitly save editors, check both that set and the
+            // currently discoverable dependents, even when the repair is inactive.
+            if (confirm)
+            {
+                String planningRefusal = editorRefusal.apply(project, spreadsheetRepair.planningDependents());
+                if (planningRefusal != null)
+                {
+                    return ToolResult.error(planningRefusal).toJson();
+                }
+            }
+            checkCanceled();
             refactorings = refactoringService.createMdObjectRenameRefactoring(targetObject, newName);
         }
         catch (RuntimeException e)
@@ -680,7 +698,7 @@ public class MetadataRenameService
             IRefactoring refactoring;
             // EDT's form pass takes no monitor: a preview already stopped must not start it.
             checkCanceled();
-            String unsaved = editorRefusal.apply(project);
+            String unsaved = editorRefusal.apply(project, List.of());
             if (unsaved != null)
             {
                 return ToolResult.error(unsaved).toJson();
@@ -792,7 +810,7 @@ public class MetadataRenameService
             return refusal[0];
         }
         checkCanceled();
-        String unsaved = editorRefusal.apply(project);
+        String unsaved = editorRefusal.apply(project, List.of());
         if (unsaved != null)
         {
             return ToolResult.error(unsaved).toJson();
@@ -3239,7 +3257,7 @@ public class MetadataRenameService
         // Check the current model and saved file after consent, on the same UI call before
         // any native rename operation has been performed.
         progress.enter(RenameProgress.Phase.CHECKING_SAFETY);
-        String unsaved = editorRefusal.apply(project);
+        String unsaved = editorRefusal.apply(project, List.of());
         if (unsaved != null)
         {
             return ToolResult.error(unsaved).toJson();

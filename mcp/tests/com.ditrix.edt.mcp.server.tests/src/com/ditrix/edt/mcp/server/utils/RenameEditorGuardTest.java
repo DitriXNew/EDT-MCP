@@ -40,6 +40,21 @@ public class RenameEditorGuardTest
     }
 
     @Test
+    public void recheckIncludesBothPreparedAndCurrentDependencies()
+    {
+        var base = project("Base");
+        var prepared = project("PreparedExtension");
+        var current = project("CurrentExtension");
+        var models = Map.of(base, model(false), prepared, model(true), current, model(true));
+        String refusal = RenameEditorGuard.refusal(HostKind.WINDOWED, base, List.of(prepared),
+            p -> List.of(current), models::get);
+        assertTrue(refusal, refusal.contains("'CurrentExtension', 'PreparedExtension'"));
+        var cleanModels = Map.of(base, model(false), prepared, model(false), current, model(false));
+        assertNull(RenameEditorGuard.refusal(HostKind.WINDOWED, base, List.of(prepared),
+            p -> List.of(current), cleanModels::get));
+    }
+
+    @Test
     public void cleanWindowedModelPasses()
     {
         IProject base = project("Base");

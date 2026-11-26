@@ -62,34 +62,38 @@ public final class SpreadsheetRenameRepair implements IRenameRefactoringContribu
         }
     }
 
-    private static boolean hasNoDependents(IProject project,
+    private static List<IProject> checkedDependents(IProject project,
         java.util.function.Function<IProject, Collection<IProject>> findDependents)
     {
-        Collection<IProject> dependents;
         try
         {
-            dependents = findDependents.apply(project);
+            var dependents = findDependents.apply(project);
+            if (dependents != null)
+            {
+                return List.copyOf(dependents);
+            }
         }
         catch (RuntimeException e)
         {
             throw new DependencyLookupException(e);
         }
-        if (dependents == null)
-        {
-            throw new DependencyLookupException(null);
-        }
-        return dependents.isEmpty();
+        throw new DependencyLookupException(null);
     }
 
     static Scope prepare(IProject project, MdObject owner, boolean confirm, HostKind host,
         java.util.function.Function<IProject, Collection<IProject>> findDependents)
     {
         if (!confirm || !supported(host, owner) || CONSTRUCTING.get() != null
-            || !(owner instanceof IBmObject bm) || !hasNoDependents(project, findDependents))
+            || !(owner instanceof IBmObject bm))
         {
-            return new Scope(null, null, IBmObject.BM_NULL_ID, findDependents);
+            return new Scope(null, null, IBmObject.BM_NULL_ID, findDependents, List.of());
         }
-        Scope scope = new Scope(project, owner, bm.bmGetId(), findDependents);
+        List<IProject> dependents = checkedDependents(project, findDependents);
+        if (!dependents.isEmpty())
+        {
+            return new Scope(null, null, IBmObject.BM_NULL_ID, findDependents, dependents);
+        }
+        Scope scope = new Scope(project, owner, bm.bmGetId(), findDependents, dependents);
         CONSTRUCTING.set(scope);
         return scope;
     }
@@ -100,23 +104,32 @@ public final class SpreadsheetRenameRepair implements IRenameRefactoringContribu
         private final MdObject original;
         private final long ownerId;
         private final java.util.function.Function<IProject, Collection<IProject>> findDependents;
+        private final List<IProject> planningDependents;
         private volatile RefactoringSettings settings;
         private final AtomicBoolean attached = new AtomicBoolean();
         private volatile List<Entry> entries = List.of();
 
         private Scope(IProject project, MdObject original, long ownerId,
-            java.util.function.Function<IProject, Collection<IProject>> findDependents)
+            java.util.function.Function<IProject, Collection<IProject>> findDependents,
+            List<IProject> planningDependents)
         {
             this.project = project;
             this.original = original;
             this.ownerId = ownerId;
             this.findDependents = findDependents;
+            this.planningDependents = planningDependents;
+        }
+
+        /** Include this snapshot in the final pre-planning editor check, even for inert repairs. */
+        public List<IProject> planningDependents()
+        {
+            return planningDependents;
         }
 
         public boolean canRestore()
         {
             return project != null && settings != null && attached.get()
-                && hasNoDependents(project, findDependents);
+                && checkedDependents(project, findDependents).isEmpty();
         }
 
         void arm(List<Entry> entries)

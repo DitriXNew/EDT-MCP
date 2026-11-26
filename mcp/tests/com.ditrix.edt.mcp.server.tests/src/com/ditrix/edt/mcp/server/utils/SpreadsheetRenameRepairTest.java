@@ -118,9 +118,11 @@ public class SpreadsheetRenameRepairTest
         {
             assertRefused(candidate(file, WORKBOOK_ID), false, preview);
         }
+        var dependent = mock(IProject.class);
         try (var cascade = SpreadsheetRenameRepair.prepare(project, owner, true, HostKind.WINDOWED,
-            ignored -> List.of(mock(IProject.class))))
+            ignored -> List.of(dependent)))
         {
+            assertEquals(List.of(dependent), cascade.planningDependents());
             assertRefused(candidate(file, WORKBOOK_ID), false, cascade);
         }
     }

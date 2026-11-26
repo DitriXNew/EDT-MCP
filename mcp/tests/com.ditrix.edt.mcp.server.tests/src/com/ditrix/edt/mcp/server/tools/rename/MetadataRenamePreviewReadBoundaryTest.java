@@ -201,6 +201,23 @@ public class MetadataRenamePreviewReadBoundaryTest
     }
 
     @Test
+    public void changedDependencyEditorsStopConfirmBeforeTheNativePlanner()
+    {
+        var project = mock(IProject.class);
+        var planner = mock(IMdRefactoringService.class);
+        var checks = new java.util.concurrent.atomic.AtomicInteger();
+        var service = new MetadataRenameService(false, p -> checks.getAndIncrement() == 0 ? null
+            : "Project 'NewDependency' has unsaved changes; nothing was renamed or saved.");
+        var owner = mock(DataProcessor.class);
+        when(owner.eClass()).thenReturn(org.eclipse.emf.ecore.EcoreFactory.eINSTANCE.createEClass());
+        String result = service.createMdClassRename(project, "DataProcessor.Old", "New",
+            owner, true, DisableRequest.parse(null), null, 0, new RenameProgress(), planner);
+        assertEquals(2, checks.get());
+        assertTrue(result, result.contains("NewDependency"));
+        verify(planner, never()).createMdObjectRenameRefactoring(any(), any());
+    }
+
+    @Test
     public void testAStoppedPreviewNeverStartsEdtsNativePass()
     {
         MetadataRenameService service = new MetadataRenameService(false, ignored -> null);

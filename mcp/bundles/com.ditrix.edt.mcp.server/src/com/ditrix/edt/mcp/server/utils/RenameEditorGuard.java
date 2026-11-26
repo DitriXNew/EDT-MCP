@@ -32,15 +32,21 @@ public final class RenameEditorGuard
             : IDependentProject.getDependent(project, activator.getV8ProjectManager().getProjects());
     }
 
-    public static String refusal(IProject project)
+    public static String refusal(IProject project, Collection<IProject> alreadyDiscovered)
     {
-        return refusal(HostKind.current(), project, RenameEditorGuard::dependents, affected -> {
+        return refusal(HostKind.current(), project, alreadyDiscovered, RenameEditorGuard::dependents, affected -> {
             var resolution = BmModelResolver.resolve(affected);
             return resolution.isAvailable() ? resolution.getModel() : null;
         });
     }
 
     static String refusal(HostKind host, IProject project,
+        Function<IProject, Collection<IProject>> findDependents, Function<IProject, IBmModel> findModel)
+    {
+        return refusal(host, project, java.util.List.of(), findDependents, findModel);
+    }
+
+    static String refusal(HostKind host, IProject project, Collection<IProject> alreadyDiscovered,
         Function<IProject, Collection<IProject>> findDependents, Function<IProject, IBmModel> findModel)
     {
         if (host != HostKind.WINDOWED)
@@ -56,6 +62,7 @@ public final class RenameEditorGuard
             }
             var affected = new LinkedHashSet<IProject>();
             affected.add(project);
+            affected.addAll(alreadyDiscovered);
             affected.addAll(dependents);
             var dirty = new ArrayList<String>();
             for (IProject item : affected)
