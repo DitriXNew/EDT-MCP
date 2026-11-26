@@ -286,8 +286,9 @@ public class MetadataRenameTextOccurrencesTest
     {
         return (String)method("performRename", org.eclipse.core.resources.IProject.class,
             String.class, String.class, Collection.class, DisableRequest.class,
-            String.class, RenameProgress.class, String.class).invoke(service, null, "CommonModule.Old", "New", tree,
-                DisableRequest.parse("999"), expectedHash, new RenameProgress(), "metadata object");
+            String.class, RenameProgress.class, String.class, Collection.class)
+            .invoke(service, null, "CommonModule.Old", "New", tree, DisableRequest.parse("999"),
+                expectedHash, new RenameProgress(), "metadata object", List.of());
     }
 
     private static List<?> points(MetadataRenameService service, List<IRefactoring> tree) throws Exception

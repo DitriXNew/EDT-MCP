@@ -88,7 +88,8 @@ public class MetadataRenameServiceTest
         assertEquals("BM model is not available for project 'DependentConfiguration'. Nothing was " //$NON-NLS-1$
             + "renamed. This is a transient window while EDT reopens the project's storage; " //$NON-NLS-1$
             + "list_projects does not expose BM-model registration and will still report the " //$NON-NLS-1$
-            + "project as ready. Wait a few seconds, then retry rename_metadata_object.", //$NON-NLS-1$
+            + "project as ready. Wait a few seconds, then retry rename_metadata_object. " //$NON-NLS-1$
+            + "If verification still fails, check get_server_status.", //$NON-NLS-1$
             result.get("error").getAsString()); //$NON-NLS-1$
         verify(refactoringService, never()).createMdObjectRenameRefactoring(
             org.mockito.ArgumentMatchers.any(MdObject.class),
@@ -109,7 +110,7 @@ public class MetadataRenameServiceTest
             .thenThrow(new NullPointerException(
                 "Cannot invoke \"IBmModel.getId()\" because \"model\" is null")); //$NON-NLS-1$
 
-        String json = new MetadataRenameService().prepareMdClassRename(project,
+        String json = new MetadataRenameService(false, ignored -> null).prepareMdClassRename(project,
             "CommonModule.Calc", "Calculator", object, false, null, null, 0, null, //$NON-NLS-1$ //$NON-NLS-2$
             refactoringService, resolution);
 
@@ -729,7 +730,7 @@ public class MetadataRenameServiceTest
 
     @Test public void unreadableExactMatchesAreCountedAndMarkdownCellsStayOnOneLine() throws Exception
     {
-        var service = new MetadataRenameService();
+        var service = new MetadataRenameService(false, ignored -> null);
         var method = MetadataRenameService.class.getDeclaredMethod("createFileExactMatchInfo", Object.class);
         method.setAccessible(true);
         assertNull(method.invoke(service, new BrokenExactMatch()));

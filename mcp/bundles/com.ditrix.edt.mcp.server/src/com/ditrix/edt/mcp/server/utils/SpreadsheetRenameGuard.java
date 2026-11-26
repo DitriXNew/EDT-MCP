@@ -7,8 +7,9 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.HashSet;
-import java.util.LinkedHashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
 
@@ -52,17 +53,26 @@ public final class SpreadsheetRenameGuard
     {
     }
 
-    record Candidate(String templateName, IFile file, Set<LanguageKey> blank)
+    record Candidate(String templateName, IFile file, Set<LanguageKey> blank, long workbookId)
     {
+        Candidate(String templateName, IFile file, Set<LanguageKey> blank)
+        {
+            this(templateName, file, blank, IBmObject.BM_NULL_ID);
+        }
     }
 
     record OwnerScan(List<Candidate> candidates, boolean generatorMissing)
     {
         String refusal(String projectName, String ownerFqn, boolean extension)
         {
+            return refusal(projectName, ownerFqn, extension, null);
+        }
+
+        String refusal(String projectName, String ownerFqn, boolean extension, SpreadsheetRenameRepair.Scope repair)
+        {
             return generatorMissing ? unavailableNames(projectName, ownerFqn)
                 : SpreadsheetRenameGuard.refusal(projectName, ownerFqn, candidates, extension,
-                    SpreadsheetRenameGuard::secureEvidence);
+                    SpreadsheetRenameGuard::secureEvidence, repair);
         }
     }
 
@@ -73,6 +83,12 @@ public final class SpreadsheetRenameGuard
      */
     public static String refusal(IProject project, MdObject owner, String ownerFqn,
         SpreadsheetRenameOwners.Plan planned, int groups)
+    {
+        return refusal(project, owner, ownerFqn, planned, groups, null);
+    }
+
+    public static String refusal(IProject project, MdObject owner, String ownerFqn,
+        SpreadsheetRenameOwners.Plan planned, int groups, SpreadsheetRenameRepair.Scope repair)
     {
         if (HostKind.current() != HostKind.WINDOWED || !mayOwnSpreadsheets(owner))
         {
@@ -87,7 +103,7 @@ public final class SpreadsheetRenameGuard
         String task = "Read spreadsheet language risk"; //$NON-NLS-1$
         OwnerScan base = ReadToolExecution.readModel(project, task, model -> BmTransactions.read(model, task,
             (tx, monitor) -> scanOwner(project, owner, tx, generator)));
-        String baseRefusal = base.refusal(project.getName(), ownerFqn, false);
+        String baseRefusal = base.refusal(project.getName(), ownerFqn, false, groups == 1 ? repair : null);
         if (baseRefusal != null || groups == 1)
         {
             return baseRefusal;
@@ -117,7 +133,7 @@ public final class SpreadsheetRenameGuard
             {
                 return SpreadsheetRenameOwners.changedScope();
             }
-            String extensionRefusal = extension.refusal(counterpart.project().getName(), ownerFqn, true);
+            String extensionRefusal = extension.refusal(counterpart.project().getName(), ownerFqn, true, null);
             if (extensionRefusal != null)
             {
                 return extensionRefusal;
@@ -219,8 +235,25 @@ public final class SpreadsheetRenameGuard
     static String refusal(String projectName, String ownerFqn, List<Candidate> candidates, boolean extension,
         Function<Candidate, ProjectSpreadsheetReader.Evidence> reader)
     {
+        return refusal(projectName, ownerFqn, candidates, extension, reader, null);
+    }
+
+    static String refusal(String projectName, String ownerFqn, List<Candidate> candidates, boolean extension,
+        Function<Candidate, ProjectSpreadsheetReader.Evidence> reader, SpreadsheetRenameRepair.Scope repair)
+    {
+        List<SpreadsheetRenameRepair.Entry> entries = new ArrayList<>();
+        boolean mayRepair;
+        try
+        {
+            mayRepair = !extension && repair != null && repair.canRestore();
+        }
+        catch (SpreadsheetRenameRepair.DependencyLookupException e)
+        {
+            return e.getMessage();
+        }
         for (Candidate candidate : candidates)
         {
+            long stamp = mayRepair ? synchronizedStamp(candidate.file()) : IResource.NULL_STAMP;
             var evidence = reader.apply(candidate);
             if (evidence.availability() != ProjectSpreadsheetReader.Availability.SECURE)
             {
@@ -228,23 +261,46 @@ public final class SpreadsheetRenameGuard
                     + candidate.templateName() + (extension ? "' in extension project '" : "' in project '") //$NON-NLS-1$ //$NON-NLS-2$
                     + projectName
                     + "', and its saved description cannot be verified safely. Nothing was renamed. " //$NON-NLS-1$
-                    + "Preserve unsaved edits. Close the affected editor and reload the template from disk, " //$NON-NLS-1$
-                    + "or give the language a synonym in the active editing language and reopen the template " //$NON-NLS-1$
-                    + "before retrying."; //$NON-NLS-1$
+                    + "Preserve unsaved work. Close the spreadsheet editors before retrying. If the error " //$NON-NLS-1$
+                    + "persists, use clean_project to reload the saved files without reopening the template, " //$NON-NLS-1$
+                    + "or provide a synonym for the language in EDT's active editing language before reopening."; //$NON-NLS-1$
             }
             LanguageKey lost = evidence.loss();
             if (lost != null)
             {
+                if (mayRepair && candidate.workbookId() != IBmObject.BM_NULL_ID && stamp != IResource.NULL_STAMP
+                    && !evidence.descriptions().isEmpty() && stamp == synchronizedStamp(candidate.file()))
+                {
+                    // Recheck secure bytes and the Eclipse stamp before admitting the native rename.
+                    var checked = reader.apply(candidate);
+                    if (checked.availability() == ProjectSpreadsheetReader.Availability.SECURE
+                        && checked.descriptions().equals(evidence.descriptions())
+                        && stamp == synchronizedStamp(candidate.file()))
+                    {
+                        entries.add(new SpreadsheetRenameRepair.Entry(candidate.workbookId(), checked.descriptions()));
+                        continue;
+                    }
+                }
                 return "Renaming '" + MetadataTypeUtils.toCanonicalEnglishFqn(ownerFqn) //$NON-NLS-1$
                     + "' would erase the saved language description for '" + lost.id() //$NON-NLS-1$
                     + "' in spreadsheet template '" + candidate.templateName() //$NON-NLS-1$
-                    + "' in project '" + projectName + "'. Nothing was renamed. Preserve any unsaved " //$NON-NLS-1$ //$NON-NLS-2$
-                    + "edits, close the affected template " //$NON-NLS-1$
-                    + "editor and reload the template from disk before retrying. EDT may otherwise keep " //$NON-NLS-1$
-                    + "clearing the description unless that language has a synonym in the active editing language."; //$NON-NLS-1$
+                    + "' in project '" + projectName + "'. Nothing was renamed. Preserve any unsaved work, " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "close the spreadsheet editors and retry. If the error persists, use clean_project " //$NON-NLS-1$
+                    + "to reload the saved files without reopening the template, or provide a synonym for the language " //$NON-NLS-1$
+                    + "in EDT's active editing language before reopening."; //$NON-NLS-1$
             }
         }
+        if (!entries.isEmpty())
+        {
+            repair.arm(entries);
+        }
         return null;
+    }
+
+    private static long synchronizedStamp(IFile file)
+    {
+        return file != null && file.exists() && file.isSynchronized(IResource.DEPTH_ZERO)
+            && !file.isLinked(IResource.CHECK_ANCESTORS) ? file.getModificationStamp() : IResource.NULL_STAMP;
     }
 
     /** Only the addressed owner's attached spreadsheets; never extend the scan to the project. */
@@ -268,7 +324,7 @@ public final class SpreadsheetRenameGuard
             Set<LanguageKey> blank = uniquelyBlank(book.getLanguageSettings().getLanguages());
             if (!blank.isEmpty())
             {
-                candidates.add(new Candidate(template.getName(), verifiedWorkspaceFile(project, template), blank));
+                candidates.add(new Candidate(template.getName(), verifiedWorkspaceFile(project, template), blank, bmBook.bmGetId()));
             }
         }
         return candidates;
@@ -351,6 +407,12 @@ public final class SpreadsheetRenameGuard
     static LanguageKey lostDescription(InputStream input, Set<LanguageKey> modelBlank)
         throws IOException, XMLStreamException
     {
+        return savedDescriptions(input, modelBlank).keySet().stream().findFirst().orElse(null);
+    }
+
+    static Map<LanguageKey, String> savedDescriptions(InputStream input, Set<LanguageKey> modelBlank)
+        throws IOException, XMLStreamException
+    {
         XMLStreamReader xml = SecureXml.streamFactory().createXMLStreamReader(
             new ByteArrayInputStream(input.readNBytes(MAX_HEADER_BYTES)));
         try
@@ -361,7 +423,7 @@ public final class SpreadsheetRenameGuard
                 throw new XMLStreamException("Unrecognized spreadsheet language header"); //$NON-NLS-1$
             }
             Set<LanguageKey> visited = new HashSet<>();
-            Set<LanguageKey> possibleLoss = new LinkedHashSet<>();
+            Map<LanguageKey, String> possibleLoss = new LinkedHashMap<>();
             while (xml.nextTag() == XMLStreamReader.START_ELEMENT)
             {
                 if (element(xml, "currentLanguage") || element(xml, "defaultLanguage")) //$NON-NLS-1$ //$NON-NLS-2$
@@ -406,10 +468,10 @@ public final class SpreadsheetRenameGuard
                 }
                 else if (modelBlank.contains(key) && !blank(description))
                 {
-                    possibleLoss.add(key);
+                    possibleLoss.put(key, description);
                 }
             }
-            return possibleLoss.stream().findFirst().orElse(null);
+            return possibleLoss;
         }
         finally
         {

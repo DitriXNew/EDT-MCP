@@ -227,7 +227,7 @@ public class MetadataRenameMemberKindsTest
         IMdRefactoringService service = mock(IMdRefactoringService.class);
         when(service.createMdObjectRenameRefactoring(same(target), anyString()))
             .thenReturn(Collections.emptyList());
-        MetadataRenameService rename = new MetadataRenameService();
+        MetadataRenameService rename = new MetadataRenameService(false, ignored -> null);
         rename.useMonitor(new NullProgressMonitor());
 
         String result = rename.createMdClassRename(null, "DataProcessor.Proc.Command.Open", "OpenRenamed", //$NON-NLS-1$ //$NON-NLS-2$

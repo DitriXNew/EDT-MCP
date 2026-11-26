@@ -74,9 +74,11 @@ import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.ReferencedTopObjects;
+import com.ditrix.edt.mcp.server.utils.RenameEditorGuard;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.SpreadsheetRenameGuard;
+import com.ditrix.edt.mcp.server.utils.SpreadsheetRenameRepair;
 import com.ditrix.edt.mcp.server.utils.SpreadsheetRenameOwners;
 import com.ditrix.edt.mcp.server.utils.SubsystemUtils;
 import com.ditrix.edt.mcp.server.utils.VendorSupportGuard;
@@ -155,6 +157,7 @@ public class MetadataRenameService
     private static final String SEARCH_IN_CLASS = "com._1c.g5.v8.dt.search.core.SearchIn"; //$NON-NLS-1$
 
     private final boolean excludeTextOccurrences;
+    private final java.util.function.BiFunction<IProject, Collection<IProject>, RenameEditorGuard.Verification> verifyEditors;
 
     /**
      * The monitor this call's preview passes poll; a never-cancelled one unless the adapter handed
@@ -172,7 +175,20 @@ public class MetadataRenameService
     /** Per-call policy; each adapter action owns its own service instance. */
     public MetadataRenameService(boolean excludeTextOccurrences)
     {
+        this(excludeTextOccurrences, RenameEditorGuard::verify);
+    }
+
+    MetadataRenameService(boolean excludeTextOccurrences, java.util.function.Function<IProject, String> editorRefusal)
+    {
+        this(excludeTextOccurrences, (project, dependents) ->
+            new RenameEditorGuard.Verification(List.copyOf(dependents), editorRefusal.apply(project)));
+    }
+
+    MetadataRenameService(boolean excludeTextOccurrences,
+        java.util.function.BiFunction<IProject, Collection<IProject>, RenameEditorGuard.Verification> verifyEditors)
+    {
         this.excludeTextOccurrences = excludeTextOccurrences;
+        this.verifyEditors = verifyEditors;
     }
 
     /**
@@ -455,7 +471,7 @@ public class MetadataRenameService
         if (!modelResolution.isAvailable())
         {
             return () -> ToolResult.error(modelResolution.actionableError(TOOL_NAME,
-                "Nothing was renamed.")).toJson(); //$NON-NLS-1$
+                "Nothing was renamed.") + " If verification still fails, check get_server_status.").toJson(); //$NON-NLS-1$
         }
 
         return () -> createMdClassRename(project, objectFqn, newName, targetObject, confirm,
@@ -475,9 +491,42 @@ public class MetadataRenameService
         Collection<IRefactoring> refactorings;
         // EDT's pass below takes no monitor: a preview already stopped must not start it.
         checkCanceled();
+        var initialEditors = verifyEditors.apply(project, List.of());
+        if (initialEditors.refusal() != null)
+        {
+            return ToolResult.error(initialEditors.refusal()).toJson();
+        }
         var spreadsheetOwners = confirm ? SpreadsheetRenameOwners.capture(project, targetObject) : null;
+        SpreadsheetRenameRepair.Scope spreadsheetRepair;
         try
         {
+            spreadsheetRepair = SpreadsheetRenameRepair.prepare(project, targetObject, confirm);
+        }
+        catch (SpreadsheetRenameRepair.DependencyLookupException e)
+        {
+            return ToolResult.error(e.getMessage()).toJson();
+        }
+        final RenameEditorGuard.Verification planningEditors;
+        try (spreadsheetRepair)
+        {
+            // Preparation can see a different set of dependents than the first editor check.
+            // Before EDT's planner can implicitly save editors, check both that set and the
+            // currently discoverable dependents, even when the repair is inactive.
+            if (confirm)
+            {
+                var previouslySeen = new java.util.LinkedHashSet<>(initialEditors.projects());
+                previouslySeen.addAll(spreadsheetRepair.planningDependents());
+                planningEditors = verifyEditors.apply(project, previouslySeen);
+                if (planningEditors.refusal() != null)
+                {
+                    return ToolResult.error(planningEditors.refusal()).toJson();
+                }
+            }
+            else
+            {
+                planningEditors = initialEditors;
+            }
+            checkCanceled();
             refactorings = refactoringService.createMdObjectRenameRefactoring(targetObject, newName);
         }
         catch (RuntimeException e)
@@ -518,8 +567,8 @@ public class MetadataRenameService
                 // Execute mode - perform the rename, applying any disabled indices
                 return (java.util.function.Supplier<String>)() -> performRename(project, objectFqn, newName,
                     refactorings, disableRequest, expectedHash, progress,
-                    "metadata object", () -> SpreadsheetRenameGuard.refusal(project, targetObject, objectFqn, //$NON-NLS-1$
-                        spreadsheetOwners, refactorings.size()));
+                    "metadata object", planningEditors.projects(), () -> SpreadsheetRenameGuard.refusal(project, targetObject, objectFqn, //$NON-NLS-1$
+                        spreadsheetOwners, refactorings.size(), spreadsheetRepair));
             }
         }).get();
     }
@@ -657,6 +706,11 @@ public class MetadataRenameService
             IRefactoring refactoring;
             // EDT's form pass takes no monitor: a preview already stopped must not start it.
             checkCanceled();
+            var planningEditors = verifyEditors.apply(project, List.of());
+            if (planningEditors.refusal() != null)
+            {
+                return ToolResult.error(planningEditors.refusal()).toJson();
+            }
             try
             {
                 refactoring = formRefactoringService.createFormRenameRefactoring(target, newName);
@@ -687,7 +741,7 @@ public class MetadataRenameService
                     Collections.emptyMap(), Collections.emptyList());
             }
             return performRename(project, normFqn, newName, refactorings, disableRequest, expectedHash, progress,
-                "form element"); //$NON-NLS-1$
+                "form element", planningEditors.projects()); //$NON-NLS-1$
         }
         catch (OperationCanceledException e)
         {
@@ -726,7 +780,8 @@ public class MetadataRenameService
         BmModelResolver.Resolution modelResolution = BmModelResolver.resolveForRefactoring(project);
         if (!modelResolution.isAvailable())
         {
-            return ToolResult.error(modelResolution.actionableError(TOOL_NAME, "Nothing was renamed.")).toJson(); //$NON-NLS-1$
+            return ToolResult.error(modelResolution.actionableError(TOOL_NAME, "Nothing was renamed.") //$NON-NLS-1$
+                + " If verification still fails, check get_server_status.").toJson(); //$NON-NLS-1$
         }
         String[] oldName = new String[1];
         String[] refusal = new String[1];
@@ -763,6 +818,11 @@ public class MetadataRenameService
             return refusal[0];
         }
         checkCanceled();
+        var planningEditors = verifyEditors.apply(project, List.of());
+        if (planningEditors.refusal() != null)
+        {
+            return ToolResult.error(planningEditors.refusal()).toJson();
+        }
         IRefactoring refactoring;
         try
         {
@@ -794,7 +854,7 @@ public class MetadataRenameService
                 Collections.emptyMap(), Collections.emptyList());
         }
         return performRename(project, normFqn, newName, refactorings, disableRequest, expectedHash, progress,
-            "predefined item"); //$NON-NLS-1$
+            "predefined item", planningEditors.projects()); //$NON-NLS-1$
     }
 
     /** The predefined item a rename targets, or why it is refused. */
@@ -3153,15 +3213,16 @@ public class MetadataRenameService
 
     private String performRename(IProject project, String objectFqn, String newName,
         Collection<IRefactoring> refactorings, DisableRequest disableRequest, String expectedHash,
-        RenameProgress progress, String subject)
+        RenameProgress progress, String subject, Collection<IProject> planningProjects)
     {
         return performRename(project, objectFqn, newName, refactorings, disableRequest, expectedHash,
-            progress, subject, () -> null);
+            progress, subject, planningProjects, () -> null);
     }
 
     private String performRename(IProject project, String objectFqn, String newName,
         Collection<IRefactoring> refactorings, DisableRequest disableRequest, String expectedHash,
-        RenameProgress progress, String subject, java.util.function.Supplier<String> beforeApply)
+        RenameProgress progress, String subject, Collection<IProject> planningProjects,
+        java.util.function.Supplier<String> beforeApply)
     {
         int textOccurrencesSkipped = ReadToolExecution.readOnHost(project, "Prepare rename text policy",
             () -> applyTextOccurrencePolicy(refactorings));
@@ -3205,6 +3266,12 @@ public class MetadataRenameService
         // Check the current model and saved file after consent, on the same UI call before
         // any native rename operation has been performed.
         progress.enter(RenameProgress.Phase.CHECKING_SAFETY);
+        // A project no longer listed as a dependent can still have a native group in this plan.
+        var applyEditors = verifyEditors.apply(project, planningProjects);
+        if (applyEditors.refusal() != null)
+        {
+            return ToolResult.error(applyEditors.refusal()).toJson();
+        }
         String guardRefusal = beforeApply.get();
         if (guardRefusal != null)
         {

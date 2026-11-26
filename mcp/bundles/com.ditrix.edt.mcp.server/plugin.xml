@@ -399,6 +399,9 @@
    <!-- Refactoring contributors for tag sync on rename/delete -->
    <extension point="com._1c.g5.v8.dt.refactoring.core.refactoringContributors">
       <contributor
+            class="com.ditrix.edt.mcp.server.utils.SpreadsheetRenameRepair">
+      </contributor>
+      <contributor
             class="com.ditrix.edt.mcp.server.tags.refactoring.TagRenameRefactoringContributor">
       </contributor>
       <contributor

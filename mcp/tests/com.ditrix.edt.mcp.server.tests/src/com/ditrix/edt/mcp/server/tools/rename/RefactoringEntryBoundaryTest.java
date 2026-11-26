@@ -55,7 +55,7 @@ public class RefactoringEntryBoundaryTest
                 entries[0]++;
                 throw new IllegalStateException("Target removed after preparation");
             });
-            String result = new MetadataRenameService().prepareMdClassRename(fixture.project(),
+            String result = new MetadataRenameService(false, ignored -> null).prepareMdClassRename(fixture.project(),
                 "CommonModule.EnglishName", "Renamed", fixture.config.getCommonModules().get(0),
                 false, null, null, 0, null, service, BmModelResolver.resolve(fixture.project()));
             assertEquals(1, entries[0]);
@@ -136,7 +136,7 @@ public class RefactoringEntryBoundaryTest
                 boolean.class, DisableRequest.class, String.class, int.class,
                 RenameProgress.class, FormElementWriter.FormMemberRef.class);
             String fqn = "CommonForm.BoundaryForm.Group.Before";
-            String result = (String)invoke(rename, new MetadataRenameService(), fixture.project(),
+            String result = (String)invoke(rename, new MetadataRenameService(false, ignored -> null), fixture.project(),
                 com.ditrix.edt.mcp.server.utils.MetadataScope.ofConfiguration(fixture.config), fqn, "After", false,
                 null, null, 0, null, FormElementWriter.parse(fqn));
             assertEquals(1, entries[0]);
