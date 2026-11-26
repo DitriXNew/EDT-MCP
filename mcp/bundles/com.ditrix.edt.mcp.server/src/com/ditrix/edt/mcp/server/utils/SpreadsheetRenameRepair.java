@@ -179,6 +179,8 @@ public final class SpreadsheetRenameRepair implements IRenameRefactoringContribu
         {
             return null;
         }
+        // The unnamed descriptor is mandatory and has no IRefactoringItem in EDT.
+        // It must not occupy a preview index or alter the preview's change-point fingerprint.
         return new RefactoringOperationDescriptor(new RepairOperation(scope));
     }
 
