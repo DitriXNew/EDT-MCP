@@ -55,6 +55,7 @@ from harness import (
     assert_disk_lacks,
     assert_tree_unchanged,
     poll_disk_contains,
+    poll_disk_contains_all,
     split_markdown_row,
     tree_snapshot,
     wait_for_project_ready,
@@ -457,11 +458,10 @@ def test_role_rights_two_valid_rights_commit_in_a_single_call():
     assert (structured.get("applied") or {}).get("rights") == 2, \
         "both rights entries must be reported applied: %r" % (structured,)
 
-    poll_disk_contains(_rights_file(name), "<name>%s</name>" % GUARDED_OBJECT,
-                       ctx="the guarded object must land on disk")
-    text = _rights_file_text(name)
-    assert_contains(text, "<name>Read</name>", "the Read cell must be authored")
-    assert_contains(text, "<name>Update</name>", "the Update cell must be authored")
+    text = poll_disk_contains_all(
+        _rights_file(name),
+        ["<name>%s</name>" % GUARDED_OBJECT, "<name>Read</name>", "<name>Update</name>"],
+        ctx="the guarded object and both rights must land on disk in one export")
     after_rows = _matrix_rows(_details(fqn))
     got = sorted((obj, right) for obj, right, _value in after_rows if obj == GUARDED_OBJECT)
     assert got == [(GUARDED_OBJECT, "Read"), (GUARDED_OBJECT, "Update")], \
