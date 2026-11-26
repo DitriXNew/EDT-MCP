@@ -17,7 +17,7 @@ import com.ditrix.edt.mcp.server.HostKind;
 /** Prevents EDT's native rename planner from saving unrelated, unfinished editor changes. */
 public final class RenameEditorGuard
 {
-    private static final String UNVERIFIED =
+    static final String UNVERIFIED =
         "Could not verify unsaved editor changes for the affected EDT models. Nothing was renamed or saved. " //$NON-NLS-1$
             + "Retry once the projects finish loading. If verification still fails, check get_server_status."; //$NON-NLS-1$
 

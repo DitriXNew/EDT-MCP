@@ -125,6 +125,71 @@ public class SpreadsheetRenameRepairTest
         }
     }
 
+    @Test
+    public void refusesWhenDependencyLookupFailsBeforeNativePlanning()
+    {
+        var project = mock(IProject.class);
+        var owner = owner(OWNER_ID);
+        var failure = new IllegalStateException("raw dependency error");
+        for (boolean unavailable : new boolean[] {false, true})
+        {
+            try (var scope = SpreadsheetRenameRepair.prepare(project, owner, true, HostKind.WINDOWED, ignored -> {
+                if (unavailable)
+                {
+                    return null;
+                }
+                throw failure;
+            }))
+            {
+                org.junit.Assert.fail("An unverified dependency lookup must not admit native planning");
+            }
+            catch (SpreadsheetRenameRepair.DependencyLookupException e)
+            {
+                assertEquals(unavailable ? null : failure, e.getCause());
+                assertRecoveryRefusal(e.getMessage());
+            }
+        }
+    }
+
+    @Test
+    public void refusesAfterPlanningWhenRepeatLookupCannotVerifyDependencies()
+    {
+        var project = mock(IProject.class);
+        var owner = owner(OWNER_ID);
+        var candidate = candidate(synchronizedWorkbookFile(), WORKBOOK_ID);
+        for (boolean unavailable : new boolean[] {false, true})
+        {
+            var lookups = new java.util.concurrent.atomic.AtomicInteger();
+            try (var repair = SpreadsheetRenameRepair.prepare(project, owner, true, HostKind.WINDOWED, ignored -> {
+                if (lookups.getAndIncrement() == 0)
+                {
+                    return List.of();
+                }
+                if (unavailable)
+                {
+                    return null;
+                }
+                throw new IllegalStateException("raw dependency error");
+            }))
+            {
+                assertNotNull(attach(owner));
+                String refusal = SpreadsheetRenameGuard.refusal("Example", "DataProcessor.Old", List.of(candidate),
+                    false, ignored -> { throw new AssertionError("must refuse before reading the workbook"); }, repair);
+                assertRecoveryRefusal(refusal);
+                assertEquals(2, lookups.get());
+            }
+        }
+    }
+
+    private static void assertRecoveryRefusal(String refusal)
+    {
+        assertNotNull(refusal);
+        assertTrue(refusal, refusal.contains("Nothing was renamed or saved"));
+        assertTrue(refusal, refusal.contains("Retry once the projects finish loading"));
+        assertTrue(refusal, refusal.contains("get_server_status"));
+        assertFalse(refusal, refusal.contains("raw dependency error"));
+    }
+
     private static void assertRefused(SpreadsheetRenameGuard.Candidate candidate, boolean extension,
         SpreadsheetRenameRepair.Scope repair)
     {

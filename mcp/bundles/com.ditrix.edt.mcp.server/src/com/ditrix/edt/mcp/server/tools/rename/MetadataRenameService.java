@@ -490,7 +490,15 @@ public class MetadataRenameService
             return ToolResult.error(unsaved).toJson();
         }
         var spreadsheetOwners = confirm ? SpreadsheetRenameOwners.capture(project, targetObject) : null;
-        var spreadsheetRepair = SpreadsheetRenameRepair.prepare(project, targetObject, confirm);
+        SpreadsheetRenameRepair.Scope spreadsheetRepair;
+        try
+        {
+            spreadsheetRepair = SpreadsheetRenameRepair.prepare(project, targetObject, confirm);
+        }
+        catch (SpreadsheetRenameRepair.DependencyLookupException e)
+        {
+            return ToolResult.error(e.getMessage()).toJson();
+        }
         try (spreadsheetRepair)
         {
             refactorings = refactoringService.createMdObjectRenameRefactoring(targetObject, newName);

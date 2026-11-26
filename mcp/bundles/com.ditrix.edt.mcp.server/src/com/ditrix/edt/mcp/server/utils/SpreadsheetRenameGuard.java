@@ -242,7 +242,15 @@ public final class SpreadsheetRenameGuard
         Function<Candidate, ProjectSpreadsheetReader.Evidence> reader, SpreadsheetRenameRepair.Scope repair)
     {
         List<SpreadsheetRenameRepair.Entry> entries = new ArrayList<>();
-        boolean mayRepair = !extension && repair != null && repair.canRestore();
+        boolean mayRepair;
+        try
+        {
+            mayRepair = !extension && repair != null && repair.canRestore();
+        }
+        catch (SpreadsheetRenameRepair.DependencyLookupException e)
+        {
+            return e.getMessage();
+        }
         for (Candidate candidate : candidates)
         {
             long stamp = mayRepair ? synchronizedStamp(candidate.file()) : IResource.NULL_STAMP;

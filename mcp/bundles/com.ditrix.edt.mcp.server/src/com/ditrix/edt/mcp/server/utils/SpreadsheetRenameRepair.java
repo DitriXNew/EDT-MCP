@@ -51,12 +51,41 @@ public final class SpreadsheetRenameRepair implements IRenameRefactoringContribu
         return prepare(project, owner, confirm, HostKind.current(), RenameEditorGuard::dependents);
     }
 
+    /** The affected projects could not be checked before native rename planning or apply. */
+    public static final class DependencyLookupException extends IllegalStateException
+    {
+        private static final long serialVersionUID = 1L;
+
+        private DependencyLookupException(Throwable cause)
+        {
+            super(RenameEditorGuard.UNVERIFIED, cause);
+        }
+    }
+
+    private static boolean hasNoDependents(IProject project,
+        java.util.function.Function<IProject, Collection<IProject>> findDependents)
+    {
+        Collection<IProject> dependents;
+        try
+        {
+            dependents = findDependents.apply(project);
+        }
+        catch (RuntimeException e)
+        {
+            throw new DependencyLookupException(e);
+        }
+        if (dependents == null)
+        {
+            throw new DependencyLookupException(null);
+        }
+        return dependents.isEmpty();
+    }
+
     static Scope prepare(IProject project, MdObject owner, boolean confirm, HostKind host,
         java.util.function.Function<IProject, Collection<IProject>> findDependents)
     {
-        var dependentProjects = confirm && supported(host, owner) ? findDependents.apply(project) : null;
-        if (dependentProjects == null || !dependentProjects.isEmpty()
-            || CONSTRUCTING.get() != null || !(owner instanceof IBmObject bm))
+        if (!confirm || !supported(host, owner) || CONSTRUCTING.get() != null
+            || !(owner instanceof IBmObject bm) || !hasNoDependents(project, findDependents))
         {
             return new Scope(null, null, IBmObject.BM_NULL_ID, findDependents);
         }
@@ -86,9 +115,8 @@ public final class SpreadsheetRenameRepair implements IRenameRefactoringContribu
 
         public boolean canRestore()
         {
-            var currentDependents = project == null ? null : findDependents.apply(project);
-            return settings != null && attached.get() && currentDependents != null
-                && currentDependents.isEmpty();
+            return project != null && settings != null && attached.get()
+                && hasNoDependents(project, findDependents);
         }
 
         void arm(List<Entry> entries)
