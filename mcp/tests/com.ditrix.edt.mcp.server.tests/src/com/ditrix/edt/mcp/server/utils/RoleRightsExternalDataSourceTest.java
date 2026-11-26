@@ -35,6 +35,7 @@ public class RoleRightsExternalDataSourceTest
         right.setName("Read");
         IRightInfosService infos = mock(IRightInfosService.class);
         when(infos.getRights(f.table)).thenReturn(java.util.Set.of(right));
+        when(infos.getEClassRights(f.table, f.table.eClass())).thenReturn(java.util.Set.of(right));
         assertSame(right, RoleRightsWriter.resolveRight(infos, f.table, "Read"));
     }
 

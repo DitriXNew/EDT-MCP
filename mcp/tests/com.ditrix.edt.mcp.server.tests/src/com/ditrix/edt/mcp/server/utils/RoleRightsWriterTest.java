@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.server.utils;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNotSame;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
@@ -30,6 +31,8 @@ import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.emf.common.util.BasicEList;
 import org.eclipse.emf.common.util.URI;
+import org.eclipse.emf.ecore.EClass;
+import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.InternalEObject;
 import org.junit.Test;
 import org.mockito.ArgumentCaptor;
@@ -49,6 +52,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.Role;
 import com._1c.g5.v8.dt.rights.IRightInfosService;
 import com._1c.g5.v8.dt.rights.model.ObjectRights;
+import com._1c.g5.v8.dt.rights.model.Right;
 import com._1c.g5.v8.dt.rights.model.RightValue;
 import com._1c.g5.v8.dt.rights.model.RightsFactory;
 import com._1c.g5.v8.dt.rights.model.RoleDescription;
@@ -1229,6 +1233,104 @@ public class RoleRightsWriterTest
         String exact = RoleRightsWriter.unresolvedTargetsRefusal("Sales", targets.subList(0, 20)); //$NON-NLS-1$
         assertErrorMentions(exact, "Catalog.Gone20)"); //$NON-NLS-1$
         assertFalse(exact, exact.contains("more)")); //$NON-NLS-1$
+    }
+
+    // Rights resolution must be scoped to the object's class: a right name present in the
+    // version-wide set but absent from the class's own set must NOT resolve (HTTP services on
+    // 8.3.27 carry no rights of their own; access goes via URL-template methods).
+
+    private static EObject objectOfAnyClass() throws Exception
+    {
+        EObject object = mock(EObject.class); //$NON-NLS-1$
+        EClass eClass = mock(EClass.class); //$NON-NLS-1$
+        when(object.eClass()).thenReturn(eClass); //$NON-NLS-1$
+        return object;
+    }
+
+    /** An object whose {@code eClass().getName()} answers with the given kind name. */
+    private static EObject objectOfClass(String eclassName) throws Exception
+    {
+        EObject object = objectOfAnyClass(); //$NON-NLS-1$
+        when(object.eClass().getName()).thenReturn(eclassName); //$NON-NLS-1$
+        return object;
+    }
+
+    private static Right rightNamed(String en, String ru) throws Exception
+    {
+        Right right = mock(Right.class); //$NON-NLS-1$
+        when(right.getName()).thenReturn(en); //$NON-NLS-1$
+        when(right.getNameRu()).thenReturn(ru); //$NON-NLS-1$
+        return right;
+    }
+
+    @Test
+    public void testResolveRightRefusesOutOfClassRightByEnglishAndRussianName() throws Exception
+    {
+        Right read = rightNamed("Read", RU_READ); //$NON-NLS-1$
+        Right update = rightNamed("Update", RU_UPDATE); //$NON-NLS-1$
+        EObject object = objectOfAnyClass();
+        IRightInfosService rightInfos = mock(IRightInfosService.class);
+        when(rightInfos.getRights(object)).thenReturn(java.util.Set.of(read, update)); //$NON-NLS-1$
+        when(rightInfos.getEClassRights(object, object.eClass())).thenReturn(Collections.singleton(read)); //$NON-NLS-1$
+
+        assertNull("out-of-class right must not resolve by English name", //$NON-NLS-1$
+            RoleRightsWriter.resolveRight(rightInfos, object, "Update")); //$NON-NLS-1$
+        assertNull("out-of-class right must not resolve by Russian name", //$NON-NLS-1$
+            RoleRightsWriter.resolveRight(rightInfos, object, RU_UPDATE)); //$NON-NLS-1$
+        assertNotNull("in-class right resolves by English name", //$NON-NLS-1$
+            RoleRightsWriter.resolveRight(rightInfos, object, "Read")); //$NON-NLS-1$
+        assertNotNull("in-class right resolves by Russian name", //$NON-NLS-1$
+            RoleRightsWriter.resolveRight(rightInfos, object, RU_READ)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testRightNotFoundListsClassRightsAndExplainsEmptySet() throws Exception
+    {
+        Right read = rightNamed("Read", RU_READ); //$NON-NLS-1$
+        EObject object = objectOfAnyClass();
+        IRightInfosService empty = mock(IRightInfosService.class);
+        when(empty.getEClassRights(object, object.eClass())).thenReturn(Collections.<Right>emptySet()); //$NON-NLS-1$
+        IRightInfosService withRead = mock(IRightInfosService.class);
+        when(withRead.getEClassRights(object, object.eClass())).thenReturn(Collections.singleton(read)); //$NON-NLS-1$
+
+        String withRights = RoleRightsWriter.rightNotFound(withRead, object, "Update", "Catalog.X"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertErrorMentions(withRights, "Read"); //$NON-NLS-1$
+        // The refusal echoes the rejected name, so scope the absence check to the valid-rights list
+        String validList = withRights.substring(withRights.indexOf("Valid rights:")); //$NON-NLS-1$
+        assertFalse("version-wide out-of-class right must not leak into the list", //$NON-NLS-1$
+            validList.contains("Update")); //$NON-NLS-1$
+
+        String noRights = RoleRightsWriter.rightNotFound(empty, object, "Update", "Catalog.X"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertErrorMentions(noRights, "has no rights of its own"); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testRightNotFoundEmptySetHintsNameTheKindSpecificGrantLevel() throws Exception
+    {
+        IRightInfosService empty = mock(IRightInfosService.class);
+
+        EObject httpService = objectOfClass("HTTPService"); //$NON-NLS-1$
+        when(empty.getEClassRights(httpService, httpService.eClass())).thenReturn(Collections.<Right>emptySet()); //$NON-NLS-1$
+        String httpRefusal = RoleRightsWriter.rightNotFound(empty, httpService, "Read", "HTTPService.X"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertErrorMentions(httpRefusal, "URL-template methods (Method.Use)"); //$NON-NLS-1$
+        assertFalse("the HTTP-service hint must not name the web-service grant level", //$NON-NLS-1$
+            httpRefusal.contains("Operation.Use")); //$NON-NLS-1$
+
+        EObject webService = objectOfClass("WebService"); //$NON-NLS-1$
+        when(empty.getEClassRights(webService, webService.eClass())).thenReturn(Collections.<Right>emptySet()); //$NON-NLS-1$
+        String webRefusal = RoleRightsWriter.rightNotFound(empty, webService, "Read", "WebService.X"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertErrorMentions(webRefusal, "operations (Operation.Use)"); //$NON-NLS-1$
+        assertFalse("the web-service hint must not point at URL-template methods", //$NON-NLS-1$
+            webRefusal.contains("Method.Use")); //$NON-NLS-1$
+
+        // An EClass whose name is null (the objectOfAnyClass shape - like Enum or CommonModule)
+        // gets only the neutral base: no service grant level may leak into its refusal.
+        EObject neutral = objectOfAnyClass(); //$NON-NLS-1$
+        when(empty.getEClassRights(neutral, neutral.eClass())).thenReturn(Collections.<Right>emptySet()); //$NON-NLS-1$
+        String neutralRefusal = RoleRightsWriter.rightNotFound(empty, neutral, "Read", "Enum.X"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertErrorMentions(neutralRefusal, "has no rights of its own"); //$NON-NLS-1$
+        assertFalse("a non-service class must not get a service hint", //$NON-NLS-1$
+            neutralRefusal.contains("Method.Use") || neutralRefusal.contains("Operation.Use")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     private static void assertErrorMentions(String errorJson, String needle)

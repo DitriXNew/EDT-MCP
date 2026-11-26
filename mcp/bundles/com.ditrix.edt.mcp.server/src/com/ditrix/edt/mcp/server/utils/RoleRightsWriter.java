@@ -456,8 +456,9 @@ public final class RoleRightsWriter
             EObject target = targetMd;
 
             String rightName = str(entry.get(KEY_RIGHT));
-            // The right is resolved by walking rightInfos.getRights(object) - a model read - so it runs
-            // inside a read boundary; only the resolved Right handle (a task input) escapes.
+            // The right is resolved by walking rightInfos.getEClassRights(object, eClass()) - a
+            // model read - so it runs inside a read boundary; only the resolved Right handle (a
+            // task input) escapes.
             Right right = resolveRight(ctx.rightInfos, target, rightName);
             if (right == null)
             {
@@ -521,6 +522,8 @@ public final class RoleRightsWriter
     /** Runs {@code AddRightValuesTask} for a single object + right + value. */
     private static void setRightValue(Context ctx, EObject target, Right right, RightValue value)
     {
+        // planRights has already refused any right the object's class does not carry, so every
+        // entry the sorter sees has a resolvable key and the single task commits or fails plainly.
         Map<Right, RightValue> rightToValue = new LinkedHashMap<>();
         rightToValue.put(right, value);
         Map<EObject, Map<Right, RightValue>> objectToRights = new LinkedHashMap<>();
@@ -1206,7 +1209,7 @@ public final class RoleRightsWriter
         {
             return null;
         }
-        for (Right right : rightInfos.getRights(object))
+        for (Right right : rightInfos.getEClassRights(object, object.eClass()))
         {
             if (namesMatch(rightName, right.getName(), right.getNameRu()))
             {
@@ -1510,15 +1513,37 @@ public final class RoleRightsWriter
         return Collections.emptyList();
     }
 
-    private static String rightNotFound(IRightInfosService rightInfos, EObject object, String rightName,
+    static String rightNotFound(IRightInfosService rightInfos, EObject object, String rightName,
         String objectFqn)
     {
         List<String> valid = new ArrayList<>();
-        for (Right right : rightInfos.getRights(object))
+        for (Right right : rightInfos.getEClassRights(object, object.eClass()))
         {
             valid.add(rightLabel(right));
         }
         Collections.sort(valid);
+        if (valid.isEmpty())
+        {
+            // Classes with an empty own-rights set carry their grant at a subobject level, which
+            // differs per kind: HTTP services at URL-template methods, web services at operations,
+            // enums and common modules through the configuration as a whole. Name the kind-specific
+            // grant level instead of printing an empty "Valid rights" list.
+            String hint;
+            if ("HTTPService".equals(object.eClass().getName()))
+            {
+                hint = " Access is granted at its URL-template methods (Method.Use).";
+            }
+            else if ("WebService".equals(object.eClass().getName()))
+            {
+                hint = " Access is granted at its operations (Operation.Use).";
+            }
+            else
+            {
+                hint = "";
+            }
+            return ToolResult.error("Right '" + rightName + "' is not applicable to '" + objectFqn //$NON-NLS-1$ //$NON-NLS-2$
+                + "': the object's class has no rights of its own." + hint).toJson(); //$NON-NLS-1$
+        }
         return ToolResult.error("Right '" + rightName + "' is not valid for '" + objectFqn //$NON-NLS-1$ //$NON-NLS-2$
             + "'. Valid rights: " + String.join(", ", valid) + ".").toJson(); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
     }
