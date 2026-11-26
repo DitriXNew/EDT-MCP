@@ -157,7 +157,7 @@ public class MetadataRenameService
     private static final String SEARCH_IN_CLASS = "com._1c.g5.v8.dt.search.core.SearchIn"; //$NON-NLS-1$
 
     private final boolean excludeTextOccurrences;
-    private final java.util.function.BiFunction<IProject, Collection<IProject>, String> editorRefusal;
+    private final java.util.function.BiFunction<IProject, Collection<IProject>, RenameEditorGuard.Verification> verifyEditors;
 
     /**
      * The monitor this call's preview passes poll; a never-cancelled one unless the adapter handed
@@ -175,19 +175,20 @@ public class MetadataRenameService
     /** Per-call policy; each adapter action owns its own service instance. */
     public MetadataRenameService(boolean excludeTextOccurrences)
     {
-        this(excludeTextOccurrences, RenameEditorGuard::refusal);
+        this(excludeTextOccurrences, RenameEditorGuard::verify);
     }
 
     MetadataRenameService(boolean excludeTextOccurrences, java.util.function.Function<IProject, String> editorRefusal)
     {
-        this(excludeTextOccurrences, (project, dependents) -> editorRefusal.apply(project));
+        this(excludeTextOccurrences, (project, dependents) ->
+            new RenameEditorGuard.Verification(List.copyOf(dependents), editorRefusal.apply(project)));
     }
 
-    private MetadataRenameService(boolean excludeTextOccurrences,
-        java.util.function.BiFunction<IProject, Collection<IProject>, String> editorRefusal)
+    MetadataRenameService(boolean excludeTextOccurrences,
+        java.util.function.BiFunction<IProject, Collection<IProject>, RenameEditorGuard.Verification> verifyEditors)
     {
         this.excludeTextOccurrences = excludeTextOccurrences;
-        this.editorRefusal = editorRefusal;
+        this.verifyEditors = verifyEditors;
     }
 
     /**
@@ -490,10 +491,10 @@ public class MetadataRenameService
         Collection<IRefactoring> refactorings;
         // EDT's pass below takes no monitor: a preview already stopped must not start it.
         checkCanceled();
-        String unsaved = editorRefusal.apply(project, List.of());
-        if (unsaved != null)
+        var initialEditors = verifyEditors.apply(project, List.of());
+        if (initialEditors.refusal() != null)
         {
-            return ToolResult.error(unsaved).toJson();
+            return ToolResult.error(initialEditors.refusal()).toJson();
         }
         var spreadsheetOwners = confirm ? SpreadsheetRenameOwners.capture(project, targetObject) : null;
         SpreadsheetRenameRepair.Scope spreadsheetRepair;
@@ -505,6 +506,7 @@ public class MetadataRenameService
         {
             return ToolResult.error(e.getMessage()).toJson();
         }
+        final RenameEditorGuard.Verification planningEditors;
         try (spreadsheetRepair)
         {
             // Preparation can see a different set of dependents than the first editor check.
@@ -512,11 +514,17 @@ public class MetadataRenameService
             // currently discoverable dependents, even when the repair is inactive.
             if (confirm)
             {
-                String planningRefusal = editorRefusal.apply(project, spreadsheetRepair.planningDependents());
-                if (planningRefusal != null)
+                var previouslySeen = new java.util.LinkedHashSet<>(initialEditors.projects());
+                previouslySeen.addAll(spreadsheetRepair.planningDependents());
+                planningEditors = verifyEditors.apply(project, previouslySeen);
+                if (planningEditors.refusal() != null)
                 {
-                    return ToolResult.error(planningRefusal).toJson();
+                    return ToolResult.error(planningEditors.refusal()).toJson();
                 }
+            }
+            else
+            {
+                planningEditors = initialEditors;
             }
             checkCanceled();
             refactorings = refactoringService.createMdObjectRenameRefactoring(targetObject, newName);
@@ -559,7 +567,7 @@ public class MetadataRenameService
                 // Execute mode - perform the rename, applying any disabled indices
                 return (java.util.function.Supplier<String>)() -> performRename(project, objectFqn, newName,
                     refactorings, disableRequest, expectedHash, progress,
-                    "metadata object", () -> SpreadsheetRenameGuard.refusal(project, targetObject, objectFqn, //$NON-NLS-1$
+                    "metadata object", planningEditors.projects(), () -> SpreadsheetRenameGuard.refusal(project, targetObject, objectFqn, //$NON-NLS-1$
                         spreadsheetOwners, refactorings.size(), spreadsheetRepair));
             }
         }).get();
@@ -698,10 +706,10 @@ public class MetadataRenameService
             IRefactoring refactoring;
             // EDT's form pass takes no monitor: a preview already stopped must not start it.
             checkCanceled();
-            String unsaved = editorRefusal.apply(project, List.of());
-            if (unsaved != null)
+            var planningEditors = verifyEditors.apply(project, List.of());
+            if (planningEditors.refusal() != null)
             {
-                return ToolResult.error(unsaved).toJson();
+                return ToolResult.error(planningEditors.refusal()).toJson();
             }
             try
             {
@@ -733,7 +741,7 @@ public class MetadataRenameService
                     Collections.emptyMap(), Collections.emptyList());
             }
             return performRename(project, normFqn, newName, refactorings, disableRequest, expectedHash, progress,
-                "form element"); //$NON-NLS-1$
+                "form element", planningEditors.projects()); //$NON-NLS-1$
         }
         catch (OperationCanceledException e)
         {
@@ -810,10 +818,10 @@ public class MetadataRenameService
             return refusal[0];
         }
         checkCanceled();
-        String unsaved = editorRefusal.apply(project, List.of());
-        if (unsaved != null)
+        var planningEditors = verifyEditors.apply(project, List.of());
+        if (planningEditors.refusal() != null)
         {
-            return ToolResult.error(unsaved).toJson();
+            return ToolResult.error(planningEditors.refusal()).toJson();
         }
         IRefactoring refactoring;
         try
@@ -846,7 +854,7 @@ public class MetadataRenameService
                 Collections.emptyMap(), Collections.emptyList());
         }
         return performRename(project, normFqn, newName, refactorings, disableRequest, expectedHash, progress,
-            "predefined item"); //$NON-NLS-1$
+            "predefined item", planningEditors.projects()); //$NON-NLS-1$
     }
 
     /** The predefined item a rename targets, or why it is refused. */
@@ -3205,15 +3213,16 @@ public class MetadataRenameService
 
     private String performRename(IProject project, String objectFqn, String newName,
         Collection<IRefactoring> refactorings, DisableRequest disableRequest, String expectedHash,
-        RenameProgress progress, String subject)
+        RenameProgress progress, String subject, Collection<IProject> planningProjects)
     {
         return performRename(project, objectFqn, newName, refactorings, disableRequest, expectedHash,
-            progress, subject, () -> null);
+            progress, subject, planningProjects, () -> null);
     }
 
     private String performRename(IProject project, String objectFqn, String newName,
         Collection<IRefactoring> refactorings, DisableRequest disableRequest, String expectedHash,
-        RenameProgress progress, String subject, java.util.function.Supplier<String> beforeApply)
+        RenameProgress progress, String subject, Collection<IProject> planningProjects,
+        java.util.function.Supplier<String> beforeApply)
     {
         int textOccurrencesSkipped = ReadToolExecution.readOnHost(project, "Prepare rename text policy",
             () -> applyTextOccurrencePolicy(refactorings));
@@ -3257,10 +3266,11 @@ public class MetadataRenameService
         // Check the current model and saved file after consent, on the same UI call before
         // any native rename operation has been performed.
         progress.enter(RenameProgress.Phase.CHECKING_SAFETY);
-        String unsaved = editorRefusal.apply(project, List.of());
-        if (unsaved != null)
+        // A project no longer listed as a dependent can still have a native group in this plan.
+        var applyEditors = verifyEditors.apply(project, planningProjects);
+        if (applyEditors.refusal() != null)
         {
-            return ToolResult.error(unsaved).toJson();
+            return ToolResult.error(applyEditors.refusal()).toJson();
         }
         String guardRefusal = beforeApply.get();
         if (guardRefusal != null)

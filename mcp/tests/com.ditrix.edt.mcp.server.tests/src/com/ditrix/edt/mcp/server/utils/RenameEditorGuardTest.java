@@ -55,6 +55,20 @@ public class RenameEditorGuardTest
     }
 
     @Test
+    public void snapshotKeepsAFormerDependentForTheNextCheck()
+    {
+        var base = project("Base");
+        var extension = project("ReloadedExtension");
+        var discovered = new java.util.ArrayList<>(List.of(extension));
+        var first = RenameEditorGuard.verify(HostKind.WINDOWED, base, List.of(), p -> discovered, p -> model(false));
+        assertNull(first.refusal());
+        discovered.clear();
+        var models = Map.of(base, model(false), extension, model(true));
+        var later = RenameEditorGuard.verify(HostKind.WINDOWED, base, first.projects(), p -> discovered, models::get);
+        assertTrue(later.refusal(), later.refusal().contains("'ReloadedExtension'"));
+    }
+
+    @Test
     public void cleanWindowedModelPasses()
     {
         IProject base = project("Base");

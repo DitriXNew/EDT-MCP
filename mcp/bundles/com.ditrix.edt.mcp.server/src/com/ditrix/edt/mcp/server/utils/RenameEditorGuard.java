@@ -5,6 +5,7 @@ package com.ditrix.edt.mcp.server.utils;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.function.Function;
 
 import org.eclipse.core.resources.IProject;
@@ -32,9 +33,18 @@ public final class RenameEditorGuard
             : IDependentProject.getDependent(project, activator.getV8ProjectManager().getProjects());
     }
 
-    public static String refusal(IProject project, Collection<IProject> alreadyDiscovered)
+    /** A successful check retains the exact immutable project set that was inspected. */
+    public record Verification(List<IProject> projects, String refusal)
     {
-        return refusal(HostKind.current(), project, alreadyDiscovered, RenameEditorGuard::dependents, affected -> {
+        public Verification
+        {
+            projects = List.copyOf(projects);
+        }
+    }
+
+    public static Verification verify(IProject project, Collection<IProject> alreadyDiscovered)
+    {
+        return verify(HostKind.current(), project, alreadyDiscovered, RenameEditorGuard::dependents, affected -> {
             var resolution = BmModelResolver.resolve(affected);
             return resolution.isAvailable() ? resolution.getModel() : null;
         });
@@ -43,22 +53,28 @@ public final class RenameEditorGuard
     static String refusal(HostKind host, IProject project,
         Function<IProject, Collection<IProject>> findDependents, Function<IProject, IBmModel> findModel)
     {
-        return refusal(host, project, java.util.List.of(), findDependents, findModel);
+        return refusal(host, project, List.of(), findDependents, findModel);
     }
 
     static String refusal(HostKind host, IProject project, Collection<IProject> alreadyDiscovered,
         Function<IProject, Collection<IProject>> findDependents, Function<IProject, IBmModel> findModel)
     {
+        return verify(host, project, alreadyDiscovered, findDependents, findModel).refusal();
+    }
+
+    static Verification verify(HostKind host, IProject project, Collection<IProject> alreadyDiscovered,
+        Function<IProject, Collection<IProject>> findDependents, Function<IProject, IBmModel> findModel)
+    {
         if (host != HostKind.WINDOWED)
         {
-            return null;
+            return new Verification(List.of(), null);
         }
         try
         {
             var dependents = findDependents.apply(project);
             if (dependents == null)
             {
-                return UNVERIFIED;
+                return new Verification(List.of(), UNVERIFIED);
             }
             var affected = new LinkedHashSet<IProject>();
             affected.add(project);
@@ -70,7 +86,8 @@ public final class RenameEditorGuard
                 var model = findModel.apply(item);
                 if (model == null)
                 {
-                    return UNVERIFIED + " Unverified project: '" + item.getName() + "'."; //$NON-NLS-1$ //$NON-NLS-2$
+                    return new Verification(List.of(),
+                        UNVERIFIED + " Unverified project: '" + item.getName() + "'."); //$NON-NLS-1$ //$NON-NLS-2$
                 }
                 // The native planner calls save() on these contexts before loading contributors.
                 if (model.getAllLocalContexts().stream().anyMatch(context -> context.isDirty()))
@@ -80,15 +97,16 @@ public final class RenameEditorGuard
             }
             if (!dirty.isEmpty())
             {
-                return "Open EDT editors have unsaved changes in " + String.join(", ", dirty.stream().sorted().toList()) //$NON-NLS-1$ //$NON-NLS-2$
+                return new Verification(List.of(),
+                    "Open EDT editors have unsaved changes in " + String.join(", ", dirty.stream().sorted().toList()) //$NON-NLS-1$ //$NON-NLS-2$
                     + ". Building the rename would make EDT save them without asking, so nothing was renamed or saved. " //$NON-NLS-1$
-                    + "Save or discard those edits in EDT, then retry."; //$NON-NLS-1$
+                    + "Save or discard those edits in EDT, then retry."); //$NON-NLS-1$
             }
+            return new Verification(List.copyOf(affected), null);
         }
         catch (RuntimeException e)
         {
-            return UNVERIFIED;
+            return new Verification(List.of(), UNVERIFIED);
         }
-        return null;
     }
 }

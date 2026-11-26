@@ -122,7 +122,7 @@ public class MetadataRenamePreviewReadBoundaryTest
     {
         Method apply = MetadataRenameService.class.getDeclaredMethod("performRename", IProject.class, String.class,
             String.class, Collection.class, DisableRequest.class, String.class, RenameProgress.class, String.class,
-            Supplier.class);
+            Collection.class, Supplier.class);
         apply.setAccessible(true);
         List<IRefactoring> groups = refactorings();
         RenameProgress progress = new RenameProgress();
@@ -138,7 +138,7 @@ public class MetadataRenamePreviewReadBoundaryTest
         try
         {
             String result = (String)apply.invoke(new MetadataRenameService(), null, "DataProcessor.Old", "New",
-                groups, DisableRequest.parse(null), null, progress, "metadata object", refusal);
+                groups, DisableRequest.parse(null), null, progress, "metadata object", List.of(), refusal);
             assertTrue(result, result.contains(reason));
             assertEquals(RenameProgress.Phase.CHECKING_SAFETY, progress.getPhase());
             verify(groups.get(0), never()).perform();
@@ -156,7 +156,7 @@ public class MetadataRenamePreviewReadBoundaryTest
     {
         Method apply = MetadataRenameService.class.getDeclaredMethod("performRename", IProject.class, String.class,
             String.class, Collection.class, DisableRequest.class, String.class, RenameProgress.class, String.class,
-            Supplier.class);
+            Collection.class, Supplier.class);
         apply.setAccessible(true);
         List<IRefactoring> groups = refactorings();
         RenameProgress progress = new RenameProgress();
@@ -170,7 +170,7 @@ public class MetadataRenamePreviewReadBoundaryTest
         try
         {
             String result = (String)apply.invoke(service, null, "Catalog.Old", "New", groups,
-                DisableRequest.parse(null), null, progress, "metadata object", (Supplier<String>)() -> {
+                DisableRequest.parse(null), null, progress, "metadata object", List.of(), (Supplier<String>)() -> {
                     throw new AssertionError("Must not prepare the spreadsheet repair when an editor is dirty");
                 });
             assertTrue(result, result.contains(refusal));
@@ -215,6 +215,43 @@ public class MetadataRenamePreviewReadBoundaryTest
         assertEquals(2, checks.get());
         assertTrue(result, result.contains("NewDependency"));
         verify(planner, never()).createMdObjectRenameRefactoring(any(), any());
+    }
+
+    @Test
+    public void keepsAPlannedDependencyInThePostConsentCheckEvenIfDiscoveryDropsIt()
+    {
+        var project = mock(IProject.class);
+        var dependency = mock(IProject.class);
+        var owner = mock(com._1c.g5.v8.dt.metadata.mdclass.CommonModule.class);
+        when(owner.eClass()).thenReturn(org.eclipse.emf.ecore.EcoreFactory.eINSTANCE.createEClass());
+        List<IRefactoring> groups = refactorings();
+        var planner = mdService(groups);
+        var progress = new RenameProgress();
+        var service = new MetadataRenameService(false, (base, retained) -> {
+            if (progress.getPhase() == RenameProgress.Phase.CHECKING_SAFETY)
+            {
+                assertTrue("The old dependency must be checked even after it drops out of discovery",
+                    retained.contains(dependency));
+                return new com.ditrix.edt.mcp.server.utils.RenameEditorGuard.Verification(List.of(),
+                    "Project 'ReloadedExtension' has unsaved changes.");
+            }
+            return new com.ditrix.edt.mcp.server.utils.RenameEditorGuard.Verification(List.of(dependency), null);
+        });
+        String property = "eclipse.application";
+        String original = System.setProperty(property, HostKind.APPLICATION_ID);
+        try
+        {
+            String result = service.createMdClassRename(project, "CommonModule.Old", "New", owner, true,
+                DisableRequest.parse(null), null, 0, progress, planner);
+            assertTrue(result, result.contains("ReloadedExtension"));
+            verify(planner).createMdObjectRenameRefactoring(owner, "New");
+            verify(groups.get(0), never()).perform();
+        }
+        finally
+        {
+            if (original == null) System.clearProperty(property);
+            else System.setProperty(property, original);
+        }
     }
 
     @Test
