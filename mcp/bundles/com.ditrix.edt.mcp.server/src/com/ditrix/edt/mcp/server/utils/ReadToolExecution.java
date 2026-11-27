@@ -156,7 +156,7 @@ public final class ReadToolExecution
     }
 
     /** The retryable answer for a read that EDT failed while restarting the context. */
-    static String restartingError(String projectName, Exception failure)
+    public static String restartingError(String projectName, Throwable failure)
     {
         return ToolResult.error("EDT was restarting the context of project '" + projectName //$NON-NLS-1$
             + "' and failed the read inside EDT (" + PlatformFailures.describe(failure) //$NON-NLS-1$

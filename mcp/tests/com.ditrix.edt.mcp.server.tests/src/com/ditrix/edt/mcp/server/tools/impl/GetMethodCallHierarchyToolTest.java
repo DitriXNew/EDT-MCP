@@ -21,6 +21,7 @@ import com._1c.g5.v8.dt.bsl.model.BslFactory;
 import com._1c.g5.v8.dt.bsl.model.DynamicFeatureAccess;
 import com._1c.g5.v8.dt.bsl.model.StaticFeatureAccess;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
+import com.ditrix.edt.mcp.server.utils.HeadlessReadFixture;
 
 /**
  * Tests for {@link GetMethodCallHierarchyTool}.
@@ -817,11 +818,79 @@ public class GetMethodCallHierarchyToolTest
     @Test
     public void testUnknownProjectStillReportsNotFoundThroughReadDispatch() throws Exception
     {
-        try (com.ditrix.edt.mcp.server.utils.HeadlessReadFixture fixture =
-            new com.ditrix.edt.mcp.server.utils.HeadlessReadFixture())
+        try (HeadlessReadFixture fixture = new HeadlessReadFixture())
         {
-            String result = new GetMethodCallHierarchyTool().execute(Map.of("projectName", "NoSuchProject_zz", "modulePath", "CommonModules/X/Module.bsl", "direction", "outgoing"));
+            String result = new GetMethodCallHierarchyTool().execute(Map.of("projectName", "NoSuchProject_zz",
+                "modulePath", "CommonModules/X/Module.bsl", "direction", "outgoing"));
             assertTrue(result, result.contains("Project not found: NoSuchProject_zz"));
+            assertTrue(result, result.contains("\"success\":false"));
+        }
+    }
+
+    // ========== EDT context-restart retry (#1058) ==========
+
+    /** A loader that fails with the restart NPE {@code failures} times, then answers a module. */
+    private static java.util.function.BiFunction<org.eclipse.core.resources.IProject, String,
+        com._1c.g5.v8.dt.bsl.model.Module> restartingLoader(int failures, int[] calls)
+    {
+        var module = BslFactory.eINSTANCE.createModule();
+        var sibling = BslFactory.eINSTANCE.createProcedure();
+        sibling.setName("AvailableSibling");
+        module.getMethods().add(sibling);
+        return (project, path) -> {
+            if (++calls[0] <= failures)
+            {
+                throw HeadlessReadFixture.restartNpe();
+            }
+            return module;
+        };
+    }
+
+    private static Map<String, String> missingMethodRequest(String depth)
+    {
+        return Map.of("modulePath", "CommonModules/Calc/Module.bsl", "direction", "callers",
+            "methodName", "Missing", "depth", depth);
+    }
+
+    @Test
+    public void testSingleHopRestartFailureIsRetriedOnce() throws Exception
+    {
+        try (HeadlessReadFixture fixture = new HeadlessReadFixture())
+        {
+            int[] calls = new int[1];
+            var tool = new GetMethodCallHierarchyTool(restartingLoader(1, calls));
+            String result = fixture.call(tool, missingMethodRequest("1"));
+            assertEquals(2, calls[0]);
+            assertFalse(result, result.contains("EDT was restarting"));
+            assertTrue(result, result.contains("Available methods"));
+        }
+    }
+
+    @Test
+    public void testTransitiveRootRestartFailureIsRetriedOnce() throws Exception
+    {
+        try (HeadlessReadFixture fixture = new HeadlessReadFixture())
+        {
+            int[] calls = new int[1];
+            var tool = new GetMethodCallHierarchyTool(restartingLoader(1, calls));
+            String result = fixture.call(tool, missingMethodRequest("3"));
+            assertEquals(2, calls[0]);
+            assertFalse(result, result.contains("EDT was restarting"));
+            assertTrue(result, result.contains("Available methods"));
+        }
+    }
+
+    @Test
+    public void testTransitiveRootRepeatedRestartFailureAnswersRetryableError() throws Exception
+    {
+        try (HeadlessReadFixture fixture = new HeadlessReadFixture())
+        {
+            int[] calls = new int[1];
+            var tool = new GetMethodCallHierarchyTool(restartingLoader(2, calls));
+            String result = fixture.call(tool, missingMethodRequest("3"));
+            assertEquals(2, calls[0]);
+            assertTrue(result, result.contains(
+                "EDT was restarting the context of project '" + fixture.name() + "'"));
             assertTrue(result, result.contains("\"success\":false"));
         }
     }

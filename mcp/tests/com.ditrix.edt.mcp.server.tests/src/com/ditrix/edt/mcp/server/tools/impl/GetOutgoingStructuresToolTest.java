@@ -35,6 +35,7 @@ import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.ditrix.edt.mcp.server.utils.HeadlessReadFixture;
 
 /**
  * Tests for {@link GetOutgoingStructuresTool}.
@@ -534,10 +535,10 @@ public class GetOutgoingStructuresToolTest
     @Test
     public void testUnknownProjectStillReportsNotFoundThroughReadDispatch() throws Exception
     {
-        try (com.ditrix.edt.mcp.server.utils.HeadlessReadFixture fixture =
-            new com.ditrix.edt.mcp.server.utils.HeadlessReadFixture())
+        try (HeadlessReadFixture fixture = new HeadlessReadFixture())
         {
-            String result = new GetOutgoingStructuresTool().execute(Map.of("projectName", "NoSuchProject_zz", "modulePath", "CommonModules/X/Module.bsl"));
+            String result = new GetOutgoingStructuresTool().execute(Map.of(
+                "projectName", "NoSuchProject_zz", "modulePath", "CommonModules/X/Module.bsl"));
             assertTrue(result, result.contains("Project not found: NoSuchProject_zz"));
             assertTrue(result, result.contains("\"success\":false"));
         }

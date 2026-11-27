@@ -11,6 +11,8 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.io.ByteArrayInputStream;
@@ -29,7 +31,9 @@ import org.junit.Test;
 
 import com._1c.g5.v8.dt.bsl.BslStandaloneSetup;
 import com._1c.g5.v8.dt.bsl.model.Module;
+import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
+import com.ditrix.edt.mcp.server.utils.HeadlessReadFixture;
 
 /**
  * Tests for {@link GoToDefinitionTool}.
@@ -477,12 +481,54 @@ public class GoToDefinitionToolTest
     @Test
     public void testUnknownProjectStillReportsNotFoundThroughReadDispatch() throws Exception
     {
-        try (com.ditrix.edt.mcp.server.utils.HeadlessReadFixture fixture =
-            new com.ditrix.edt.mcp.server.utils.HeadlessReadFixture())
+        try (HeadlessReadFixture fixture = new HeadlessReadFixture())
         {
-            String result = new GoToDefinitionTool().execute(Map.of("projectName", "NoSuchProject_zz", "symbol", "Catalog.Goods"));
+            String result = new GoToDefinitionTool().execute(
+                Map.of("projectName", "NoSuchProject_zz", "symbol", "Catalog.Goods"));
             assertTrue(result, result.contains("Project not found: NoSuchProject_zz"));
             assertTrue(result, result.contains("\"success\":false"));
+        }
+    }
+
+    @Test
+    public void testRestartFailureIsRetriedOnceAndSucceeds() throws Exception
+    {
+        try (HeadlessReadFixture fixture = new HeadlessReadFixture())
+        {
+            fixture.failConfigurationLookups(HeadlessReadFixture.restartNpe());
+            String result = fixture.call(new GoToDefinitionTool(),
+                Map.of("symbol", "Catalog.Goods"));
+            assertFalse(result, result.contains("EDT was restarting"));
+            verify(fixture.configurations, times(2)).getConfiguration(fixture.project());
+        }
+    }
+
+    @Test
+    public void testRepeatedRestartFailureAnswersRetryableError() throws Exception
+    {
+        try (HeadlessReadFixture fixture = new HeadlessReadFixture())
+        {
+            fixture.failConfigurationLookups(HeadlessReadFixture.restartNpe(),
+                HeadlessReadFixture.restartNpe());
+            String result = fixture.call(new GoToDefinitionTool(),
+                Map.of("symbol", "Catalog.Goods"));
+            assertTrue(result, result.contains(
+                "EDT was restarting the context of project '" + fixture.name() + "'"));
+            assertTrue(result, result.contains("\"success\":false"));
+            verify(fixture.configurations, times(2)).getConfiguration(fixture.project());
+        }
+    }
+
+    @Test
+    public void testOrdinaryFailureIsNotRetried() throws Exception
+    {
+        try (HeadlessReadFixture fixture = new HeadlessReadFixture())
+        {
+            fixture.failConfigurationLookups(new IllegalStateException("boom"));
+            String result = fixture.call(new GoToDefinitionTool(),
+                Map.of("symbol", "Catalog.Goods"));
+            assertEquals(ToolResult.error("boom").toJson(), result);
+            verify(fixture.configurations, times(1)).getConfiguration(fixture.project());
         }
     }
 }

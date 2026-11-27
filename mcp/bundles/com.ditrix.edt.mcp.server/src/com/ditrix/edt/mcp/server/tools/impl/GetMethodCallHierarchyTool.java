@@ -53,6 +53,7 @@ import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
 import com.ditrix.edt.mcp.server.utils.BslMethodRecovery;
 import com.ditrix.edt.mcp.server.utils.Pagination;
+import com.ditrix.edt.mcp.server.utils.PlatformFailures;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.Refusals;
 
@@ -441,6 +442,23 @@ public class GetMethodCallHierarchyTool implements IMcpTool
     }
 
     /**
+     * Lets the EDT context-restart failure escape a catch that otherwise degrades to a partial
+     * answer, so {@link ReadToolExecution#dispatchReadTool} can retry the read instead of
+     * returning an empty or truncated result as if it were complete.
+     */
+    private static void rethrowIfContextRestart(Exception failure)
+    {
+        if (PlatformFailures.isContextRestartArtifact(failure))
+        {
+            if (failure instanceof RuntimeException runtime)
+            {
+                throw runtime;
+            }
+            throw new IllegalStateException(failure);
+        }
+    }
+
+    /**
      * Finds all callers of the specified method.
      * <p>
      * BSL method invocations are linked by name through scoping and are not stored as ordinary
@@ -504,6 +522,7 @@ public class GetMethodCallHierarchyTool implements IMcpTool
             }
             catch (Exception e)
             {
+                rethrowIfContextRestart(e);
                 Activator.logWarning("Failed to load candidate module " + relToSrc //$NON-NLS-1$
                     + ": " + e.getMessage()); //$NON-NLS-1$
                 continue;
@@ -979,10 +998,19 @@ public class GetMethodCallHierarchyTool implements IMcpTool
 
             var readExecutor = transitiveExecutor(projectName);
             RootResolution root = new RootResolution();
-            readExecutor.accept(() -> resolveRoot(ctx.project(), modulePath, request.methodName, root));
-            if (root.error != null)
+            // Only the root resolution is retried on an EDT context restart (the same settle,
+            // pause and answer as every other read tool): it runs before the traversal budget
+            // starts, so a retry costs the walk nothing. Null means resolved.
+            String rootFailure = ReadToolExecution.dispatchReadTool(projectName,
+                "Error resolving call-hierarchy root", //$NON-NLS-1$
+                () -> ReadToolExecution.readOnHost(projectName, NAME, () -> {
+                    resolveRoot(ctx.project(), modulePath, request.methodName, root);
+                    return root.error;
+                }),
+                e -> ToolResult.error(e.getMessage()).toJson());
+            if (rootFailure != null)
             {
-                return root.error;
+                return rootFailure;
             }
 
             TransitiveContext context =
@@ -1007,13 +1035,17 @@ public class GetMethodCallHierarchyTool implements IMcpTool
         catch (Exception e)
         {
             Refusals.log("Error finding transitive call hierarchy", e); //$NON-NLS-1$
+            if (PlatformFailures.isContextRestartArtifact(e))
+            {
+                return ReadToolExecution.restartingError(projectName, e);
+            }
             return ToolResult.error(e.getMessage()).toJson();
         }
     }
 
     /**
      * Resolves the method being asked about, on the UI thread. Writes either an error JSON or the
-     * root identity into {@code out}.
+     * root identity into {@code out}; an unexpected failure propagates to the caller.
      *
      * @param project the EDT project
      * @param modulePath the source-relative module path
@@ -1022,36 +1054,31 @@ public class GetMethodCallHierarchyTool implements IMcpTool
      */
     private void resolveRoot(IProject project, String modulePath, String methodName, RootResolution out)
     {
-        try
+        // No catch: a failure propagates to ReadToolExecution.dispatchReadTool (the caller), which
+        // logs it, retries the EDT context-restart one and maps every other one to an error JSON.
+        Module module = moduleLoader.apply(project, modulePath);
+        if (module == null)
         {
-            Module module = moduleLoader.apply(project, modulePath);
-            if (module == null)
-            {
-                out.error = moduleLoadFailure(modulePath);
-                return;
-            }
-            Method method = BslModuleUtils.findMethod(module, methodName);
-            if (method == null)
-            {
-                out.error = ToolResult.error(BslMethodRecovery.missingMethodForAnalysis(module, project, modulePath, methodName)).toJson();
-                return;
-            }
-            if (method.eResource() == null || method.eResource().getResourceSet() == null)
-            {
-                out.error = ToolResult.error("BSL resource set not available").toJson(); //$NON-NLS-1$
-                return;
-            }
-            out.methodUri = EcoreUtil.getURI(method);
-            // The DECLARED spelling, not the caller's: BSL names are case-insensitive, and the
-            // heading should show the method as its module writes it.
-            out.methodName = method.getName() != null ? method.getName() : methodName;
-            out.resourceSet = method.eResource().getResourceSet();
+            out.error = moduleLoadFailure(modulePath);
+            return;
         }
-        catch (Exception e)
+        Method method = BslModuleUtils.findMethod(module, methodName);
+        if (method == null)
         {
-            Refusals.log("Error resolving call-hierarchy root", e); //$NON-NLS-1$
-            out.error = ToolResult.error(e.getMessage()).toJson();
+            out.error = ToolResult.error(BslMethodRecovery
+                .missingMethodForAnalysis(module, project, modulePath, methodName)).toJson();
+            return;
         }
+        if (method.eResource() == null || method.eResource().getResourceSet() == null)
+        {
+            out.error = ToolResult.error("BSL resource set not available").toJson(); //$NON-NLS-1$
+            return;
+        }
+        out.methodUri = EcoreUtil.getURI(method);
+        // The DECLARED spelling, not the caller's: BSL names are case-insensitive, and the
+        // heading should show the method as its module writes it.
+        out.methodName = method.getName() != null ? method.getName() : methodName;
+        out.resourceSet = method.eResource().getResourceSet();
     }
 
     /** Holder for the UI-thread resolution of the method the walk starts from. */
@@ -2004,6 +2031,7 @@ public class GetMethodCallHierarchyTool implements IMcpTool
         }
         catch (Exception e)
         {
+            rethrowIfContextRestart(e);
             // Per-file parse failure must never abort the aggregation; log and continue with what
             // was collected so far (mirrors the candidate-scan resilience of findCallers).
             Activator.logWarning("Failed to walk module for outgoing calls " + modulePath //$NON-NLS-1$
