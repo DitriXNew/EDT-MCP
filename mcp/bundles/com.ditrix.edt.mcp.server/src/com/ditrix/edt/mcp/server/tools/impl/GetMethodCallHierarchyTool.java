@@ -1546,6 +1546,9 @@ public class GetMethodCallHierarchyTool implements IMcpTool
         }
         catch (Exception e)
         {
+            // An EDT context restart is not an unloadable module: let it reach the transitive
+            // handler, which answers the retryable "restarting" error instead of a partial graph.
+            rethrowIfContextRestart(e);
             Activator.logWarning("Failed to load candidate module " + relToSrc //$NON-NLS-1$
                 + ": " + e.getMessage()); //$NON-NLS-1$
             if (ctx.unloadable.add(relToSrc))
