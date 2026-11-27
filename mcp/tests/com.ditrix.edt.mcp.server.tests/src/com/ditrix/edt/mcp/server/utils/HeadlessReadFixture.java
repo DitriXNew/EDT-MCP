@@ -89,7 +89,18 @@ public final class HeadlessReadFixture implements AutoCloseable
     /** The NPE EDT raises while it restarts a project context (Xtext index delegate not wired). */
     public static NullPointerException restartNpe()
     {
-        NullPointerException npe = new NullPointerException();
+        // Mockito's doThrow calls fillInStackTrace() when it throws, which would wipe the
+        // synthetic Xtext frame; a no-op override keeps it.
+        NullPointerException npe = new NullPointerException()
+        {
+            private static final long serialVersionUID = 1L;
+
+            @Override
+            public synchronized Throwable fillInStackTrace()
+            {
+                return this;
+            }
+        };
         npe.setStackTrace(new StackTraceElement[] { new StackTraceElement(
             "org.eclipse.xtext.builder.clustering.CurrentDescriptions$ResourceSetAware",
             "getExportedObjects", "CurrentDescriptions.java", 1) });
