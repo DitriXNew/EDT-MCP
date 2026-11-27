@@ -6,7 +6,9 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
+import java.lang.reflect.InvocationTargetException;
 import java.util.IdentityHashMap;
+import java.util.concurrent.ExecutionException;
 import java.util.function.Predicate;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -14,6 +16,7 @@ import java.util.regex.Pattern;
 import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.IStatus;
 import org.eclipse.debug.core.DebugException;
+import org.eclipse.emf.common.util.WrappedException;
 
 import com.e1c.g5.dt.applications.ApplicationException;
 
@@ -59,6 +62,13 @@ import com.e1c.g5.dt.applications.ApplicationException;
  * away; choosing that one keeps the heap address. Selecting the text and cleaning the text are
  * two questions, answered by two methods, in that order.
  *
+ * <p>{@link #isContextRestartArtifact(Throwable)} answers yet another question: is this failure
+ * the known transient signature of EDT restarting a project context (an {@code NPE} inside
+ * Xtext's {@code CurrentDescriptions$ResourceSetAware.getExportedObjects}, whose index delegate
+ * is not wired yet)? It is a
+ * recogniser, not a message selector, and is deliberately narrow: an ordinary
+ * {@code NullPointerException} stays an ordinary failure.
+ *
  * <p>Pure and side-effect-free (logging stays with the caller, which knows the context), so the
  * whole decision is unit-testable without an EDT runtime.
  */
@@ -66,6 +76,21 @@ public final class PlatformFailures
 {
     /** Cap on how many {@code getCause()} hops are walked, guarding against a cyclical chain. */
     private static final int MAX_CAUSE_CHAIN_DEPTH = 10;
+
+    /**
+     * The Xtext frame class that marks the transient context-restart NPE.
+     *
+     * <p>Verified against EDT 2026.2.2, jar org.eclipse.xtext.builder_2.41.0.v20251124-0739.jar:
+     * the failing frame is the nested class
+     * {@code org.eclipse.xtext.builder.clustering.CurrentDescriptions$ResourceSetAware}
+     * (NOT {@code org.eclipse.xtext.resource.*}), method {@code getExportedObjects()}, which calls
+     * {@code delegate.getExportedObjects()} on a not yet wired delegate. Compared exactly.
+     */
+    private static final String XTEXT_RESTART_FRAME_CLASS =
+        "org.eclipse.xtext.builder.clustering.CurrentDescriptions$ResourceSetAware"; //$NON-NLS-1$
+
+    /** The method of that frame. */
+    private static final String XTEXT_RESTART_FRAME_METHOD = "getExportedObjects"; //$NON-NLS-1$
 
     /** Cap on how deep a {@link IStatus} child tree is walked. */
     private static final int MAX_STATUS_DEPTH = 4;
@@ -101,6 +126,59 @@ public final class PlatformFailures
     private PlatformFailures()
     {
         // Utility class
+    }
+
+    /**
+     * Known transient EDT context-restart signature: a {@link NullPointerException} whose top
+     * stack frame is exactly {@code CurrentDescriptions$ResourceSetAware.getExportedObjects}
+     * in Xtext's builder (its index delegate is not wired yet while the project context
+     * restarts). Pure.
+     *
+     * <p>The match is by signature, not by class prefix: another method of that class, or the
+     * outer {@code CurrentDescriptions} class, is not recognised. The cause chain is followed
+     * only through transparent wrappers: an {@link InvocationTargetException}, an
+     * {@link ExecutionException}, an EMF {@link WrappedException}, or any throwable that adds no
+     * message of its own (a {@code null} message, or one equal to {@code cause.toString()} as
+     * {@code new RuntimeException(cause)} produces). A wrapper with a meaningful message of its
+     * own stops the recognition: it is a different failure that merely carries the NPE. Any
+     * other NPE (ours or the platform's) is not recognised. Add new signatures only for an
+     * observed log entry.
+     *
+     * @param failure the exception to inspect (may be {@code null})
+     * @return {@code true} when the failure is, or transparently wraps, the known restart NPE
+     */
+    public static boolean isContextRestartArtifact(Throwable failure)
+    {
+        Throwable current = failure;
+        for (int depth = 0; current != null && depth < MAX_CAUSE_CHAIN_DEPTH; depth++)
+        {
+            if (current instanceof NullPointerException)
+            {
+                StackTraceElement[] trace = current.getStackTrace();
+                return trace != null && trace.length > 0
+                    && XTEXT_RESTART_FRAME_CLASS.equals(trace[0].getClassName())
+                    && XTEXT_RESTART_FRAME_METHOD.equals(trace[0].getMethodName());
+            }
+            Throwable cause = current.getCause();
+            if (cause == null || cause == current || !isTransparentWrapper(current, cause))
+            {
+                return false;
+            }
+            current = cause;
+        }
+        return false;
+    }
+
+    /** Whether {@code wrapper} only forwards {@code cause} and adds no message of its own. */
+    private static boolean isTransparentWrapper(Throwable wrapper, Throwable cause)
+    {
+        if (wrapper instanceof InvocationTargetException || wrapper instanceof ExecutionException
+            || wrapper instanceof WrappedException)
+        {
+            return true;
+        }
+        String message = wrapper.getMessage();
+        return message == null || message.equals(cause.toString());
     }
 
     /**

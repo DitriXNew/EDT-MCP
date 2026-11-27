@@ -49,6 +49,7 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 import com.ditrix.edt.mcp.server.utils.ControlledMetadataProperties.Row;
 import com.ditrix.edt.mcp.server.utils.ControlledMetadataProperties.Status;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
+import com.ditrix.edt.mcp.server.utils.HeadlessReadFixture;
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.MetadataScopeTestFixtures;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
@@ -167,6 +168,18 @@ public class GetMetadataDetailsToolTest
         assertTrue("assignable mode should advertise managed-form root addresses", //$NON-NLS-1$
             schema.contains("Catalog.Products.Form.ItemForm") //$NON-NLS-1$
                 && schema.contains("CommonForm.Main")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testUnknownProjectStillReportsNotFoundThroughReadDispatch() throws Exception
+    {
+        try (HeadlessReadFixture fixture = new HeadlessReadFixture())
+        {
+            String result = new GetMetadataDetailsTool().execute(Map.of(
+                "projectName", "NoSuchProject_zz", "objectFqns", "[\"Catalog.Goods\"]"));
+            assertTrue(result, result.contains("Project not found: NoSuchProject_zz"));
+            assertTrue(result, result.contains("\"success\":false"));
+        }
     }
 
     @Test

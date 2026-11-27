@@ -6,13 +6,20 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import java.io.IOException;
 import java.lang.reflect.Method;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.nio.file.attribute.FileTime;
+import java.util.List;
 import java.util.Map;
+import java.util.function.BiFunction;
+import java.util.function.BooleanSupplier;
+import java.util.function.LongPredicate;
 
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
@@ -21,8 +28,11 @@ import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.CliReflectionErrors;
+import com.ditrix.edt.mcp.server.utils.ExecutingToolCall;
 import com.ditrix.edt.mcp.server.utils.FrontMatter;
+import com.ditrix.edt.mcp.server.utils.InterruptiblePause;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
+import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.ditrix.edt.mcp.server.utils.WorkspacePaths;
 import com.ditrix.edt.mcp.server.utils.compare.MergeRulesCodec;
 
@@ -45,6 +55,41 @@ public class ExportConfigurationToXmlTool implements IMcpTool
 
     /** Input param: filesystem path of the output directory for the XML files. */
     private static final String KEY_OUTPUT_PATH = "outputPath"; //$NON-NLS-1$
+
+    /** Bounded wait for the project and its dependents before the single retry. */
+    static final long RETRY_SETTLE_TIMEOUT_MS = 20_000L;
+
+    /**
+     * Minimum pause before the retry: the settle may return at once when the snapshot already
+     * reads ready, while EDT may still be restarting the project context.
+     */
+    static final long RETRY_PAUSE_MS = 750L;
+
+    /** (projectName, budgetMs) to the names of projects still not ready after the bounded wait. */
+    private final BiFunction<String, Long, List<String>> settle;
+
+    /** Whether the response of this call was already sent (the caller interrupted and left). */
+    private final BooleanSupplier responseDelivered;
+
+    /** Sleeps the given milliseconds; false when the thread was interrupted (flag restored). */
+    private final LongPredicate pause;
+
+    /** Production wiring: the shared project-and-dependents settle and the executing call's state. */
+    public ExportConfigurationToXmlTool()
+    {
+        this((project, budgetMs) -> ProjectStateChecker.awaitSearchScopeReady(project, budgetMs)
+            .getNotReadyProjectNames(), ExecutingToolCall::isResponseDelivered,
+            InterruptiblePause::pause);
+    }
+
+    /** Test seam: the bounded wait, the delivered-response probe and the pause are injectable. */
+    ExportConfigurationToXmlTool(BiFunction<String, Long, List<String>> settle,
+        BooleanSupplier responseDelivered, LongPredicate pause)
+    {
+        this.settle = settle;
+        this.responseDelivered = responseDelivered;
+        this.pause = pause;
+    }
 
     @Override
     public String getName()
@@ -137,39 +182,53 @@ public class ExportConfigurationToXmlTool implements IMcpTool
             Method method = api.getClass().getMethod("exportProject", //$NON-NLS-1$
                 String.class, Path.class);
             Path rootXml = outputPath.resolve("Configuration.xml"); //$NON-NLS-1$
-            BasicFileAttributes previousRoot = null;
-            String previousDigest = null;
-            try
+
+            // The CLI itself waits for the project (STARTED) and for export preparation, so the
+            // first attempt is not preceded by any wait of ours. A flag set before the call is the
+            // caller's real cancellation: no retry, flag kept. The flag is never cleared here.
+            boolean interruptedOnEntry = Thread.currentThread().isInterrupted();
+            RootBaseline before = RootBaseline.read(rootXml);
+            invokeExport(method, api, projectName, outputPath);
+            boolean proven = rootProven(rootXml, before);
+            boolean retried = false;
+            List<String> notReady = List.of();
+
+            // EDT can return normally without writing anything while the project context restarts
+            // (right after clean_project). Retry exactly once, and only when the root was truly
+            // absent before and is still absent: an existing root whose rewrite is merely
+            // unprovable, or a non-file at its path, is not retried. Never once the caller has
+            // left or been answered.
+            if (!proven && before.isAbsent() && !interruptedOnEntry
+                && !Thread.currentThread().isInterrupted() && !responseDelivered.getAsBoolean())
             {
-                previousRoot = Files.readAttributes(rootXml, BasicFileAttributes.class);
-                if (previousRoot.isRegularFile())
+                Activator.logInfo("export_configuration_to_xml: EDT returned without writing '" //$NON-NLS-1$
+                    + rootXml + "' for project '" + projectName + "'; retrying once."); //$NON-NLS-1$ //$NON-NLS-2$
+                // Minimum pause first (the settle can return at once), then the bounded settle.
+                if (pause.test(RETRY_PAUSE_MS))
                 {
-                    previousDigest = MergeRulesCodec.fileDigest(rootXml);
+                    notReady = settle.apply(projectName, RETRY_SETTLE_TIMEOUT_MS);
+                    // The wait took time: re-read the root and re-check the caller before
+                    // exporting a second time.
+                    RootBaseline now = RootBaseline.read(rootXml);
+                    if (now.isRegular())
+                    {
+                        // The first attempt finished during the wait: that is its completion,
+                        // not a baseline for a second export.
+                        proven = true;
+                    }
+                    else if (now.isAbsent() && !Thread.currentThread().isInterrupted()
+                        && !responseDelivered.getAsBoolean())
+                    {
+                        retried = true;
+                        before = now;
+                        invokeExport(method, api, projectName, outputPath);
+                        proven = rootProven(rootXml, before);
+                    }
                 }
             }
-            catch (NoSuchFileException missing)
+            if (!proven)
             {
-                previousRoot = null; // An absent root is a valid initial state.
-            }
-            method.invoke(api, projectName, outputPath);
-
-            boolean rootWritten = Files.isRegularFile(rootXml);
-            if (rootWritten && previousRoot != null && previousRoot.isRegularFile())
-            {
-                BasicFileAttributes written = Files.readAttributes(rootXml, BasicFileAttributes.class);
-                // Equal/coarse timestamps prove nothing; changed bytes can still prove a rewrite.
-                rootWritten = written.lastModifiedTime().compareTo(previousRoot.lastModifiedTime()) > 0
-                    || written.size() != previousRoot.size()
-                    || !previousDigest.equals(MergeRulesCodec.fileDigest(rootXml));
-            }
-            if (!rootWritten)
-            {
-                return ToolResult.error("EDT returned, but root file '" + rootXml //$NON-NLS-1$
-                    + "' is missing or cannot be proven rewritten. " //$NON-NLS-1$
-                    + "Export preparation may have failed, the export may have been cancelled, or timestamps may be too coarse. " //$NON-NLS-1$
-                    + "Check the EDT Error Log, wait for project '" + projectName //$NON-NLS-1$
-                    + "' to finish loading/building, verify permissions, and retry into a fresh outputPath directory.") //$NON-NLS-1$
-                    .toJson();
+                return ToolResult.error(notExportedError(rootXml, projectName, retried, notReady)).toJson();
             }
 
             // Action result: status + the project and destination path. There is no
@@ -203,5 +262,107 @@ public class ExportConfigurationToXmlTool implements IMcpTool
         {
             return CliReflectionErrors.toErrorJson(e, "Export", "CLI"); //$NON-NLS-1$ //$NON-NLS-2$
         }
+    }
+
+    /**
+     * Root state before an attempt. The path is classified without following links: absent
+     * ({@link NoSuchFileException}), a regular file (with mtime, size and digest), or something
+     * else that exists (a directory, FIFO, symbolic link, even a dangling one). Only a truly
+     * absent root may be retried.
+     */
+    private static final class RootBaseline
+    {
+        private static final RootBaseline ABSENT = new RootBaseline(0, null, 0L, null);
+        private static final RootBaseline OTHER = new RootBaseline(1, null, 0L, null);
+
+        /** 0 absent, 1 exists but is not a regular file, 2 regular file. */
+        final int kind;
+        final FileTime mtime;
+        final long size;
+        final String digest;
+
+        private RootBaseline(int kind, FileTime mtime, long size, String digest)
+        {
+            this.kind = kind;
+            this.mtime = mtime;
+            this.size = size;
+            this.digest = digest;
+        }
+
+        boolean isAbsent()
+        {
+            return kind == 0;
+        }
+
+        boolean isRegular()
+        {
+            return kind == 2;
+        }
+
+        static RootBaseline read(Path root) throws IOException
+        {
+            try
+            {
+                BasicFileAttributes attrs = Files.readAttributes(root, BasicFileAttributes.class,
+                    LinkOption.NOFOLLOW_LINKS);
+                if (!attrs.isRegularFile())
+                {
+                    return OTHER;
+                }
+                return new RootBaseline(2, attrs.lastModifiedTime(), attrs.size(),
+                    MergeRulesCodec.fileDigest(root));
+            }
+            catch (NoSuchFileException missing)
+            {
+                return ABSENT; // An absent root is a valid initial state.
+            }
+        }
+    }
+
+    /** Whether the attempt created the root or provably rewrote it against the baseline. */
+    private static boolean rootProven(Path rootXml, RootBaseline before) throws IOException
+    {
+        if (before.kind == 1 || !Files.isRegularFile(rootXml))
+        {
+            return false; // A pre-existing non-file root is never proof of an export.
+        }
+        if (before.isAbsent())
+        {
+            return true;
+        }
+        BasicFileAttributes written = Files.readAttributes(rootXml, BasicFileAttributes.class);
+        // Equal/coarse timestamps prove nothing; changed bytes can still prove a rewrite.
+        return written.lastModifiedTime().compareTo(before.mtime) > 0
+            || written.size() != before.size
+            || !before.digest.equals(MergeRulesCodec.fileDigest(rootXml));
+    }
+
+    /** One CLI call; EDT reports failures by exception, an interrupt flag is left untouched. */
+    private static void invokeExport(Method method, Object api, String projectName, Path outputPath)
+        throws Exception
+    {
+        method.invoke(api, projectName, outputPath);
+    }
+
+    /** The final error when no attempt proved the root. */
+    static String notExportedError(Path rootXml, String projectName, boolean retried, List<String> notReady)
+    {
+        StringBuilder sb = new StringBuilder();
+        sb.append("EDT returned without writing root file '").append(rootXml).append("' ("); //$NON-NLS-1$ //$NON-NLS-2$
+        sb.append(retried ? "attempted twice" : "attempted once"); //$NON-NLS-1$ //$NON-NLS-2$
+        sb.append("; it may have been cancelled while the project was restarting). "); //$NON-NLS-1$
+        if (notReady != null && !notReady.isEmpty())
+        {
+            sb.append("Projects not ready at the last check: ").append(String.join(", ", notReady)).append(". "); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        }
+        sb.append("Export preparation may have failed, or an existing root was not proven rewritten "); //$NON-NLS-1$
+        sb.append("(timestamps may be too coarse). "); //$NON-NLS-1$
+        if (retried)
+        {
+            sb.append("Files from the first attempt may remain in outputPath. "); //$NON-NLS-1$
+        }
+        sb.append("Check the EDT Error Log, wait until list_projects shows project '").append(projectName) //$NON-NLS-1$
+            .append("' as ready, verify permissions, and retry into a fresh outputPath directory."); //$NON-NLS-1$
+        return sb.toString();
     }
 }

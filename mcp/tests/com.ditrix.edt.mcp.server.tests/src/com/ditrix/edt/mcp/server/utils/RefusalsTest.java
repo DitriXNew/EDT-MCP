@@ -197,6 +197,65 @@ public class RefusalsTest
         assertNull(Refusals.messageOf(new RuntimeException("outer", Refusals.state(REFUSAL))));
     }
 
+    // ========== a recognised EDT context-restart artifact: WARNING with a stack ==========
+
+    private static NullPointerException restartNpe()
+    {
+        NullPointerException npe = new NullPointerException();
+        npe.setStackTrace(new StackTraceElement[] {
+            new StackTraceElement("org.eclipse.xtext.builder.clustering.CurrentDescriptions$ResourceSetAware", //$NON-NLS-1$
+                "getExportedObjects", "CurrentDescriptions.java", 1) }); //$NON-NLS-1$ //$NON-NLS-2$
+        return npe;
+    }
+
+    @Test
+    public void testContextRestartArtifactLogsWarningWithStack()
+    {
+        NullPointerException npe = restartNpe();
+
+        IStatus status = Refusals.statusFor(CONTEXT, npe);
+
+        assertEquals("a recognised restart artifact is WARNING, not ERROR", //$NON-NLS-1$
+            IStatus.WARNING, status.getSeverity());
+        assertSame("...and it keeps its stack", npe, status.getException()); //$NON-NLS-1$
+        assertTrue("the call site's context must survive", status.getMessage().contains(CONTEXT)); //$NON-NLS-1$
+        assertTrue("the text must say what happened", //$NON-NLS-1$
+            status.getMessage().contains("EDT was restarting the project context")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testUnmarkedNpeStaysErrorWithStack()
+    {
+        NullPointerException npe = new NullPointerException("plain"); //$NON-NLS-1$
+
+        IStatus status = Refusals.statusFor(CONTEXT, npe);
+
+        assertEquals(IStatus.ERROR, status.getSeverity());
+        assertSame(npe, status.getException());
+    }
+
+    @Test
+    public void testMarkedRefusalStaysInfoWithoutStack()
+    {
+        IStatus status = Refusals.statusFor(CONTEXT, Refusals.argument(REFUSAL));
+
+        assertEquals(IStatus.INFO, status.getSeverity());
+        assertNull(status.getException());
+    }
+
+    @Test
+    public void testLogEmitsRestartWarningThroughSink()
+    {
+        List<IStatus> seen = new ArrayList<>();
+        Refusals.setSink(seen::add);
+
+        Refusals.log(CONTEXT, restartNpe());
+
+        assertEquals(1, seen.size());
+        assertEquals(IStatus.WARNING, seen.get(0).getSeverity());
+        assertNotNull(seen.get(0).getException());
+    }
+
     // ========== log() must actually emit what statusFor decided ==========
 
     @After

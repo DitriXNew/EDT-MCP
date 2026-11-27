@@ -728,4 +728,141 @@ public class PlatformFailuresTest
         assertTrue("and must keep the type name that carries the diagnosis",
             scrubbed.contains("RoleDescriptionImpl"));
     }
+
+    // ========== isContextRestartArtifact: the narrow context-restart signature ==========
+
+    private static final String XTEXT_FRAME_CLASS =
+        "org.eclipse.xtext.builder.clustering.CurrentDescriptions$ResourceSetAware";
+
+    private static <T extends Throwable> T withTopFrame(T failure, String className,
+        String method)
+    {
+        failure.setStackTrace(new StackTraceElement[] {
+            new StackTraceElement(className, method, "Frame.java", 1),
+            new StackTraceElement("com.ditrix.edt.mcp.server.Caller", "run", "Caller.java", 2) });
+        return failure;
+    }
+
+    private static NullPointerException xtextDelegateNpe()
+    {
+        return withTopFrame(new NullPointerException(), XTEXT_FRAME_CLASS, "getExportedObjects");
+    }
+
+    @Test
+    public void testContextRestartArtifactRecognisesXtextDelegateNpe()
+    {
+        assertTrue(PlatformFailures.isContextRestartArtifact(xtextDelegateNpe()));
+    }
+
+    @Test
+    public void testContextRestartArtifactFoundThroughCauseChain()
+    {
+        NullPointerException npe = xtextDelegateNpe();
+        assertTrue(PlatformFailures.isContextRestartArtifact(new RuntimeException(npe)));
+        assertTrue(PlatformFailures.isContextRestartArtifact(new RuntimeException(new IllegalStateException(npe))));
+        assertTrue(PlatformFailures.isContextRestartArtifact(new RuntimeException((String)null, npe)));
+        assertTrue(PlatformFailures.isContextRestartArtifact(
+            new java.lang.reflect.InvocationTargetException(npe, "reflective call failed")));
+        assertTrue(PlatformFailures.isContextRestartArtifact(
+            new java.util.concurrent.ExecutionException("task failed", npe)));
+        assertTrue(PlatformFailures.isContextRestartArtifact(
+            new org.eclipse.emf.common.util.WrappedException("wrapped by EMF", npe)));
+    }
+
+    @Test
+    public void testWrapperWithOwnMessageStopsRecognition()
+    {
+        NullPointerException npe = xtextDelegateNpe();
+        assertFalse(PlatformFailures.isContextRestartArtifact(new RuntimeException("wrapper", npe)));
+        assertFalse(PlatformFailures.isContextRestartArtifact(
+            new RuntimeException("outer", new RuntimeException(npe))));
+        assertFalse(PlatformFailures.isContextRestartArtifact(
+            new IllegalStateException("meaningful", new RuntimeException(npe))));
+    }
+
+    @Test
+    public void testOtherMethodOfTheSameClassIsNot()
+    {
+        assertFalse(PlatformFailures.isContextRestartArtifact(
+            withTopFrame(new NullPointerException(), XTEXT_FRAME_CLASS, "getExportedObjectsByType")));
+        assertFalse(PlatformFailures.isContextRestartArtifact(
+            withTopFrame(new NullPointerException(), XTEXT_FRAME_CLASS, "getResourceDescription")));
+    }
+
+    @Test
+    public void testOuterCurrentDescriptionsClassIsNot()
+    {
+        assertFalse(PlatformFailures.isContextRestartArtifact(withTopFrame(new NullPointerException(),
+            "org.eclipse.xtext.builder.clustering.CurrentDescriptions", "getExportedObjects")));
+    }
+
+    @Test
+    public void testPlainNpeIsNotContextRestartArtifact()
+    {
+        NullPointerException ours = withTopFrame(new NullPointerException(),
+            "com.ditrix.edt.mcp.server.tools.impl.SomeTool", "execute");
+        assertFalse(PlatformFailures.isContextRestartArtifact(ours));
+    }
+
+    @Test
+    public void testXtextFrameBelowTopIsNotContextRestartArtifact()
+    {
+        NullPointerException npe = new NullPointerException();
+        npe.setStackTrace(new StackTraceElement[] {
+            new StackTraceElement("com.ditrix.edt.mcp.server.tools.impl.SomeTool", "execute",
+                "SomeTool.java", 1),
+            new StackTraceElement(XTEXT_FRAME_CLASS, "getExportedObjects", "Frame.java", 2) });
+        assertFalse(PlatformFailures.isContextRestartArtifact(npe));
+    }
+
+    @Test
+    public void testNonNpeWithXtextTopFrameIsNot()
+    {
+        IllegalStateException other = withTopFrame(new IllegalStateException("boom"),
+            XTEXT_FRAME_CLASS, "getExportedObjects");
+        assertFalse(PlatformFailures.isContextRestartArtifact(other));
+    }
+
+    @Test
+    public void testWrongPackageCurrentDescriptionsFrameIsNot()
+    {
+        // The class name is "org.eclipse.xtext.builder.clustering.CurrentDescriptions" in EDT
+        // 2026.2.2 (org.eclipse.xtext.builder_2.41.0 jar). The package this once got wrong must
+        // stay unrecognised, so a wrong name cannot pass silently. Literals on purpose: a test
+        // that reads the production constant would be tautological.
+        NullPointerException wrongPackage = withTopFrame(new NullPointerException(),
+            "org.eclipse.xtext.resource.CurrentDescriptions$ResourceSetAware", "getExportedObjects");
+        assertFalse(PlatformFailures.isContextRestartArtifact(wrongPackage));
+    }
+
+    @Test
+    public void testNullIsNot()
+    {
+        assertFalse(PlatformFailures.isContextRestartArtifact(null));
+    }
+
+    @Test
+    public void testNpeWithEmptyStackIsNot()
+    {
+        NullPointerException npe = new NullPointerException();
+        npe.setStackTrace(new StackTraceElement[0]);
+        assertFalse(PlatformFailures.isContextRestartArtifact(npe));
+    }
+
+    @Test(timeout = 10000)
+    public void testCyclicCauseChainTerminates()
+    {
+        // initCause refuses a self-cycle, so build one by overriding getCause().
+        RuntimeException cyclic = new RuntimeException()
+        {
+            private static final long serialVersionUID = 1L;
+
+            @Override
+            public synchronized Throwable getCause()
+            {
+                return this;
+            }
+        };
+        assertFalse(PlatformFailures.isContextRestartArtifact(cyclic));
+    }
 }

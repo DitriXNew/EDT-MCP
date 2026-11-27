@@ -27,7 +27,9 @@ import org.eclipse.core.runtime.Status;
  * {@link #argument}), never the exception class: {@code IllegalStateException} is raised both by
  * our validation and by the platform, so demoting by class would hide a genuine platform defect
  * at exactly the moment it starts happening. Anything UNMARKED therefore keeps
- * {@link IStatus#ERROR} and its stack - see {@link #statusFor}.
+ * {@link IStatus#ERROR} and its stack - see {@link #statusFor} - except a recognised EDT
+ * context-restart artifact ({@link PlatformFailures#isContextRestartArtifact}), which is
+ * transient by nature and is logged at {@link IStatus#WARNING} WITH its stack.
  * <p>
  * The marked exceptions stay subtypes of {@code IllegalStateException} /
  * {@code IllegalArgumentException} and carry the message verbatim, so every existing
@@ -142,8 +144,9 @@ public final class Refusals
 
     /**
      * The status to log for a failed operation: a stack-free {@link IStatus#INFO} naming the
-     * refusal when the cause chain is marked, otherwise an {@link IStatus#ERROR} carrying
-     * {@code e} (and therefore its stack) exactly as before.
+     * refusal when the exception is marked; a {@link IStatus#WARNING} carrying {@code e} (and its
+     * stack) when it is a recognised transient EDT context-restart artifact; otherwise an
+     * {@link IStatus#ERROR} carrying {@code e} (and therefore its stack) exactly as before.
      *
      * @param context the log context the call site used, e.g. {@code "Error creating form member"}
      * @param e the caught exception, may be {@code null}
@@ -152,6 +155,15 @@ public final class Refusals
     public static IStatus statusFor(String context, Throwable e)
     {
         String refusal = messageOf(e);
+        if (refusal == null && PlatformFailures.isContextRestartArtifact(e))
+        {
+            // WARNING, not INFO: if this ever becomes permanent, triage must still see it. The
+            // stack is kept for the same reason.
+            return new Status(IStatus.WARNING, Log.pluginId(),
+                context + ": EDT was restarting the project context (transient): " //$NON-NLS-1$
+                    + PlatformFailures.describe(e),
+                e);
+        }
         if (refusal == null)
         {
             return new Status(IStatus.ERROR, Log.pluginId(), context, e);
@@ -179,7 +191,8 @@ public final class Refusals
 
     /**
      * Logs a failed operation through {@link #statusFor}: a refusal lands at INFO with no stack,
-     * anything else keeps its ERROR and its stack.
+     * a recognised context-restart artifact at WARNING with its stack, anything else keeps its
+     * ERROR and its stack.
      *
      * @param context the log context, e.g. {@code "Error creating form member"}
      * @param e the caught exception, may be {@code null}

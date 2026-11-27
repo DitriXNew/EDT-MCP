@@ -13,7 +13,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
 import org.eclipse.core.resources.IProject;
@@ -53,7 +52,6 @@ import com.ditrix.edt.mcp.server.tools.metadata.MetadataFormatterRegistry;
 import com.ditrix.edt.mcp.server.utils.AdoptedTypeCell;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.ReadToolExecution;
-import com.ditrix.edt.mcp.server.utils.Refusals;
 import com.ditrix.edt.mcp.server.utils.CommandInterfaceAddress;
 import com.ditrix.edt.mcp.server.utils.CommandInterfaceSupport;
 import com.ditrix.edt.mcp.server.utils.ConfigurationRoot;
@@ -76,6 +74,7 @@ import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.ReferencedTopObjects;
 import com.ditrix.edt.mcp.server.utils.Pagination;
 import com.ditrix.edt.mcp.server.utils.PersistedContents;
+import com.ditrix.edt.mcp.server.utils.PlatformFailures;
 import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.RoleRightsReader;
@@ -223,28 +222,16 @@ public class GetMetadataDetailsTool implements IMcpTool
             ? new MismatchPage(Pagination.clampLimit(limit, Pagination.MAX_LIMIT), Math.max(0, offset)) : null;
 
         // Preserve windowed dispatch; headless reads stay on the calling thread.
-        AtomicReference<String> resultRef = new AtomicReference<>();
         final List<String> fqns = objectFqns;
         final boolean fullMode = full;
         final boolean assignableMode = assignable;
         final String lang = language;
         final int roleOffset = roleObjectOffset;
 
-        ReadToolExecution.dispatch(() -> {
-            try
-            {
-                String result =
-                    getMetadataDetailsInternal(projectName, fqns, fullMode, assignableMode, lang, roleOffset, page);
-                resultRef.set(result);
-            }
-            catch (Exception e)
-            {
-                Refusals.log("Error getting metadata details", e); //$NON-NLS-1$
-                resultRef.set(ToolResult.error(e.getMessage()).toJson());
-            }
-        });
-        
-        return resultRef.get();
+        return ReadToolExecution.dispatchReadTool(projectName, "Error getting metadata details", //$NON-NLS-1$
+            () -> getMetadataDetailsInternal(projectName, fqns, fullMode, assignableMode, lang,
+                roleOffset, page),
+            e -> ToolResult.error(PlatformFailures.describe(e)).toJson());
     }
     
     /**
