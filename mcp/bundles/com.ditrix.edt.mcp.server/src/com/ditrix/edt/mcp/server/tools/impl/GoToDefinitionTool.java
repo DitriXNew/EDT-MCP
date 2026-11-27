@@ -78,7 +78,7 @@ public class GoToDefinitionTool implements IMcpTool
 
     public GoToDefinitionTool()
     {
-        this(BslModuleUtils::loadModule,
+        this(BslModuleUtils::loadModuleOrThrowOnRestart,
             (project, module, lookup) -> InterceptionUtils.readSourceModule(project, module, NAME, lookup));
     }
 

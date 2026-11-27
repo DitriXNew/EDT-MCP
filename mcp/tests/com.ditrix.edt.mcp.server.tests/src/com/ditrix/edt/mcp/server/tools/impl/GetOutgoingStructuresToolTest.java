@@ -543,4 +543,62 @@ public class GetOutgoingStructuresToolTest
             assertTrue(result, result.contains("\"success\":false"));
         }
     }
+
+    /** Makes the module resource load throw the given failures in order, then answer an empty resource. */
+    private static org.eclipse.emf.ecore.resource.ResourceSet failModuleLoads(HeadlessReadFixture fixture,
+        Throwable... failures) throws Exception
+    {
+        var provider = org.mockito.Mockito.mock(com._1c.g5.v8.dt.bm.xtext.BmAwareResourceSetProvider.class);
+        var set = org.mockito.Mockito.mock(org.eclipse.emf.ecore.resource.ResourceSet.class);
+        var resource = org.mockito.Mockito.mock(org.eclipse.emf.ecore.resource.Resource.class);
+        org.mockito.Mockito.when(resource.getContents())
+            .thenReturn(new org.eclipse.emf.common.util.BasicEList<>());
+        org.mockito.stubbing.Stubber stubber = null;
+        for (Throwable failure : failures)
+        {
+            stubber = stubber == null ? org.mockito.Mockito.doThrow(failure) : stubber.doThrow(failure);
+        }
+        stubber.doReturn(resource).when(set).getResource(
+            org.mockito.ArgumentMatchers.any(org.eclipse.emf.common.util.URI.class),
+            org.mockito.ArgumentMatchers.anyBoolean());
+        org.mockito.Mockito.when(provider.get(fixture.project())).thenReturn(set);
+        org.mockito.Mockito.when(com.ditrix.edt.mcp.server.Activator.getDefault().getResourceSetProvider())
+            .thenReturn(provider);
+        return set;
+    }
+
+    @Test
+    public void testRestartNpeInsideModuleLoadIsRetriedOnce() throws Exception
+    {
+        try (HeadlessReadFixture fixture = new HeadlessReadFixture())
+        {
+            var set = failModuleLoads(fixture, HeadlessReadFixture.restartNpe());
+
+            String result = new GetOutgoingStructuresTool().execute(Map.of(
+                "projectName", fixture.name(), "modulePath", "CommonModules/EnglishName/Module.bsl"));
+
+            // The retry reached the second load (an empty resource: an ordinary "could not load").
+            org.mockito.Mockito.verify(set, org.mockito.Mockito.times(2)).getResource(
+                org.mockito.ArgumentMatchers.any(org.eclipse.emf.common.util.URI.class),
+                org.mockito.ArgumentMatchers.anyBoolean());
+            assertFalse(result, result.contains("EDT was restarting"));
+            assertTrue(result, result.contains("Could not load EMF model"));
+        }
+    }
+
+    @Test
+    public void testRepeatedRestartNpeInsideModuleLoadAnswersRetryableError() throws Exception
+    {
+        try (HeadlessReadFixture fixture = new HeadlessReadFixture())
+        {
+            failModuleLoads(fixture, HeadlessReadFixture.restartNpe(), HeadlessReadFixture.restartNpe());
+
+            String result = new GetOutgoingStructuresTool().execute(Map.of(
+                "projectName", fixture.name(), "modulePath", "CommonModules/EnglishName/Module.bsl"));
+
+            assertTrue(result, result.contains(
+                "EDT was restarting the context of project '" + fixture.name() + "'"));
+            assertTrue(result, result.contains("\"success\":false"));
+        }
+    }
 }

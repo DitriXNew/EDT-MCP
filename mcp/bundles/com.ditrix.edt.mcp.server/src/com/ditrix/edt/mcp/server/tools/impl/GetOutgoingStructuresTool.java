@@ -215,7 +215,7 @@ public class GetOutgoingStructuresTool implements IMcpTool
         }
         IProject project = ctx.project();
 
-        Module module = BslModuleUtils.loadModule(project, modulePath);
+        Module module = BslModuleUtils.loadModuleOrThrowOnRestart(project, modulePath);
         if (module == null)
         {
             return ToolResult.error("Could not load EMF model for " + modulePath + //$NON-NLS-1$
