@@ -199,7 +199,31 @@ public class GoToDefinitionTool implements IMcpTool
             return projectName;
         }
         IProject base = ExtensionOriginUtils.resolveBaseProject(ctx.project());
-        return base == null ? projectName : base.getName();
+        return chooseSettleProject(projectName, base == null ? null : base.getName(),
+            base == null ? ExtensionOriginUtils.declaredBaseProjectName(ctx.project()) : null);
+    }
+
+    /**
+     * The project to settle before the retry: the runtime base when it is wired, else the base the
+     * project DECLARES in its manifest (the runtime parent is unwired exactly while the context
+     * restarts), else the project itself.
+     *
+     * @param projectName the requested project
+     * @param runtimeBase the wired runtime parent's name, or {@code null}
+     * @param declaredBase the manifest's {@code Base-Project}, or {@code null}
+     * @return the project whose search scope the retry waits for
+     */
+    static String chooseSettleProject(String projectName, String runtimeBase, String declaredBase)
+    {
+        if (runtimeBase != null && !runtimeBase.isEmpty())
+        {
+            return runtimeBase;
+        }
+        if (declaredBase != null && !declaredBase.isEmpty())
+        {
+            return declaredBase;
+        }
+        return projectName;
     }
 
     // ========== Main resolution logic ==========

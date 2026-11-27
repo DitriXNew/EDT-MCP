@@ -237,6 +237,17 @@ public class GoToDefinitionToolTest
         assertEquals(null, GoToDefinitionTool.settleProjectName(null));
     }
 
+    @Test
+    public void testSettleProjectFallsBackToTheDeclaredBaseWhileTheParentIsUnwired()
+    {
+        // Wired runtime parent wins; while it is unwired (the context is restarting) the manifest's
+        // Base-Project is used; a project that declares no base settles itself.
+        assertEquals("Base", GoToDefinitionTool.chooseSettleProject("Ext", "Base", "Declared")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        assertEquals("Declared", GoToDefinitionTool.chooseSettleProject("Ext", null, "Declared")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertEquals("Ext", GoToDefinitionTool.chooseSettleProject("Ext", null, null)); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("Ext", GoToDefinitionTool.chooseSettleProject("Ext", "", "")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+    }
+
     // ==================== Tool metadata ====================
 
     @Test
