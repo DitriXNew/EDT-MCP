@@ -59,6 +59,12 @@ import com.e1c.g5.dt.applications.ApplicationException;
  * away; choosing that one keeps the heap address. Selecting the text and cleaning the text are
  * two questions, answered by two methods, in that order.
  *
+ * <p>{@link #isContextRestartArtifact(Throwable)} answers yet another question: is this failure
+ * the known transient signature of EDT restarting a project context (an {@code NPE} inside
+ * Xtext's {@code CurrentDescriptions}, whose index delegate is not wired yet)? It is a
+ * recogniser, not a message selector, and is deliberately narrow: an ordinary
+ * {@code NullPointerException} stays an ordinary failure.
+ *
  * <p>Pure and side-effect-free (logging stays with the caller, which knows the context), so the
  * whole decision is unit-testable without an EDT runtime.
  */
@@ -66,6 +72,10 @@ public final class PlatformFailures
 {
     /** Cap on how many {@code getCause()} hops are walked, guarding against a cyclical chain. */
     private static final int MAX_CAUSE_CHAIN_DEPTH = 10;
+
+    /** Class-name prefix of the Xtext frame that marks the transient context-restart NPE. */
+    private static final String XTEXT_CURRENT_DESCRIPTIONS =
+        "org.eclipse.xtext.resource.CurrentDescriptions"; //$NON-NLS-1$
 
     /** Cap on how deep a {@link IStatus} child tree is walked. */
     private static final int MAX_STATUS_DEPTH = 4;
@@ -101,6 +111,38 @@ public final class PlatformFailures
     private PlatformFailures()
     {
         // Utility class
+    }
+
+    /**
+     * Known transient EDT context-restart signature: a {@link NullPointerException} thrown inside
+     * Xtext's {@code CurrentDescriptions} (its index delegate is not wired yet while the project
+     * context restarts). Walks the bounded cause chain; pure.
+     *
+     * <p>The match is by signature, not by class: the NPE's TOP stack frame must belong to a class
+     * whose name starts with {@code org.eclipse.xtext.resource.CurrentDescriptions}. Any other NPE
+     * (ours or the platform's) is not recognised. Add new signatures only for an observed log
+     * entry.
+     *
+     * @param failure the exception to inspect (may be {@code null})
+     * @return {@code true} when the chain holds the known restart NPE
+     */
+    public static boolean isContextRestartArtifact(Throwable failure)
+    {
+        Throwable current = failure;
+        for (int depth = 0; current != null && depth < MAX_CAUSE_CHAIN_DEPTH; depth++)
+        {
+            if (current instanceof NullPointerException)
+            {
+                StackTraceElement[] trace = current.getStackTrace();
+                if (trace != null && trace.length > 0
+                    && trace[0].getClassName().startsWith(XTEXT_CURRENT_DESCRIPTIONS))
+                {
+                    return true;
+                }
+            }
+            current = current.getCause();
+        }
+        return false;
     }
 
     /**

@@ -728,4 +728,95 @@ public class PlatformFailuresTest
         assertTrue("and must keep the type name that carries the diagnosis",
             scrubbed.contains("RoleDescriptionImpl"));
     }
+
+    // ========== isContextRestartArtifact: the narrow context-restart signature ==========
+
+    private static final String XTEXT_FRAME_CLASS =
+        "org.eclipse.xtext.resource.CurrentDescriptions$ResourceSetAware";
+
+    private static <T extends Throwable> T withTopFrame(T failure, String className,
+        String method)
+    {
+        failure.setStackTrace(new StackTraceElement[] {
+            new StackTraceElement(className, method, "Frame.java", 1),
+            new StackTraceElement("com.ditrix.edt.mcp.server.Caller", "run", "Caller.java", 2) });
+        return failure;
+    }
+
+    private static NullPointerException xtextDelegateNpe()
+    {
+        return withTopFrame(new NullPointerException(), XTEXT_FRAME_CLASS, "getExportedObjects");
+    }
+
+    @Test
+    public void testContextRestartArtifactRecognisesXtextDelegateNpe()
+    {
+        assertTrue(PlatformFailures.isContextRestartArtifact(xtextDelegateNpe()));
+    }
+
+    @Test
+    public void testContextRestartArtifactFoundThroughCauseChain()
+    {
+        RuntimeException wrapped = new RuntimeException("wrapper",
+            new IllegalStateException("inner wrapper", xtextDelegateNpe()));
+        assertTrue(PlatformFailures.isContextRestartArtifact(wrapped));
+    }
+
+    @Test
+    public void testPlainNpeIsNotContextRestartArtifact()
+    {
+        NullPointerException ours = withTopFrame(new NullPointerException(),
+            "com.ditrix.edt.mcp.server.tools.impl.SomeTool", "execute");
+        assertFalse(PlatformFailures.isContextRestartArtifact(ours));
+    }
+
+    @Test
+    public void testXtextFrameBelowTopIsNotContextRestartArtifact()
+    {
+        NullPointerException npe = new NullPointerException();
+        npe.setStackTrace(new StackTraceElement[] {
+            new StackTraceElement("com.ditrix.edt.mcp.server.tools.impl.SomeTool", "execute",
+                "SomeTool.java", 1),
+            new StackTraceElement(XTEXT_FRAME_CLASS, "getExportedObjects", "Frame.java", 2) });
+        assertFalse(PlatformFailures.isContextRestartArtifact(npe));
+    }
+
+    @Test
+    public void testNonNpeWithXtextTopFrameIsNot()
+    {
+        IllegalStateException other = withTopFrame(new IllegalStateException("boom"),
+            XTEXT_FRAME_CLASS, "getExportedObjects");
+        assertFalse(PlatformFailures.isContextRestartArtifact(other));
+    }
+
+    @Test
+    public void testNullIsNot()
+    {
+        assertFalse(PlatformFailures.isContextRestartArtifact(null));
+    }
+
+    @Test
+    public void testNpeWithEmptyStackIsNot()
+    {
+        NullPointerException npe = new NullPointerException();
+        npe.setStackTrace(new StackTraceElement[0]);
+        assertFalse(PlatformFailures.isContextRestartArtifact(npe));
+    }
+
+    @Test(timeout = 10000)
+    public void testCyclicCauseChainTerminates()
+    {
+        // initCause refuses a self-cycle, so build one by overriding getCause().
+        RuntimeException cyclic = new RuntimeException("cycle")
+        {
+            private static final long serialVersionUID = 1L;
+
+            @Override
+            public synchronized Throwable getCause()
+            {
+                return this;
+            }
+        };
+        assertFalse(PlatformFailures.isContextRestartArtifact(cyclic));
+    }
 }
