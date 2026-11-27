@@ -69,7 +69,7 @@ but cannot clear it. To clear a saved mode, delete and recreate the configuratio
 
 ## Why applicationId is required (internal)
 
-The tool always writes a real `applicationId` so `list_configurations` shows it with the real id (not the synthetic `launch:<name>` fallback), and so `launch` / `run_yaxunit_tests` can resolve the config by `projectName + applicationId` without an "Application not found" error.
+The saved `applicationId` is the infobase binding. Runtime-client configurations use it for selection by `projectName + applicationId`. Attach configurations use `attach:<name>` in `list_configurations` and debug tools, so a runtime client bound to the same infobase has independent debugger state.
 
 ## Result
 

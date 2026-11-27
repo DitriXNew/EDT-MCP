@@ -143,7 +143,7 @@ If the 1003 modal still appears in a debug launch (a race with a second client),
 
 ## Gotchas
 
-- Attach is reachable ONLY via launchConfigurationName; projectName+applicationId never starts an Attach session.
+- Select Attach by `launchConfigurationName`. The returned `applicationId` is `attach:<name>` for use in debug tools.
 - Attach configurations support only `mode="debug"`; `mode="run"` is rejected before launch.
 - `alreadyRunning: true` is a success, not an error — don't retry it; terminate first if you truly need a fresh session.
 - `updateBeforeLaunch` has no effect on Attach configs.

@@ -215,9 +215,9 @@ public final class LaunchConfigUtils
      * set and readable. The read is lenient (see {@link #readAttribute}), so a binding that
      * exists but cannot be read falls into the synthetic branch below exactly like an absent
      * one — a caller that must tell the two apart has to read the attribute itself.
-     * For Attach launches, {@code ATTR_APPLICATION_ID} may be absent; in that case
-     * we fall back to {@code attach:<configName>} — stable across calls for the
-     * same EDT launch configuration, and addressable via {@code debug_status}.
+     * Attach launches use {@code attach:<configName>}, independently of their saved
+     * infobase binding. This keeps a runtime client and an Attach configuration for
+     * the same infobase separately addressable via {@code debug_status}.
      * For any other EDT/1C debug launch (e.g. one a user started from the EDT UI —
      * a file-mode standalone server, or a runtime client that carries no
      * {@code ATTR_APPLICATION_ID}) we fall back to {@code launch:<configName>}. All
@@ -233,14 +233,14 @@ public final class LaunchConfigUtils
         {
             return null;
         }
+        if (isAttachConfig(config))
+        {
+            return ATTACH_APP_ID_PREFIX + config.getName();
+        }
         String realId = readAttribute(config, ATTR_APPLICATION_ID, null);
         if (realId != null && !realId.isEmpty())
         {
             return realId;
-        }
-        if (isAttachConfig(config))
-        {
-            return ATTACH_APP_ID_PREFIX + config.getName();
         }
         // Any other EDT/1C debug launch (incl. UI-started "Debug As" sessions) still
         // gets a stable, addressable id so the suspend registry and debug tools can

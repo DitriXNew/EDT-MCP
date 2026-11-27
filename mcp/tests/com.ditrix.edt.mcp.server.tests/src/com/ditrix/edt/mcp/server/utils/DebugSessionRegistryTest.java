@@ -17,6 +17,7 @@ import static org.mockito.Mockito.when;
 import org.eclipse.debug.core.DebugEvent;
 import org.eclipse.debug.core.ILaunch;
 import org.eclipse.debug.core.ILaunchConfiguration;
+import org.eclipse.debug.core.ILaunchConfigurationType;
 import org.eclipse.debug.core.ILaunchManager;
 import org.eclipse.debug.core.model.IDebugTarget;
 import org.eclipse.debug.core.model.IStackFrame;
@@ -232,6 +233,49 @@ public class DebugSessionRegistryTest
         assertFalse(registry.hasSnapshot(MINTED_APP));
         assertTrue("an unrelated session's snapshot must survive", //$NON-NLS-1$
             registry.hasSnapshot("ServerApplication.Other")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void boundAttachResumeAndClientTerminationKeepTheOtherSession() throws Exception
+    {
+        String infobase = "shared-infobase"; //$NON-NLS-1$
+        ILaunchConfiguration attach = mock(ILaunchConfiguration.class);
+        ILaunchConfigurationType type = mock(ILaunchConfigurationType.class);
+        when(type.getIdentifier()).thenReturn(LaunchConfigUtils.TYPE_REMOTE_RUNTIME);
+        when(attach.getType()).thenReturn(type);
+        when(attach.getName()).thenReturn("Web Attach"); //$NON-NLS-1$
+        when(attach.getAttribute(LaunchConfigUtils.ATTR_APPLICATION_ID, (String) null)).thenReturn(infobase);
+        IThread attachThread = launchThread(attach);
+        IThread clientThread = launchThread(infobase);
+        String attachId = LaunchConfigUtils.getApplicationIdFor(attachThread.getDebugTarget().getLaunch());
+        String clientId = LaunchConfigUtils.getApplicationIdFor(clientThread.getDebugTarget().getLaunch());
+        assertEquals("attach:Web Attach", attachId); //$NON-NLS-1$
+        assertEquals(infobase, clientId);
+
+        DebugSessionRegistry registry = DebugSessionRegistry.get();
+        registry.injectSuspend(attachId, attachThread);
+        registry.injectSuspend(clientId, clientThread);
+        long clientThreadId = registry.getSnapshot(clientId).threadId;
+        IStackFrame clientFrame = mock(IStackFrame.class);
+        long clientFrameRef = registry.registerFrame(clientFrame, clientId);
+
+        when(attachThread.isSuspended()).thenReturn(false);
+        registry.handleEvent(new DebugEvent(attachThread, DebugEvent.RESUME));
+        assertFalse(registry.hasSnapshot(attachId));
+        assertSame(clientThread, registry.getSnapshot(clientId).thread);
+        assertEquals(clientId, registry.getThreadApplicationId(clientThreadId));
+        assertSame(clientFrame, registry.getFrame(clientFrameRef));
+
+        when(attachThread.isSuspended()).thenReturn(true);
+        registry.injectSuspend(attachId, attachThread);
+        long attachThreadId = registry.getSnapshot(attachId).threadId;
+        IStackFrame attachFrame = mock(IStackFrame.class);
+        long attachFrameRef = registry.registerFrame(attachFrame, attachId);
+        registry.handleEvent(new DebugEvent(clientThread.getDebugTarget(), DebugEvent.TERMINATE));
+        assertFalse(registry.hasSnapshot(clientId));
+        assertSame(attachThread, registry.getSnapshot(attachId).thread);
+        assertEquals(attachId, registry.getThreadApplicationId(attachThreadId));
+        assertSame(attachFrame, registry.getFrame(attachFrameRef));
     }
 
     // === thread → applicationId mapping (canonical key for step/resume) ===
@@ -753,6 +797,11 @@ public class DebugSessionRegistryTest
     {
         ILaunchConfiguration config = mock(ILaunchConfiguration.class);
         when(config.getAttribute(LaunchConfigUtils.ATTR_APPLICATION_ID, (String) null)).thenReturn(appId);
+        return launchThread(config);
+    }
+
+    private static IThread launchThread(ILaunchConfiguration config)
+    {
         ILaunch launch = mock(ILaunch.class);
         when(launch.getLaunchConfiguration()).thenReturn(config);
         IDebugTarget target = mock(IDebugTarget.class);
