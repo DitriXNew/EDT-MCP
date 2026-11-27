@@ -67,13 +67,26 @@ public final class BranchInfobaseBinding
             applicationId);
     }
 
+    /** Checks the same branch binding for Attach and reports recovery supported by Attach. */
+    public static String attachRefusalOrNull(IProject project, IApplication application, String applicationId)
+    {
+        return refusalOrNull(Activator.getDefault().getInfobaseAssociationManager(), project, application,
+            applicationId, true);
+    }
+
     /** {@link #refusalOrNull(IProject, IApplication, String)} with the manager supplied (unit-testable). */
     static String refusalOrNull(IInfobaseAssociationManager assocManager, IProject project,
         IApplication application, String applicationId)
     {
+        return refusalOrNull(assocManager, project, application, applicationId, false);
+    }
+
+    static String refusalOrNull(IInfobaseAssociationManager assocManager, IProject project,
+        IApplication application, String applicationId, boolean attach)
+    {
         if (assocManager == null)
         {
-            return unreadable(project.getName(), "IInfobaseAssociationManager service is not available"); //$NON-NLS-1$
+            return unreadable(project.getName(), "IInfobaseAssociationManager service is not available", attach); //$NON-NLS-1$
         }
         try
         {
@@ -91,13 +104,13 @@ public final class BranchInfobaseBinding
                 targetDir = servedDatabaseDirOf(application);
             }
             return decide(association, target, targetDir, project.getName(), application.getName(),
-                applicationId);
+                applicationId, BranchInfobaseBinding::sameExistingDirectory, PROBE_TIMEOUT_MS, attach);
         }
         catch (RuntimeException e)
         {
-            Activator.logError("update_database: reading the branch binding of project '" //$NON-NLS-1$
+            Activator.logError("Reading the branch binding of project '" //$NON-NLS-1$
                 + project.getName() + "' failed", e); //$NON-NLS-1$
-            return unreadable(project.getName(), String.valueOf(e.getMessage()));
+            return unreadable(project.getName(), String.valueOf(e.getMessage()), attach);
         }
     }
 
@@ -124,6 +137,14 @@ public final class BranchInfobaseBinding
     static String decide(Optional<IInfobaseAssociation> association, InfobaseReference target,
         Path targetDir, String projectName, String applicationName, String applicationId,
         DirectoryProbe probe, long probeTimeoutMs)
+    {
+        return decide(association, target, targetDir, projectName, applicationName, applicationId,
+            probe, probeTimeoutMs, false);
+    }
+
+    static String decide(Optional<IInfobaseAssociation> association, InfobaseReference target,
+        Path targetDir, String projectName, String applicationName, String applicationId,
+        DirectoryProbe probe, long probeTimeoutMs, boolean attach)
     {
         Collection<InfobaseReference> bound = association.map(IInfobaseAssociation::getInfobases).orElse(null);
         List<String> boundNames = new ArrayList<>();
@@ -174,6 +195,11 @@ public final class BranchInfobaseBinding
         }
         if (unansweredProbe != null)
         {
+            if (attach)
+            {
+                return attachRefusal("the file system did not confirm the database directory identity for " //$NON-NLS-1$
+                    + unansweredProbe + " in project '" + projectName + "' within " + probeTimeoutMs + " ms."); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            }
             return "Refusing to update: the file system did not answer within " + probeTimeoutMs //$NON-NLS-1$
                 + " ms whether " + unansweredProbe + " are the same database directory, so it is " //$NON-NLS-1$ //$NON-NLS-2$
                 + "unknown whether the target belongs to the current Git branch of project '" //$NON-NLS-1$
@@ -183,6 +209,12 @@ public final class BranchInfobaseBinding
         String targetDescription = target == null
             ? "an infobase that could not be resolved" //$NON-NLS-1$
             : "infobase '" + target.getName() + "'"; //$NON-NLS-1$ //$NON-NLS-2$
+        if (attach)
+        {
+            return attachRefusal("application '" + applicationName + "' (" + applicationId + ") targets " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                + targetDescription + ", which is not bound to the current Git branch of project '" //$NON-NLS-1$
+                + projectName + "' (bound: " + String.join(", ", boundNames) + ")."); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        }
         return "Refusing to update: application '" + applicationName + "' (" + applicationId //$NON-NLS-1$ //$NON-NLS-2$
             + ") targets " + targetDescription + ", which is not bound to the current Git branch of " //$NON-NLS-1$ //$NON-NLS-2$
             + "project '" + projectName + "' (bound: " + String.join(", ", boundNames) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
@@ -273,8 +305,19 @@ public final class BranchInfobaseBinding
         }
     }
 
-    private static String unreadable(String projectName, String reason)
+    private static String attachRefusal(String reason)
     {
+        return "Refusing Attach: " + reason + " Check the current branch's infobase binding in EDT and " //$NON-NLS-1$ //$NON-NLS-2$
+            + "use or create an Attach configuration for a bound infobase (see get_applications)."; //$NON-NLS-1$
+    }
+
+    private static String unreadable(String projectName, String reason, boolean attach)
+    {
+        if (attach)
+        {
+            return attachRefusal("the infobase binding of the current Git branch of project '" //$NON-NLS-1$
+                + projectName + "' could not be read (" + reason + ")."); //$NON-NLS-1$ //$NON-NLS-2$
+        }
         return "Refusing to update: the infobase binding of the current Git branch of project '" //$NON-NLS-1$
             + projectName + "' could not be read (" + reason + "), so it is unknown whether the " //$NON-NLS-1$ //$NON-NLS-2$
             + "target belongs to this branch. Nothing was updated. Retry, or re-call with " //$NON-NLS-1$

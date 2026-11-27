@@ -423,7 +423,7 @@ public class CreateLaunchConfigTool implements IMcpTool
             {
                 return buildAppNotFoundError(project.getName(), applicationId);
             }
-            String refusal = BranchInfobaseBinding.refusalOrNull(project, application.get(), applicationId);
+            String refusal = BranchInfobaseBinding.attachRefusalOrNull(project, application.get(), applicationId);
             if (refusal != null)
             {
                 return ToolResult.error(refusal).toJson();
