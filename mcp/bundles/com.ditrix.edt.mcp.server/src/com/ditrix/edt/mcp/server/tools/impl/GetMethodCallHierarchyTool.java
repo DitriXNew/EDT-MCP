@@ -1688,19 +1688,21 @@ public class GetMethodCallHierarchyTool implements IMcpTool
      * @return the rendered Markdown
      */
     /**
-     * The line for a transitive walk that reported no callers. An expired time budget (for example
-     * one consumed by a root retry while EDT restarted the project) means the search did not
-     * complete, so an empty result must not read as the negative answer "no callers".
+     * The line for a transitive walk that reported no callers. A walk that did not complete (the
+     * time or node budget ran out, a level was cut short, or something could not be read - for
+     * example a budget consumed by a root retry while EDT restarted the project) must not read as
+     * the negative answer "no callers".
      *
-     * @param timedOut whether the walk hit its time budget
+     * @param complete whether the walk was complete through its depth
+     *            ({@link CallGraphTraversal.Result#isComplete()})
      * @return the line to render, without a trailing newline
      */
-    static String emptyTransitiveCallersLine(boolean timedOut)
+    static String emptyTransitiveCallersLine(boolean complete)
     {
-        return timedOut
-            ? "No callers were found before the time limit ran out. The search did not complete, " //$NON-NLS-1$
-                + "so this is NOT evidence that nothing calls this method - retry the call." //$NON-NLS-1$
-            : "No callers found."; //$NON-NLS-1$
+        return complete
+            ? "No callers found." //$NON-NLS-1$
+            : "No callers were found, but the search did not complete (see 'Complete through depth' above), " //$NON-NLS-1$
+                + "so this is NOT evidence that nothing calls this method - retry the call."; //$NON-NLS-1$
     }
 
     private String formatTransitiveCallersOutput(String modulePath, String methodName,
@@ -1745,7 +1747,7 @@ public class GetMethodCallHierarchyTool implements IMcpTool
 
         if (nodes.isEmpty())
         {
-            sb.append(emptyTransitiveCallersLine(result.isTimedOut())).append('\n');
+            sb.append(emptyTransitiveCallersLine(result.isComplete())).append('\n');
             return sb.toString();
         }
 

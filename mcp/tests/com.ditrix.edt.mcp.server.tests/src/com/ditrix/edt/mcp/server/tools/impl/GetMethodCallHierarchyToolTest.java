@@ -909,13 +909,14 @@ public class GetMethodCallHierarchyToolTest
     }
 
     @Test
-    public void testEmptyTimedOutWalkIsNotReportedAsNoCallers()
+    public void testEmptyIncompleteWalkIsNotReportedAsNoCallers()
     {
-        String timedOut = GetMethodCallHierarchyTool.emptyTransitiveCallersLine(true);
-        assertFalse(timedOut, timedOut.startsWith("No callers found")); //$NON-NLS-1$
-        assertTrue(timedOut, timedOut.contains("did not complete")); //$NON-NLS-1$
-        assertTrue(timedOut, timedOut.contains("NOT evidence")); //$NON-NLS-1$
+        String incomplete = GetMethodCallHierarchyTool.emptyTransitiveCallersLine(false);
+        assertFalse(incomplete, incomplete.startsWith("No callers found.")); //$NON-NLS-1$
+        assertTrue(incomplete, incomplete.contains("did not complete")); //$NON-NLS-1$
+        assertTrue(incomplete, incomplete.contains("NOT evidence")); //$NON-NLS-1$
+        assertFalse(incomplete, incomplete.contains("time limit")); //$NON-NLS-1$
 
-        assertEquals("No callers found.", GetMethodCallHierarchyTool.emptyTransitiveCallersLine(false)); //$NON-NLS-1$
+        assertEquals("No callers found.", GetMethodCallHierarchyTool.emptyTransitiveCallersLine(true)); //$NON-NLS-1$
     }
 }
