@@ -104,18 +104,19 @@ public final class ReadToolExecution
             (name, budgetMs) -> ProjectStateChecker.awaitSearchScopeReady(name, budgetMs)
                 .getNotReadyProjectNames(),
             () -> HostKind.current() == HostKind.HEADLESS || Windowed.notOnUiThread(),
-            InterruptiblePause::pause);
+            InterruptiblePause::pause, ExecutingToolCall::isResponseDelivered);
     }
 
     /**
      * Seam. {@code host} is how the read is dispatched, {@code settle} maps (projectName,
      * budgetMs) to the not-ready project names, {@code mayWait} is false on the UI thread,
-     * {@code pause} sleeps the given milliseconds and returns false when interrupted.
+     * {@code pause} sleeps the given milliseconds and returns false when interrupted,
+     * {@code responseDelivered} tells whether the executing call was already answered.
      */
     static String dispatchReadTool(String projectName, String logContext, Supplier<String> read,
         Function<Exception, String> failureJson, Consumer<Runnable> host,
         BiFunction<String, Long, List<String>> settle, BooleanSupplier mayWait,
-        LongPredicate pause)
+        LongPredicate pause, BooleanSupplier responseDelivered)
     {
         ReadAttempt first = attemptRead(logContext, read, failureJson, host);
         if (first.restartArtifact == null)
@@ -134,6 +135,12 @@ public final class ReadToolExecution
             return restartingError(projectName, first.restartArtifact);
         }
         settle.apply(projectName, RESTART_SETTLE_TIMEOUT_MS);
+        // The wait took time: a caller that was cancelled or already answered meanwhile gets the
+        // retryable error, not a second read.
+        if (Thread.currentThread().isInterrupted() || responseDelivered.getAsBoolean())
+        {
+            return restartingError(projectName, first.restartArtifact);
+        }
         ReadAttempt second = attemptRead(logContext, read, failureJson, host);
         return second.restartArtifact == null
             ? second.json : restartingError(projectName, second.restartArtifact);
