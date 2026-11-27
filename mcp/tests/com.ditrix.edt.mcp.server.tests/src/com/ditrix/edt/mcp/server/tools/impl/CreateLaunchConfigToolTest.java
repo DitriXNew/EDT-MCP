@@ -152,7 +152,7 @@ public class CreateLaunchConfigToolTest
         assertTrue("invalid clientType must be an error", result.contains("\"success\":false")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("error must name the bad value", result.contains("mobile")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("error must list the allowed kinds", //$NON-NLS-1$
-            result.contains("thin") && result.contains("thick") && result.contains("web")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            result.contains("Must be one of: thin, thick, web, attach.")); //$NON-NLS-1$
     }
 
     // ──────────────────────────────────────────────────────────────────────────

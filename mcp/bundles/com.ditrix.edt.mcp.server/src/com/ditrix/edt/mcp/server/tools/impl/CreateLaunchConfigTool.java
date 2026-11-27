@@ -486,7 +486,7 @@ public class CreateLaunchConfigTool implements IMcpTool
         if (componentTypeId == null)
         {
             return ClientTypeResolution.error(ToolResult.error("Invalid clientType: '" + clientType //$NON-NLS-1$
-                + "'. Must be one of: thin, thick, web.").toJson()); //$NON-NLS-1$
+                + "'. Must be one of: thin, thick, web, attach.").toJson()); //$NON-NLS-1$
         }
         return ClientTypeResolution.of(clientType, componentTypeId, clientLabelFor(clientType));
     }
