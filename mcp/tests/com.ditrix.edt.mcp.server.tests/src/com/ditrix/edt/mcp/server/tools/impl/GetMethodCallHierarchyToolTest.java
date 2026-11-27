@@ -894,4 +894,17 @@ public class GetMethodCallHierarchyToolTest
             assertTrue(result, result.contains("\"success\":false"));
         }
     }
+
+    @Test
+    public void testTransitiveDeadlineIsCountedFromTheCallStart()
+    {
+        long started = 1_000L;
+        long deadline = GetMethodCallHierarchyTool.transitiveDeadlineNanos(started);
+
+        assertEquals(started + GetMethodCallHierarchyTool.TRANSITIVE_TIME_BUDGET_MS * 1_000_000L, deadline);
+        // 12 s spent on a root retry are gone from the walk's share of the budget.
+        long afterRetry = started + 12_000L * 1_000_000L;
+        assertEquals(GetMethodCallHierarchyTool.TRANSITIVE_TIME_BUDGET_MS - 12_000L,
+            (deadline - afterRetry) / 1_000_000L);
+    }
 }

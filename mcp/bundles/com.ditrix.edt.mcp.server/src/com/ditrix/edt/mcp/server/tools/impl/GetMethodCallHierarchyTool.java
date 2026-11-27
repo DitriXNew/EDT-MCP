@@ -78,7 +78,7 @@ public class GetMethodCallHierarchyTool implements IMcpTool
 
     public GetMethodCallHierarchyTool()
     {
-        this(BslModuleUtils::loadModule);
+        this(BslModuleUtils::loadModuleOrThrowOnRestart);
     }
 
     GetMethodCallHierarchyTool(java.util.function.BiFunction<IProject, String, Module> moduleLoader)
@@ -132,8 +132,26 @@ public class GetMethodCallHierarchyTool implements IMcpTool
      * server is driven by - so a walk allowed to run past that does not return a longer answer, it
      * returns nothing the caller ever sees. Stopping at 45 s yields a labelled partial answer, which
      * is strictly more information than a transport error.
+     *
+     * <p>The budget covers the WHOLE call, not just the walk: the clock starts before the root is
+     * resolved, so a root retry after an EDT context restart (750 ms pause, up to 10 s settle, a
+     * second resolution) is paid out of these 45 s and the gap below the transport timeout stays
+     * intact. See {@link #transitiveDeadlineNanos(long)}.
      */
     static final long TRANSITIVE_TIME_BUDGET_MS = 45_000L;
+
+    /**
+     * The {@link System#nanoTime()} instant at which a transitive walk must stop, counted from the
+     * moment the call started (not from when the walk begins), so everything spent before the walk
+     * - the root resolution and its restart retry - comes out of {@link #TRANSITIVE_TIME_BUDGET_MS}.
+     *
+     * @param callStartedNanos {@code System.nanoTime()} taken before the root was resolved
+     * @return the deadline on the same clock
+     */
+    static long transitiveDeadlineNanos(long callStartedNanos)
+    {
+        return callStartedNanos + TimeUnit.MILLISECONDS.toNanos(TRANSITIVE_TIME_BUDGET_MS);
+    }
 
     /**
      * How many candidate modules are parsed and walked inside ONE {@link Display#syncExec}.
@@ -988,6 +1006,8 @@ public class GetMethodCallHierarchyTool implements IMcpTool
      */
     private String runTransitiveCallers(String projectName, String modulePath, RequestArgs request)
     {
+        // Taken before the root resolution so a restart retry of the root is charged to the budget.
+        final long callStartedNanos = System.nanoTime();
         try
         {
             ProjectContext ctx = ProjectContext.of(projectName);
@@ -1000,7 +1020,8 @@ public class GetMethodCallHierarchyTool implements IMcpTool
             RootResolution root = new RootResolution();
             // Only the root resolution is retried on an EDT context restart (the same settle,
             // pause and answer as every other read tool): it runs before the traversal budget
-            // starts, so a retry costs the walk nothing. Null means resolved.
+            // starts, but its time (pause, settle, second attempt) is charged to the same 45 s budget
+            // through callStartedNanos. Null means resolved.
             String rootFailure = ReadToolExecution.dispatchReadTool(projectName,
                 "Error resolving call-hierarchy root", //$NON-NLS-1$
                 () -> ReadToolExecution.readOnHost(projectName, NAME, () -> {
@@ -1015,7 +1036,7 @@ public class GetMethodCallHierarchyTool implements IMcpTool
 
             TransitiveContext context =
                 new TransitiveContext(ctx.project(), projectName, root.resourceSet, readExecutor);
-            long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(TRANSITIVE_TIME_BUDGET_MS);
+            long deadline = transitiveDeadlineNanos(callStartedNanos);
             BooleanSupplier expired = () -> System.nanoTime() - deadline >= 0;
 
             CallerNode rootPayload = new CallerNode(modulePath, root.methodName, root.methodUri, 0);
