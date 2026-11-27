@@ -757,9 +757,43 @@ public class PlatformFailuresTest
     @Test
     public void testContextRestartArtifactFoundThroughCauseChain()
     {
-        RuntimeException wrapped = new RuntimeException("wrapper",
-            new IllegalStateException("inner wrapper", xtextDelegateNpe()));
-        assertTrue(PlatformFailures.isContextRestartArtifact(wrapped));
+        NullPointerException npe = xtextDelegateNpe();
+        assertTrue(PlatformFailures.isContextRestartArtifact(new RuntimeException(npe)));
+        assertTrue(PlatformFailures.isContextRestartArtifact(new RuntimeException(new IllegalStateException(npe))));
+        assertTrue(PlatformFailures.isContextRestartArtifact(new RuntimeException((String)null, npe)));
+        assertTrue(PlatformFailures.isContextRestartArtifact(
+            new java.lang.reflect.InvocationTargetException(npe, "reflective call failed")));
+        assertTrue(PlatformFailures.isContextRestartArtifact(
+            new java.util.concurrent.ExecutionException("task failed", npe)));
+        assertTrue(PlatformFailures.isContextRestartArtifact(
+            new org.eclipse.emf.common.util.WrappedException("wrapped by EMF", npe)));
+    }
+
+    @Test
+    public void testWrapperWithOwnMessageStopsRecognition()
+    {
+        NullPointerException npe = xtextDelegateNpe();
+        assertFalse(PlatformFailures.isContextRestartArtifact(new RuntimeException("wrapper", npe)));
+        assertFalse(PlatformFailures.isContextRestartArtifact(
+            new RuntimeException("outer", new RuntimeException(npe))));
+        assertFalse(PlatformFailures.isContextRestartArtifact(
+            new IllegalStateException("meaningful", new RuntimeException(npe))));
+    }
+
+    @Test
+    public void testOtherMethodOfTheSameClassIsNot()
+    {
+        assertFalse(PlatformFailures.isContextRestartArtifact(
+            withTopFrame(new NullPointerException(), XTEXT_FRAME_CLASS, "getExportedObjectsByType")));
+        assertFalse(PlatformFailures.isContextRestartArtifact(
+            withTopFrame(new NullPointerException(), XTEXT_FRAME_CLASS, "getResourceDescription")));
+    }
+
+    @Test
+    public void testOuterCurrentDescriptionsClassIsNot()
+    {
+        assertFalse(PlatformFailures.isContextRestartArtifact(withTopFrame(new NullPointerException(),
+            "org.eclipse.xtext.builder.clustering.CurrentDescriptions", "getExportedObjects")));
     }
 
     @Test
@@ -799,9 +833,6 @@ public class PlatformFailuresTest
         NullPointerException wrongPackage = withTopFrame(new NullPointerException(),
             "org.eclipse.xtext.resource.CurrentDescriptions$ResourceSetAware", "getExportedObjects");
         assertFalse(PlatformFailures.isContextRestartArtifact(wrongPackage));
-        NullPointerException outer = withTopFrame(new NullPointerException(),
-            "org.eclipse.xtext.builder.clustering.CurrentDescriptions", "getExportedObjects");
-        assertTrue(PlatformFailures.isContextRestartArtifact(outer));
     }
 
     @Test
@@ -822,7 +853,7 @@ public class PlatformFailuresTest
     public void testCyclicCauseChainTerminates()
     {
         // initCause refuses a self-cycle, so build one by overriding getCause().
-        RuntimeException cyclic = new RuntimeException("cycle")
+        RuntimeException cyclic = new RuntimeException()
         {
             private static final long serialVersionUID = 1L;
 
