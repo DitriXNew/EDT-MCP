@@ -203,7 +203,7 @@ public class RefusalsTest
     {
         NullPointerException npe = new NullPointerException();
         npe.setStackTrace(new StackTraceElement[] {
-            new StackTraceElement("org.eclipse.xtext.resource.CurrentDescriptions$ResourceSetAware", //$NON-NLS-1$
+            new StackTraceElement("org.eclipse.xtext.builder.clustering.CurrentDescriptions$ResourceSetAware", //$NON-NLS-1$
                 "getExportedObjects", "CurrentDescriptions.java", 1) }); //$NON-NLS-1$ //$NON-NLS-2$
         return npe;
     }

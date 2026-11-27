@@ -73,9 +73,18 @@ public final class PlatformFailures
     /** Cap on how many {@code getCause()} hops are walked, guarding against a cyclical chain. */
     private static final int MAX_CAUSE_CHAIN_DEPTH = 10;
 
-    /** Class-name prefix of the Xtext frame that marks the transient context-restart NPE. */
+    /**
+     * Class-name prefix of the Xtext frame that marks the transient context-restart NPE.
+     *
+     * <p>Verified against EDT 2026.2.2, jar org.eclipse.xtext.builder_2.41.0.v20251124-0739.jar:
+     * the class is {@code org.eclipse.xtext.builder.clustering.CurrentDescriptions} (NOT
+     * {@code org.eclipse.xtext.resource.*}); the failing frame is its nested
+     * {@code CurrentDescriptions$ResourceSetAware.getExportedObjects()}, which calls
+     * {@code delegate.getExportedObjects()} on a not yet wired delegate. The prefix also
+     * matches the nested class.
+     */
     private static final String XTEXT_CURRENT_DESCRIPTIONS =
-        "org.eclipse.xtext.resource.CurrentDescriptions"; //$NON-NLS-1$
+        "org.eclipse.xtext.builder.clustering.CurrentDescriptions"; //$NON-NLS-1$
 
     /** Cap on how deep a {@link IStatus} child tree is walked. */
     private static final int MAX_STATUS_DEPTH = 4;
@@ -119,9 +128,9 @@ public final class PlatformFailures
      * context restarts). Walks the bounded cause chain; pure.
      *
      * <p>The match is by signature, not by class: the NPE's TOP stack frame must belong to a class
-     * whose name starts with {@code org.eclipse.xtext.resource.CurrentDescriptions}. Any other NPE
-     * (ours or the platform's) is not recognised. Add new signatures only for an observed log
-     * entry.
+     * whose name starts with {@code org.eclipse.xtext.builder.clustering.CurrentDescriptions}.
+     * Any other NPE (ours or the platform's) is not recognised. Add new signatures only for an
+     * observed log entry.
      *
      * @param failure the exception to inspect (may be {@code null})
      * @return {@code true} when the chain holds the known restart NPE

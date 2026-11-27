@@ -732,7 +732,7 @@ public class PlatformFailuresTest
     // ========== isContextRestartArtifact: the narrow context-restart signature ==========
 
     private static final String XTEXT_FRAME_CLASS =
-        "org.eclipse.xtext.resource.CurrentDescriptions$ResourceSetAware";
+        "org.eclipse.xtext.builder.clustering.CurrentDescriptions$ResourceSetAware";
 
     private static <T extends Throwable> T withTopFrame(T failure, String className,
         String method)
@@ -787,6 +787,21 @@ public class PlatformFailuresTest
         IllegalStateException other = withTopFrame(new IllegalStateException("boom"),
             XTEXT_FRAME_CLASS, "getExportedObjects");
         assertFalse(PlatformFailures.isContextRestartArtifact(other));
+    }
+
+    @Test
+    public void testWrongPackageCurrentDescriptionsFrameIsNot()
+    {
+        // The class name is "org.eclipse.xtext.builder.clustering.CurrentDescriptions" in EDT
+        // 2026.2.2 (org.eclipse.xtext.builder_2.41.0 jar). The package this once got wrong must
+        // stay unrecognised, so a wrong name cannot pass silently. Literals on purpose: a test
+        // that reads the production constant would be tautological.
+        NullPointerException wrongPackage = withTopFrame(new NullPointerException(),
+            "org.eclipse.xtext.resource.CurrentDescriptions$ResourceSetAware", "getExportedObjects");
+        assertFalse(PlatformFailures.isContextRestartArtifact(wrongPackage));
+        NullPointerException outer = withTopFrame(new NullPointerException(),
+            "org.eclipse.xtext.builder.clustering.CurrentDescriptions", "getExportedObjects");
+        assertTrue(PlatformFailures.isContextRestartArtifact(outer));
     }
 
     @Test

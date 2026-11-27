@@ -6,6 +6,7 @@ import java.util.function.BiFunction;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.LongPredicate;
 import java.util.function.Supplier;
 import java.util.HashMap;
 import java.util.List;
@@ -23,6 +24,12 @@ public final class ReadToolExecution
 {
     /** Settle budget before the one retry of a read that hit an EDT context restart. */
     static final long RESTART_SETTLE_TIMEOUT_MS = 10_000L;
+
+    /**
+     * Minimum pause before that retry: the settle may return at once when the project snapshot
+     * already reads ready, yet EDT may still be wiring the restarted context.
+     */
+    static final long RESTART_RETRY_PAUSE_MS = 750L;
 
     private static final ThreadLocal<Map<IProject, IBmModel>> READ_SCOPES = new ThreadLocal<>();
     private ReadToolExecution() { }
@@ -96,16 +103,19 @@ public final class ReadToolExecution
             work -> dispatch(work),
             (name, budgetMs) -> ProjectStateChecker.awaitSearchScopeReady(name, budgetMs)
                 .getNotReadyProjectNames(),
-            () -> HostKind.current() == HostKind.HEADLESS || Windowed.notOnUiThread());
+            () -> HostKind.current() == HostKind.HEADLESS || Windowed.notOnUiThread(),
+            InterruptiblePause::pause);
     }
 
     /**
      * Seam. {@code host} is how the read is dispatched, {@code settle} maps (projectName,
-     * budgetMs) to the not-ready project names, {@code mayWait} is false on the UI thread.
+     * budgetMs) to the not-ready project names, {@code mayWait} is false on the UI thread,
+     * {@code pause} sleeps the given milliseconds and returns false when interrupted.
      */
     static String dispatchReadTool(String projectName, String logContext, Supplier<String> read,
         Function<Exception, String> failureJson, Consumer<Runnable> host,
-        BiFunction<String, Long, List<String>> settle, BooleanSupplier mayWait)
+        BiFunction<String, Long, List<String>> settle, BooleanSupplier mayWait,
+        LongPredicate pause)
     {
         ReadAttempt first = attemptRead(logContext, read, failureJson, host);
         if (first.restartArtifact == null)
@@ -117,7 +127,12 @@ public final class ReadToolExecution
             return restartingError(projectName, first.restartArtifact);
         }
         // Outside the host dispatch and any BM transaction, bounded: the retry gives EDT the
-        // chance to finish wiring the restarted context.
+        // chance to finish wiring the restarted context. Pause first (the settle can return at
+        // once), interruptibly; a caller that interrupted us gets the retryable error, no retry.
+        if (!pause.test(RESTART_RETRY_PAUSE_MS))
+        {
+            return restartingError(projectName, first.restartArtifact);
+        }
         settle.apply(projectName, RESTART_SETTLE_TIMEOUT_MS);
         ReadAttempt second = attemptRead(logContext, read, failureJson, host);
         return second.restartArtifact == null
@@ -137,8 +152,8 @@ public final class ReadToolExecution
     /** Outcome of one read attempt: the JSON, or the restart artifact that needs a retry. */
     private static final class ReadAttempt
     {
-        String json;
-        Exception restartArtifact;
+        volatile String json;
+        volatile Exception restartArtifact;
     }
 
     private static ReadAttempt attemptRead(String logContext, Supplier<String> read,
