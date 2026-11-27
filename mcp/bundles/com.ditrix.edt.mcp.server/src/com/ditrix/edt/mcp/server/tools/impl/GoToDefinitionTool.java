@@ -10,7 +10,6 @@ import java.util.Locale;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiFunction;
 
 import org.eclipse.core.resources.IFile;
@@ -32,6 +31,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.ExtensionOriginUtils;
 import com.ditrix.edt.mcp.server.utils.FrontMatter;
 import com.ditrix.edt.mcp.server.utils.InterceptionUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
@@ -79,7 +79,7 @@ public class GoToDefinitionTool implements IMcpTool
 
     public GoToDefinitionTool()
     {
-        this(BslModuleUtils::loadModule,
+        this(BslModuleUtils::loadModuleOrThrowOnRestart,
             (project, module, lookup) -> InterceptionUtils.readSourceModule(project, module, NAME, lookup));
     }
 
@@ -169,23 +169,61 @@ public class GoToDefinitionTool implements IMcpTool
                 + symbol + "'. Or pass a qualified 'ModuleName.MethodName' or a metadata FQN like 'Catalog.Products'.").toJson(); //$NON-NLS-1$
         }
 
-        // Execute on UI thread (required for EDT API access)
-        AtomicReference<String> resultRef = new AtomicReference<>();
+        // Execute on the host (UI thread when windowed; required for EDT API access). An EDT
+        // context-restart failure is retried once by dispatchReadTool.
+        return ReadToolExecution.dispatchReadTool(projectName, settleProjectName(projectName),
+            "Error resolving definition", //$NON-NLS-1$
+            () -> ReadToolExecution.readOnHost(projectName, NAME,
+                () -> resolveDefinition(projectName, symbol, modulePath, includeSource)),
+            e -> ToolResult.error(e.getMessage()).toJson());
+    }
 
-        ReadToolExecution.dispatch(() -> {
-            try
-            {
-                String result = ReadToolExecution.readOnHost(projectName, NAME, () -> resolveDefinition(projectName, symbol, modulePath, includeSource));
-                resultRef.set(result);
-            }
-            catch (Exception e)
-            {
-                Refusals.log("Error resolving definition", e); //$NON-NLS-1$
-                resultRef.set(ToolResult.error(e.getMessage()).toJson());
-            }
-        });
+    /**
+     * The project a restart retry must settle and name. An extension's adopted module is read from
+     * its base project, so the restart artifact can come from the base, whose search scope (the base
+     * plus its dependents) also covers the extension. Any other project settles as itself.
+     *
+     * @param projectName the requested project
+     * @return the base project's name for a dependent project with a wired base, else
+     *         {@code projectName}
+     */
+    static String settleProjectName(String projectName)
+    {
+        if (projectName == null || projectName.isEmpty())
+        {
+            return projectName;
+        }
+        ProjectContext ctx = ProjectContext.of(projectName);
+        if (!ctx.exists())
+        {
+            return projectName;
+        }
+        IProject base = ExtensionOriginUtils.resolveBaseProject(ctx.project());
+        return chooseSettleProject(projectName, base == null ? null : base.getName(),
+            base == null ? ExtensionOriginUtils.declaredBaseProjectName(ctx.project()) : null);
+    }
 
-        return resultRef.get();
+    /**
+     * The project to settle before the retry: the runtime base when it is wired, else the base the
+     * project DECLARES in its manifest (the runtime parent is unwired exactly while the context
+     * restarts), else the project itself.
+     *
+     * @param projectName the requested project
+     * @param runtimeBase the wired runtime parent's name, or {@code null}
+     * @param declaredBase the manifest's {@code Base-Project}, or {@code null}
+     * @return the project whose search scope the retry waits for
+     */
+    static String chooseSettleProject(String projectName, String runtimeBase, String declaredBase)
+    {
+        if (runtimeBase != null && !runtimeBase.isEmpty())
+        {
+            return runtimeBase;
+        }
+        if (declaredBase != null && !declaredBase.isEmpty())
+        {
+            return declaredBase;
+        }
+        return projectName;
     }
 
     // ========== Main resolution logic ==========

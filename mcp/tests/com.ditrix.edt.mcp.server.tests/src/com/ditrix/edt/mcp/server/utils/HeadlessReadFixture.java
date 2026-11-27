@@ -16,6 +16,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.*;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.HostKind;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import org.mockito.stubbing.Stubber;
 
 /** Real workspace files and metadata formatters, with a checked BM transaction executor. */
 public final class HeadlessReadFixture implements AutoCloseable
@@ -26,6 +27,7 @@ public final class HeadlessReadFixture implements AutoCloseable
     private final String application;
     public final IBmModel model = mock(IBmModel.class);
     public final Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+    public final IConfigurationProvider configurations = mock(IConfigurationProvider.class);
     public int depth;
     public int reads;
 
@@ -38,7 +40,6 @@ public final class HeadlessReadFixture implements AutoCloseable
         System.setProperty("eclipse.application", HostKind.APPLICATION_ID);
         Activator activator = mock(Activator.class);
         IBmModelManager models = mock(IBmModelManager.class);
-        IConfigurationProvider configurations = mock(IConfigurationProvider.class);
         when(activator.getBmModelManager()).thenReturn(models);
         when(activator.getConfigurationProvider()).thenReturn(configurations);
         when(models.getModel(files.project())).thenReturn(model);
@@ -83,6 +84,41 @@ public final class HeadlessReadFixture implements AutoCloseable
         params.put("projectName", files.name());
         try { return tool.execute(params); }
         catch (RuntimeException failure) { throw new AssertionError("Core read failed without a workbench", failure); }
+    }
+
+    /** The NPE EDT raises while it restarts a project context (Xtext index delegate not wired). */
+    public static NullPointerException restartNpe()
+    {
+        // Mockito's doThrow calls fillInStackTrace() when it throws, which would wipe the
+        // synthetic Xtext frame; a no-op override keeps it.
+        NullPointerException npe = new NullPointerException()
+        {
+            private static final long serialVersionUID = 1L;
+
+            @Override
+            public synchronized Throwable fillInStackTrace()
+            {
+                return this;
+            }
+        };
+        npe.setStackTrace(new StackTraceElement[] { new StackTraceElement(
+            "org.eclipse.xtext.builder.clustering.CurrentDescriptions$ResourceSetAware",
+            "getExportedObjects", "CurrentDescriptions.java", 1) });
+        return npe;
+    }
+
+    /**
+     * The next configuration lookups throw the given failures in order, then answer
+     * {@link #config}. Replaces the fixture's in-transaction check for this project.
+     */
+    public void failConfigurationLookups(Throwable... failures)
+    {
+        Stubber stubber = null;
+        for (Throwable failure : failures)
+        {
+            stubber = stubber == null ? doThrow(failure) : stubber.doThrow(failure);
+        }
+        stubber.doReturn(config).when(configurations).getConfiguration(files.project());
     }
 
     public String name() { return files.name(); }

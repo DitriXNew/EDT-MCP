@@ -99,10 +99,32 @@ public final class ReadToolExecution
     public static String dispatchReadTool(String projectName, String logContext,
         Supplier<String> read, Function<Exception, String> failureJson)
     {
+        return dispatchReadTool(projectName, projectName, logContext, read, failureJson);
+    }
+
+    /**
+     * As {@link #dispatchReadTool(String, String, Supplier, Function)}, for a read that can cross
+     * into another project (an extension's adopted module is read from its base project): the
+     * restart artifact may come from that other project, so the settle waits for
+     * {@code settleProjectName} instead. The settle treats it as a base and includes its
+     * dependents, so passing the base project also covers the extension. The retryable answer
+     * still names {@code projectName}: the advice must target the project the caller asked about.
+     *
+     * @param projectName the project the read was requested for
+     * @param settleProjectName the project to settle (its scope must cover {@code projectName})
+     *            (falls back to {@code projectName} when {@code null} or empty)
+     * @param logContext the {@link Refusals#log} context
+     * @param read the read itself; it opens its own BM boundary
+     * @param failureJson maps any other failure to the tool's error JSON
+     * @return the read's JSON, or the mapped error
+     */
+    public static String dispatchReadTool(String projectName, String settleProjectName,
+        String logContext, Supplier<String> read, Function<Exception, String> failureJson)
+    {
         // Captured here, on the executor thread: the probe must stay valid inside the runnable
         // that the UI thread runs later, where the thread-local lookup finds no call.
         BooleanSupplier responseDelivered = ExecutingToolCall.capture();
-        return dispatchReadTool(projectName, logContext, read, failureJson,
+        return dispatchReadTool(projectName, settleProjectName, logContext, read, failureJson,
             work -> dispatch(work),
             (name, budgetMs) -> ProjectStateChecker.awaitSearchScopeReady(name, budgetMs)
                 .getNotReadyProjectNames(),
@@ -121,6 +143,22 @@ public final class ReadToolExecution
         BiFunction<String, Long, List<String>> settle, BooleanSupplier mayWait,
         LongPredicate pause, BooleanSupplier responseDelivered)
     {
+        return dispatchReadTool(projectName, projectName, logContext, read, failureJson, host,
+            settle, mayWait, pause, responseDelivered);
+    }
+
+    /**
+     * Seam with a separate project to settle; see the public overload. The retryable answer
+     * always names the REQUESTED project: the settle scope may be wider (a base whose scope
+     * covers the extension), but the advice must target the project the caller asked about.
+     */
+    static String dispatchReadTool(String requestedProject, String settleProjectName,
+        String logContext, Supplier<String> read, Function<Exception, String> failureJson,
+        Consumer<Runnable> host, BiFunction<String, Long, List<String>> settle,
+        BooleanSupplier mayWait, LongPredicate pause, BooleanSupplier responseDelivered)
+    {
+        String settleProject = settleProjectName == null || settleProjectName.isEmpty()
+            ? requestedProject : settleProjectName;
         ReadAttempt first = attemptRead(logContext, read, failureJson, host, null);
         if (first.restartArtifact == null)
         {
@@ -128,35 +166,35 @@ public final class ReadToolExecution
         }
         if (!mayWait.getAsBoolean())
         {
-            return restartingError(projectName, first.restartArtifact);
+            return restartingError(requestedProject, first.restartArtifact);
         }
         // Outside the host dispatch and any BM transaction, bounded: the retry gives EDT the
         // chance to finish wiring the restarted context. Pause first (the settle can return at
         // once), interruptibly; a caller that interrupted us gets the retryable error, no retry.
         if (!pause.test(RESTART_RETRY_PAUSE_MS))
         {
-            return restartingError(projectName, first.restartArtifact);
+            return restartingError(requestedProject, first.restartArtifact);
         }
-        settle.apply(projectName, RESTART_SETTLE_TIMEOUT_MS);
+        settle.apply(settleProject, RESTART_SETTLE_TIMEOUT_MS);
         // The wait took time: a caller that was cancelled or already answered meanwhile gets the
         // retryable error, not a second read.
         if (Thread.currentThread().isInterrupted() || responseDelivered.getAsBoolean())
         {
-            return restartingError(projectName, first.restartArtifact);
+            return restartingError(requestedProject, first.restartArtifact);
         }
         // The host may queue the runnable behind a busy UI thread, so the delivered check is
         // repeated inside it, right before the read (the captured probe works on any thread).
         ReadAttempt second = attemptRead(logContext, read, failureJson, host, responseDelivered);
         if (second.skipped)
         {
-            return restartingError(projectName, first.restartArtifact);
+            return restartingError(requestedProject, first.restartArtifact);
         }
         return second.restartArtifact == null
-            ? second.json : restartingError(projectName, second.restartArtifact);
+            ? second.json : restartingError(requestedProject, second.restartArtifact);
     }
 
     /** The retryable answer for a read that EDT failed while restarting the context. */
-    static String restartingError(String projectName, Exception failure)
+    public static String restartingError(String projectName, Throwable failure)
     {
         return ToolResult.error("EDT was restarting the context of project '" + projectName //$NON-NLS-1$
             + "' and failed the read inside EDT (" + PlatformFailures.describe(failure) //$NON-NLS-1$

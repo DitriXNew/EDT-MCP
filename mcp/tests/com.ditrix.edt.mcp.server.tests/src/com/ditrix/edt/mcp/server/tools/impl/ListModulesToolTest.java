@@ -11,13 +11,17 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 
 import java.util.HashMap;
 import java.util.Map;
 
 import org.junit.Test;
 
+import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
+import com.ditrix.edt.mcp.server.utils.HeadlessReadFixture;
 
 /**
  * Tests for {@link ListModulesTool}.
@@ -188,7 +192,7 @@ public class ListModulesToolTest
     }
     @Test public void headlessReadUsesBmForFilteredMetadataAndCoreFilesForAll() throws Exception
     {
-        try (var fixture = new com.ditrix.edt.mcp.server.utils.HeadlessReadFixture())
+        try (var fixture = new HeadlessReadFixture())
         {
             for (String name : new String[] { "EnglishName", "Код" })
             {
@@ -204,6 +208,49 @@ public class ListModulesToolTest
             assertEquals("Filesystem mode needs no BM task", reads, fixture.reads);
             String refused = fixture.call(new ListModulesTool(), Map.of("metadataType", "commonModules", "objectName", "Translated Код"));
             assertFalse(refused, refused.contains("CommonModules/Код/Module.bsl"));
+        }
+    }
+
+    @Test
+    public void testRestartFailureIsRetriedOnceAndSucceeds() throws Exception
+    {
+        try (HeadlessReadFixture fixture = new HeadlessReadFixture())
+        {
+            fixture.failConfigurationLookups(HeadlessReadFixture.restartNpe());
+            String result = fixture.call(new ListModulesTool(),
+                Map.of("metadataType", "commonModules", "objectName", "EnglishName"));
+            assertFalse(result, result.contains("EDT was restarting"));
+            assertTrue(result, result.contains("CommonModules/EnglishName/Module.bsl"));
+            verify(fixture.configurations, times(2)).getConfiguration(fixture.project());
+        }
+    }
+
+    @Test
+    public void testRepeatedRestartFailureAnswersRetryableError() throws Exception
+    {
+        try (HeadlessReadFixture fixture = new HeadlessReadFixture())
+        {
+            fixture.failConfigurationLookups(HeadlessReadFixture.restartNpe(),
+                HeadlessReadFixture.restartNpe());
+            String result = fixture.call(new ListModulesTool(),
+                Map.of("metadataType", "commonModules", "objectName", "EnglishName"));
+            assertTrue(result, result.contains(
+                "EDT was restarting the context of project '" + fixture.name() + "'"));
+            assertTrue(result, result.contains("\"success\":false"));
+            verify(fixture.configurations, times(2)).getConfiguration(fixture.project());
+        }
+    }
+
+    @Test
+    public void testOrdinaryFailureIsNotRetried() throws Exception
+    {
+        try (HeadlessReadFixture fixture = new HeadlessReadFixture())
+        {
+            fixture.failConfigurationLookups(new IllegalStateException("boom"));
+            String result = fixture.call(new ListModulesTool(),
+                Map.of("metadataType", "commonModules", "objectName", "EnglishName"));
+            assertEquals(ToolResult.error("boom").toJson(), result);
+            verify(fixture.configurations, times(1)).getConfiguration(fixture.project());
         }
     }
 }

@@ -18,7 +18,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 
 import org.eclipse.core.resources.IFile;
@@ -54,6 +53,7 @@ import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
 import com.ditrix.edt.mcp.server.utils.BslMethodRecovery;
 import com.ditrix.edt.mcp.server.utils.Pagination;
+import com.ditrix.edt.mcp.server.utils.PlatformFailures;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.Refusals;
 
@@ -78,7 +78,7 @@ public class GetMethodCallHierarchyTool implements IMcpTool
 
     public GetMethodCallHierarchyTool()
     {
-        this(BslModuleUtils::loadModule);
+        this(BslModuleUtils::loadModuleOrThrowOnRestart);
     }
 
     GetMethodCallHierarchyTool(java.util.function.BiFunction<IProject, String, Module> moduleLoader)
@@ -132,8 +132,26 @@ public class GetMethodCallHierarchyTool implements IMcpTool
      * server is driven by - so a walk allowed to run past that does not return a longer answer, it
      * returns nothing the caller ever sees. Stopping at 45 s yields a labelled partial answer, which
      * is strictly more information than a transport error.
+     *
+     * <p>The budget covers the WHOLE call, not just the walk: the clock starts before the root is
+     * resolved, so a root retry after an EDT context restart (750 ms pause, up to 10 s settle, a
+     * second resolution) is paid out of these 45 s and the gap below the transport timeout stays
+     * intact. See {@link #transitiveDeadlineNanos(long)}.
      */
     static final long TRANSITIVE_TIME_BUDGET_MS = 45_000L;
+
+    /**
+     * The {@link System#nanoTime()} instant at which a transitive walk must stop, counted from the
+     * moment the call started (not from when the walk begins), so everything spent before the walk
+     * - the root resolution and its restart retry - comes out of {@link #TRANSITIVE_TIME_BUDGET_MS}.
+     *
+     * @param callStartedNanos {@code System.nanoTime()} taken before the root was resolved
+     * @return the deadline on the same clock
+     */
+    static long transitiveDeadlineNanos(long callStartedNanos)
+    {
+        return callStartedNanos + TimeUnit.MILLISECONDS.toNanos(TRANSITIVE_TIME_BUDGET_MS);
+    }
 
     /**
      * How many candidate modules are parsed and walked inside ONE {@link Display#syncExec}.
@@ -382,19 +400,10 @@ public class GetMethodCallHierarchyTool implements IMcpTool
      */
     private String runOnDisplay(String projectName, String modulePath, RequestArgs request)
     {
-        AtomicReference<String> resultRef = new AtomicReference<>();
-        ReadToolExecution.dispatch(() -> {
-            try
-            {
-                resultRef.set(ReadToolExecution.readOnHost(projectName, NAME, () -> dispatch(projectName, modulePath, request)));
-            }
-            catch (Exception e)
-            {
-                Refusals.log("Error finding call hierarchy", e); //$NON-NLS-1$
-                resultRef.set(ToolResult.error(e.getMessage()).toJson());
-            }
-        });
-        return resultRef.get();
+        return ReadToolExecution.dispatchReadTool(projectName, "Error finding call hierarchy", //$NON-NLS-1$
+            () -> ReadToolExecution.readOnHost(projectName, NAME,
+                () -> dispatch(projectName, modulePath, request)),
+            e -> ToolResult.error(e.getMessage()).toJson());
     }
 
     /**
@@ -447,6 +456,23 @@ public class GetMethodCallHierarchyTool implements IMcpTool
             this.limit = limit;
             this.depth = depth;
             this.requestedDepth = depth;
+        }
+    }
+
+    /**
+     * Lets the EDT context-restart failure escape a catch that otherwise degrades to a partial
+     * answer, so {@link ReadToolExecution#dispatchReadTool} can retry the read instead of
+     * returning an empty or truncated result as if it were complete.
+     */
+    private static void rethrowIfContextRestart(Exception failure)
+    {
+        if (PlatformFailures.isContextRestartArtifact(failure))
+        {
+            if (failure instanceof RuntimeException runtime)
+            {
+                throw runtime;
+            }
+            throw new IllegalStateException(failure);
         }
     }
 
@@ -514,6 +540,7 @@ public class GetMethodCallHierarchyTool implements IMcpTool
             }
             catch (Exception e)
             {
+                rethrowIfContextRestart(e);
                 Activator.logWarning("Failed to load candidate module " + relToSrc //$NON-NLS-1$
                     + ": " + e.getMessage()); //$NON-NLS-1$
                 continue;
@@ -979,6 +1006,8 @@ public class GetMethodCallHierarchyTool implements IMcpTool
      */
     private String runTransitiveCallers(String projectName, String modulePath, RequestArgs request)
     {
+        // Taken before the root resolution so a restart retry of the root is charged to the budget.
+        final long callStartedNanos = System.nanoTime();
         try
         {
             ProjectContext ctx = ProjectContext.of(projectName);
@@ -989,15 +1018,25 @@ public class GetMethodCallHierarchyTool implements IMcpTool
 
             var readExecutor = transitiveExecutor(projectName);
             RootResolution root = new RootResolution();
-            readExecutor.accept(() -> resolveRoot(ctx.project(), modulePath, request.methodName, root));
-            if (root.error != null)
+            // Only the root resolution is retried on an EDT context restart (the same settle,
+            // pause and answer as every other read tool): it runs before the traversal budget
+            // starts, but its time (pause, settle, second attempt) is charged to the same 45 s budget
+            // through callStartedNanos. Null means resolved.
+            String rootFailure = ReadToolExecution.dispatchReadTool(projectName,
+                "Error resolving call-hierarchy root", //$NON-NLS-1$
+                () -> ReadToolExecution.readOnHost(projectName, NAME, () -> {
+                    resolveRoot(ctx.project(), modulePath, request.methodName, root);
+                    return root.error;
+                }),
+                e -> ToolResult.error(e.getMessage()).toJson());
+            if (rootFailure != null)
             {
-                return root.error;
+                return rootFailure;
             }
 
             TransitiveContext context =
                 new TransitiveContext(ctx.project(), projectName, root.resourceSet, readExecutor);
-            long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(TRANSITIVE_TIME_BUDGET_MS);
+            long deadline = transitiveDeadlineNanos(callStartedNanos);
             BooleanSupplier expired = () -> System.nanoTime() - deadline >= 0;
 
             CallerNode rootPayload = new CallerNode(modulePath, root.methodName, root.methodUri, 0);
@@ -1017,13 +1056,17 @@ public class GetMethodCallHierarchyTool implements IMcpTool
         catch (Exception e)
         {
             Refusals.log("Error finding transitive call hierarchy", e); //$NON-NLS-1$
+            if (PlatformFailures.isContextRestartArtifact(e))
+            {
+                return ReadToolExecution.restartingError(projectName, e);
+            }
             return ToolResult.error(e.getMessage()).toJson();
         }
     }
 
     /**
      * Resolves the method being asked about, on the UI thread. Writes either an error JSON or the
-     * root identity into {@code out}.
+     * root identity into {@code out}; an unexpected failure propagates to the caller.
      *
      * @param project the EDT project
      * @param modulePath the source-relative module path
@@ -1032,36 +1075,31 @@ public class GetMethodCallHierarchyTool implements IMcpTool
      */
     private void resolveRoot(IProject project, String modulePath, String methodName, RootResolution out)
     {
-        try
+        // No catch: a failure propagates to ReadToolExecution.dispatchReadTool (the caller), which
+        // logs it, retries the EDT context-restart one and maps every other one to an error JSON.
+        Module module = moduleLoader.apply(project, modulePath);
+        if (module == null)
         {
-            Module module = moduleLoader.apply(project, modulePath);
-            if (module == null)
-            {
-                out.error = moduleLoadFailure(modulePath);
-                return;
-            }
-            Method method = BslModuleUtils.findMethod(module, methodName);
-            if (method == null)
-            {
-                out.error = ToolResult.error(BslMethodRecovery.missingMethodForAnalysis(module, project, modulePath, methodName)).toJson();
-                return;
-            }
-            if (method.eResource() == null || method.eResource().getResourceSet() == null)
-            {
-                out.error = ToolResult.error("BSL resource set not available").toJson(); //$NON-NLS-1$
-                return;
-            }
-            out.methodUri = EcoreUtil.getURI(method);
-            // The DECLARED spelling, not the caller's: BSL names are case-insensitive, and the
-            // heading should show the method as its module writes it.
-            out.methodName = method.getName() != null ? method.getName() : methodName;
-            out.resourceSet = method.eResource().getResourceSet();
+            out.error = moduleLoadFailure(modulePath);
+            return;
         }
-        catch (Exception e)
+        Method method = BslModuleUtils.findMethod(module, methodName);
+        if (method == null)
         {
-            Refusals.log("Error resolving call-hierarchy root", e); //$NON-NLS-1$
-            out.error = ToolResult.error(e.getMessage()).toJson();
+            out.error = ToolResult.error(BslMethodRecovery
+                .missingMethodForAnalysis(module, project, modulePath, methodName)).toJson();
+            return;
         }
+        if (method.eResource() == null || method.eResource().getResourceSet() == null)
+        {
+            out.error = ToolResult.error("BSL resource set not available").toJson(); //$NON-NLS-1$
+            return;
+        }
+        out.methodUri = EcoreUtil.getURI(method);
+        // The DECLARED spelling, not the caller's: BSL names are case-insensitive, and the
+        // heading should show the method as its module writes it.
+        out.methodName = method.getName() != null ? method.getName() : methodName;
+        out.resourceSet = method.eResource().getResourceSet();
     }
 
     /** Holder for the UI-thread resolution of the method the walk starts from. */
@@ -1508,6 +1546,9 @@ public class GetMethodCallHierarchyTool implements IMcpTool
         }
         catch (Exception e)
         {
+            // An EDT context restart is not an unloadable module: let it reach the transitive
+            // handler, which answers the retryable "restarting" error instead of a partial graph.
+            rethrowIfContextRestart(e);
             Activator.logWarning("Failed to load candidate module " + relToSrc //$NON-NLS-1$
                 + ": " + e.getMessage()); //$NON-NLS-1$
             if (ctx.unloadable.add(relToSrc))
@@ -1649,6 +1690,24 @@ public class GetMethodCallHierarchyTool implements IMcpTool
      * @param result the finished traversal
      * @return the rendered Markdown
      */
+    /**
+     * The line for a transitive walk that reported no callers. A walk that did not complete (the
+     * time or node budget ran out, a level was cut short, or something could not be read - for
+     * example a budget consumed by a root retry while EDT restarted the project) must not read as
+     * the negative answer "no callers".
+     *
+     * @param complete whether the walk was complete through its depth
+     *            ({@link CallGraphTraversal.Result#isComplete()})
+     * @return the line to render, without a trailing newline
+     */
+    static String emptyTransitiveCallersLine(boolean complete)
+    {
+        return complete
+            ? "No callers found." //$NON-NLS-1$
+            : "No callers were found, but the search did not complete (see 'Complete through depth' above), " //$NON-NLS-1$
+                + "so this is NOT evidence that nothing calls this method - retry the call."; //$NON-NLS-1$
+    }
+
     private String formatTransitiveCallersOutput(String modulePath, String methodName,
         RequestArgs request, CallGraphTraversal.Result result)
     {
@@ -1691,7 +1750,7 @@ public class GetMethodCallHierarchyTool implements IMcpTool
 
         if (nodes.isEmpty())
         {
-            sb.append("No callers found.\n"); //$NON-NLS-1$
+            sb.append(emptyTransitiveCallersLine(result.isComplete())).append('\n');
             return sb.toString();
         }
 
@@ -2014,6 +2073,7 @@ public class GetMethodCallHierarchyTool implements IMcpTool
         }
         catch (Exception e)
         {
+            rethrowIfContextRestart(e);
             // Per-file parse failure must never abort the aggregation; log and continue with what
             // was collected so far (mirrors the candidate-scan resilience of findCallers).
             Activator.logWarning("Failed to walk module for outgoing calls " + modulePath //$NON-NLS-1$
