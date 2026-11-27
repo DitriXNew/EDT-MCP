@@ -907,4 +907,15 @@ public class GetMethodCallHierarchyToolTest
         assertEquals(GetMethodCallHierarchyTool.TRANSITIVE_TIME_BUDGET_MS - 12_000L,
             (deadline - afterRetry) / 1_000_000L);
     }
+
+    @Test
+    public void testEmptyTimedOutWalkIsNotReportedAsNoCallers()
+    {
+        String timedOut = GetMethodCallHierarchyTool.emptyTransitiveCallersLine(true);
+        assertFalse(timedOut, timedOut.startsWith("No callers found")); //$NON-NLS-1$
+        assertTrue(timedOut, timedOut.contains("did not complete")); //$NON-NLS-1$
+        assertTrue(timedOut, timedOut.contains("NOT evidence")); //$NON-NLS-1$
+
+        assertEquals("No callers found.", GetMethodCallHierarchyTool.emptyTransitiveCallersLine(false)); //$NON-NLS-1$
+    }
 }

@@ -1687,6 +1687,22 @@ public class GetMethodCallHierarchyTool implements IMcpTool
      * @param result the finished traversal
      * @return the rendered Markdown
      */
+    /**
+     * The line for a transitive walk that reported no callers. An expired time budget (for example
+     * one consumed by a root retry while EDT restarted the project) means the search did not
+     * complete, so an empty result must not read as the negative answer "no callers".
+     *
+     * @param timedOut whether the walk hit its time budget
+     * @return the line to render, without a trailing newline
+     */
+    static String emptyTransitiveCallersLine(boolean timedOut)
+    {
+        return timedOut
+            ? "No callers were found before the time limit ran out. The search did not complete, " //$NON-NLS-1$
+                + "so this is NOT evidence that nothing calls this method - retry the call." //$NON-NLS-1$
+            : "No callers found."; //$NON-NLS-1$
+    }
+
     private String formatTransitiveCallersOutput(String modulePath, String methodName,
         RequestArgs request, CallGraphTraversal.Result result)
     {
@@ -1729,7 +1745,7 @@ public class GetMethodCallHierarchyTool implements IMcpTool
 
         if (nodes.isEmpty())
         {
-            sb.append("No callers found.\n"); //$NON-NLS-1$
+            sb.append(emptyTransitiveCallersLine(result.isTimedOut())).append('\n');
             return sb.toString();
         }
 
