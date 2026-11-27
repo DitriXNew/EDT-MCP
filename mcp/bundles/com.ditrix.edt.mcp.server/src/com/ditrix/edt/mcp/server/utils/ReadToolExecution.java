@@ -105,12 +105,13 @@ public final class ReadToolExecution
     /**
      * As {@link #dispatchReadTool(String, String, Supplier, Function)}, for a read that can cross
      * into another project (an extension's adopted module is read from its base project): the
-     * restart artifact may come from that other project, so the settle waits for, and the retryable
-     * answer names, {@code settleProjectName} instead. The settle treats it as a base and includes
-     * its dependents, so passing the base project also covers the extension.
+     * restart artifact may come from that other project, so the settle waits for
+     * {@code settleProjectName} instead. The settle treats it as a base and includes its
+     * dependents, so passing the base project also covers the extension. The retryable answer
+     * still names {@code projectName}: the advice must target the project the caller asked about.
      *
      * @param projectName the project the read was requested for
-     * @param settleProjectName the project to settle and to name in the retryable answer
+     * @param settleProjectName the project to settle (its scope must cover {@code projectName})
      *            (falls back to {@code projectName} when {@code null} or empty)
      * @param logContext the {@link Refusals#log} context
      * @param read the read itself; it opens its own BM boundary
@@ -146,13 +147,17 @@ public final class ReadToolExecution
             settle, mayWait, pause, responseDelivered);
     }
 
-    /** Seam with a separate project to settle and name; see the public overload. */
+    /**
+     * Seam with a separate project to settle; see the public overload. The retryable answer
+     * always names the REQUESTED project: the settle scope may be wider (a base whose scope
+     * covers the extension), but the advice must target the project the caller asked about.
+     */
     static String dispatchReadTool(String requestedProject, String settleProjectName,
         String logContext, Supplier<String> read, Function<Exception, String> failureJson,
         Consumer<Runnable> host, BiFunction<String, Long, List<String>> settle,
         BooleanSupplier mayWait, LongPredicate pause, BooleanSupplier responseDelivered)
     {
-        String projectName = settleProjectName == null || settleProjectName.isEmpty()
+        String settleProject = settleProjectName == null || settleProjectName.isEmpty()
             ? requestedProject : settleProjectName;
         ReadAttempt first = attemptRead(logContext, read, failureJson, host, null);
         if (first.restartArtifact == null)
@@ -161,31 +166,31 @@ public final class ReadToolExecution
         }
         if (!mayWait.getAsBoolean())
         {
-            return restartingError(projectName, first.restartArtifact);
+            return restartingError(requestedProject, first.restartArtifact);
         }
         // Outside the host dispatch and any BM transaction, bounded: the retry gives EDT the
         // chance to finish wiring the restarted context. Pause first (the settle can return at
         // once), interruptibly; a caller that interrupted us gets the retryable error, no retry.
         if (!pause.test(RESTART_RETRY_PAUSE_MS))
         {
-            return restartingError(projectName, first.restartArtifact);
+            return restartingError(requestedProject, first.restartArtifact);
         }
-        settle.apply(projectName, RESTART_SETTLE_TIMEOUT_MS);
+        settle.apply(settleProject, RESTART_SETTLE_TIMEOUT_MS);
         // The wait took time: a caller that was cancelled or already answered meanwhile gets the
         // retryable error, not a second read.
         if (Thread.currentThread().isInterrupted() || responseDelivered.getAsBoolean())
         {
-            return restartingError(projectName, first.restartArtifact);
+            return restartingError(requestedProject, first.restartArtifact);
         }
         // The host may queue the runnable behind a busy UI thread, so the delivered check is
         // repeated inside it, right before the read (the captured probe works on any thread).
         ReadAttempt second = attemptRead(logContext, read, failureJson, host, responseDelivered);
         if (second.skipped)
         {
-            return restartingError(projectName, first.restartArtifact);
+            return restartingError(requestedProject, first.restartArtifact);
         }
         return second.restartArtifact == null
-            ? second.json : restartingError(projectName, second.restartArtifact);
+            ? second.json : restartingError(requestedProject, second.restartArtifact);
     }
 
     /** The retryable answer for a read that EDT failed while restarting the context. */

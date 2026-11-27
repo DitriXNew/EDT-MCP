@@ -482,7 +482,7 @@ public class ReadToolExecutionTest
         assertEquals(0, logged(org.eclipse.core.runtime.IStatus.ERROR));
     }
 
-    @Test public void retrySettlesAndNamesTheGivenSettleProject()
+    @Test public void retrySettlesTheGivenProjectButNamesTheRequestedOne()
     {
         Refusals.setSink(logged::add);
         java.util.List<String> settled = new java.util.ArrayList<>();
@@ -494,8 +494,8 @@ public class ReadToolExecutionTest
         }, () -> true, ms -> true, () -> false);
         assertEquals(java.util.List.of("Base"), settled);
         String error = errorText(result);
-        assertTrue(error, error.contains("'Base'"));
-        assertFalse(error, error.contains("Ext"));
+        assertTrue(error, error.contains("'Ext'"));
+        assertFalse(error, error.contains("Base"));
     }
 
     @Test public void emptySettleProjectFallsBackToTheRequestedProject()
