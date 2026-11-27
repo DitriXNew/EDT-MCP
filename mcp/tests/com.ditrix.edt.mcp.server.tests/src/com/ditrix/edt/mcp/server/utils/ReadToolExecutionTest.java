@@ -545,6 +545,40 @@ public class ReadToolExecutionTest
         assertTrue(errorText(result), errorText(result).contains("list_projects"));
     }
 
+    @Test public void responseDeliveredWhileSecondReadWaitsInTheUiQueueSkipsTheRead()
+    {
+        Refusals.setSink(logged::add);
+        int[] attempts = {0};
+        int[] hostRuns = {0};
+        boolean[] delivered = {false};
+        String result = ReadToolExecution.dispatchReadTool("Proj", "Error test", () -> {
+            attempts[0]++;
+            throw restartNpe();
+        }, e -> "mapped", work -> {
+            // The second runnable waits in the UI queue; the response is delivered meanwhile.
+            if (++hostRuns[0] == 2) { delivered[0] = true; }
+            work.run();
+        }, (name, budget) -> java.util.List.of(), () -> true, ms -> true, () -> delivered[0]);
+        assertEquals(2, hostRuns[0]);
+        assertEquals(1, attempts[0]);
+        String error = errorText(result);
+        assertTrue(error, error.contains("list_projects"));
+        assertTrue(error, error.contains("Proj"));
+    }
+
+    @Test public void secondReadRunsWhenNothingWasDeliveredInTheUiQueue()
+    {
+        Refusals.setSink(logged::add);
+        int[] attempts = {0};
+        String result = ReadToolExecution.dispatchReadTool("Proj", "Error test", () -> {
+            if (++attempts[0] == 1) { throw restartNpe(); }
+            return "ok";
+        }, e -> "mapped", Runnable::run, (name, budget) -> java.util.List.of(),
+            () -> true, ms -> true, () -> false);
+        assertEquals("ok", result);
+        assertEquals(2, attempts[0]);
+    }
+
     @Test public void interruptDuringSettleSkipsTheSecondReadAndKeepsFlag()
     {
         Refusals.setSink(logged::add);

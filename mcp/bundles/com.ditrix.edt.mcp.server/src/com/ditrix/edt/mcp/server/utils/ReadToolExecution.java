@@ -99,12 +99,15 @@ public final class ReadToolExecution
     public static String dispatchReadTool(String projectName, String logContext,
         Supplier<String> read, Function<Exception, String> failureJson)
     {
+        // Captured here, on the executor thread: the probe must stay valid inside the runnable
+        // that the UI thread runs later, where the thread-local lookup finds no call.
+        BooleanSupplier responseDelivered = ExecutingToolCall.capture();
         return dispatchReadTool(projectName, logContext, read, failureJson,
             work -> dispatch(work),
             (name, budgetMs) -> ProjectStateChecker.awaitSearchScopeReady(name, budgetMs)
                 .getNotReadyProjectNames(),
             () -> HostKind.current() == HostKind.HEADLESS || Windowed.notOnUiThread(),
-            InterruptiblePause::pause, ExecutingToolCall::isResponseDelivered);
+            InterruptiblePause::pause, responseDelivered);
     }
 
     /**
@@ -118,7 +121,7 @@ public final class ReadToolExecution
         BiFunction<String, Long, List<String>> settle, BooleanSupplier mayWait,
         LongPredicate pause, BooleanSupplier responseDelivered)
     {
-        ReadAttempt first = attemptRead(logContext, read, failureJson, host);
+        ReadAttempt first = attemptRead(logContext, read, failureJson, host, null);
         if (first.restartArtifact == null)
         {
             return first.json;
@@ -141,7 +144,13 @@ public final class ReadToolExecution
         {
             return restartingError(projectName, first.restartArtifact);
         }
-        ReadAttempt second = attemptRead(logContext, read, failureJson, host);
+        // The host may queue the runnable behind a busy UI thread, so the delivered check is
+        // repeated inside it, right before the read (the captured probe works on any thread).
+        ReadAttempt second = attemptRead(logContext, read, failureJson, host, responseDelivered);
+        if (second.skipped)
+        {
+            return restartingError(projectName, first.restartArtifact);
+        }
         return second.restartArtifact == null
             ? second.json : restartingError(projectName, second.restartArtifact);
     }
@@ -161,13 +170,22 @@ public final class ReadToolExecution
     {
         volatile String json;
         volatile Exception restartArtifact;
+        volatile boolean skipped;
     }
 
     private static ReadAttempt attemptRead(String logContext, Supplier<String> read,
-        Function<Exception, String> failureJson, Consumer<Runnable> host)
+        Function<Exception, String> failureJson, Consumer<Runnable> host,
+        BooleanSupplier skipWhen)
     {
         ReadAttempt attempt = new ReadAttempt();
         host.accept(() -> {
+            // Only the probe is consulted here: this may be the UI thread, whose interrupt
+            // flag is not the caller's.
+            if (skipWhen != null && skipWhen.getAsBoolean())
+            {
+                attempt.skipped = true;
+                return;
+            }
             try
             {
                 attempt.json = read.get();
