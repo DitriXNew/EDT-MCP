@@ -20,6 +20,7 @@ import java.util.Map;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.eclipse.core.resources.IProject;
 import org.junit.Test;
@@ -45,7 +46,7 @@ public class SetBreakpointToolTest
         when(project.getName()).thenReturn("Extension"); //$NON-NLS-1$
         AtomicInteger probes = new AtomicInteger();
         SetBreakpointTool.awaitBreakpointProject(project, () -> probes.incrementAndGet() == 2,
-            TimeUnit.SECONDS.toNanos(5));
+            () -> false, TimeUnit.SECONDS.toNanos(5));
         assertEquals(2, probes.get());
     }
 
@@ -56,8 +57,60 @@ public class SetBreakpointToolTest
         when(project.isAccessible()).thenReturn(true);
         when(project.getName()).thenReturn("Extension"); //$NON-NLS-1$
         IllegalStateException failure = assertThrows(IllegalStateException.class,
-            () -> SetBreakpointTool.awaitBreakpointProject(project, () -> false, 0));
+            () -> SetBreakpointTool.awaitBreakpointProject(project, () -> false, () -> false, 0));
         assertTrue(failure.getMessage().contains("Extension")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void retriesTransientReadinessProbeFailure() throws Exception
+    {
+        IProject project = mock(IProject.class);
+        when(project.isAccessible()).thenReturn(true);
+        AtomicInteger probes = new AtomicInteger();
+        SetBreakpointTool.awaitBreakpointProject(project, () ->
+        {
+            if (probes.incrementAndGet() == 1)
+            {
+                throw new IllegalStateException("Starting project"); //$NON-NLS-1$
+            }
+            return true;
+        }, () -> false, TimeUnit.SECONDS.toNanos(5));
+        assertEquals(2, probes.get());
+    }
+
+    @Test
+    public void stopsWhenResponseIsDeliveredDuringTheReadinessProbe()
+    {
+        IProject project = mock(IProject.class);
+        when(project.isAccessible()).thenReturn(true);
+        AtomicBoolean delivered = new AtomicBoolean();
+        assertThrows(InterruptedException.class,
+            () -> SetBreakpointTool.awaitBreakpointProject(project, () ->
+            {
+                delivered.set(true);
+                return true;
+            }, delivered::get, TimeUnit.SECONDS.toNanos(5)));
+    }
+
+    @Test
+    public void stopsBeforeProbingWhenAlreadyInterrupted()
+    {
+        IProject project = mock(IProject.class);
+        when(project.isAccessible()).thenReturn(true);
+        Thread.currentThread().interrupt();
+        try
+        {
+            assertThrows(InterruptedException.class,
+                () -> SetBreakpointTool.awaitBreakpointProject(project, () ->
+                {
+                    throw new AssertionError("Readiness must not be probed after interruption"); //$NON-NLS-1$
+                }, () -> false, TimeUnit.SECONDS.toNanos(5)));
+            assertTrue(Thread.currentThread().isInterrupted());
+        }
+        finally
+        {
+            Thread.interrupted();
+        }
     }
 
     @Test

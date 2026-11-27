@@ -27,6 +27,7 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.BreakpointUtils;
 import com.ditrix.edt.mcp.server.utils.BmModelResolver;
+import com.ditrix.edt.mcp.server.utils.ExecutingToolCall;
 import com.ditrix.edt.mcp.server.utils.Refusals;
 
 /**
@@ -198,11 +199,14 @@ public class SetBreakpointTool implements IMcpTool
         List<Long> reconciledIds = new ArrayList<>();
         try
         {
-            awaitBreakpointProject(target.file.getProject());
+            IProject project = target.file.getProject();
+            BooleanSupplier responseDelivered = ExecutingToolCall.capture();
+            awaitBreakpointProject(project, responseDelivered);
             // ALL of them, not the first: an upgraded workspace can hold duplicates at one line,
             // because an earlier build created a new marker on every call. Configuring one and
             // leaving its twin unconditional would defeat the very condition just requested.
             List<IBreakpoint> existing = BreakpointUtils.findLineBreakpoints(target.file, lineNumber);
+            requireActiveCall(project, responseDelivered);
             boolean created = existing.isEmpty();
             String action = created ? "created" : "updated"; //$NON-NLS-1$ //$NON-NLS-2$
             if (created)
@@ -530,24 +534,40 @@ public class SetBreakpointTool implements IMcpTool
      * The resource may already be visible while that project's context is still starting.
      * Wait before mutating the workspace so EDT can finish registering the model.
      */
-    private static void awaitBreakpointProject(IProject project) throws InterruptedException
+    private static void awaitBreakpointProject(IProject project, BooleanSupplier responseDelivered)
+        throws InterruptedException
     {
         awaitBreakpointProject(project, () -> {
             IWorkspaceOrchestrator workspace = Activator.getDefault().getWorkspaceOrchestrator();
             return workspace != null && workspace.isStarted(project)
                 && BmModelResolver.resolve(project).isAvailable();
-        }, TimeUnit.SECONDS.toNanos(PROJECT_READY_TIMEOUT_SECONDS));
+        }, responseDelivered, TimeUnit.SECONDS.toNanos(PROJECT_READY_TIMEOUT_SECONDS));
     }
 
-    static void awaitBreakpointProject(IProject project, BooleanSupplier ready, long timeoutNanos)
+    static void awaitBreakpointProject(IProject project, BooleanSupplier ready,
+        BooleanSupplier responseDelivered, long timeoutNanos)
         throws InterruptedException
     {
         long deadline = System.nanoTime() + timeoutNanos;
         boolean waiting = false;
+        RuntimeException lastProbeFailure = null;
         while (project.isAccessible())
         {
-            if (ready.getAsBoolean())
+            requireActiveCall(project, responseDelivered);
+            boolean modelReady = false;
+            try
             {
+                modelReady = ready.getAsBoolean();
+                lastProbeFailure = null;
+            }
+            catch (RuntimeException e)
+            {
+                // EDT can throw while the context is being initialized. Retry on the next poll.
+                lastProbeFailure = e;
+            }
+            if (modelReady)
+            {
+                requireActiveCall(project, responseDelivered);
                 return;
             }
             long remaining = deadline - System.nanoTime();
@@ -567,12 +587,23 @@ public class SetBreakpointTool implements IMcpTool
             catch (InterruptedException e)
             {
                 Thread.currentThread().interrupt();
-                throw new InterruptedException("Interrupted while waiting for breakpoint project " //$NON-NLS-1$
-                    + project.getName());
+                throw e;
             }
         }
+        requireActiveCall(project, responseDelivered);
         throw new IllegalStateException("EDT breakpoint project is not ready: " + project.getName() //$NON-NLS-1$
-            + ". Its context and BM model must be available before registering a breakpoint."); //$NON-NLS-1$
+            + ". Its context and BM model must be available before registering a breakpoint.", //$NON-NLS-1$
+            lastProbeFailure);
+    }
+
+    private static void requireActiveCall(IProject project, BooleanSupplier responseDelivered)
+        throws InterruptedException
+    {
+        if (Thread.currentThread().isInterrupted() || responseDelivered.getAsBoolean())
+        {
+            throw new InterruptedException("Breakpoint request interrupted for project " //$NON-NLS-1$
+                + project.getName());
+        }
     }
 
     /**
