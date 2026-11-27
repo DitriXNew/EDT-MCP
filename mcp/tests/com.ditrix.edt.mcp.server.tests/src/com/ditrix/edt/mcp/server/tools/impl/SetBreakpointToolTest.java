@@ -10,12 +10,18 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertThrows;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import java.util.HashMap;
 import java.util.Map;
 
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import org.eclipse.core.resources.IProject;
 import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
@@ -31,6 +37,29 @@ import com.ditrix.edt.mcp.server.utils.BreakpointUtils;
  */
 public class SetBreakpointToolTest
 {
+    @Test
+    public void waitsForTheResolvedProjectsModel() throws Exception
+    {
+        IProject project = mock(IProject.class);
+        when(project.isAccessible()).thenReturn(true);
+        when(project.getName()).thenReturn("Extension"); //$NON-NLS-1$
+        AtomicInteger probes = new AtomicInteger();
+        SetBreakpointTool.awaitBreakpointProject(project, () -> probes.incrementAndGet() == 2,
+            TimeUnit.SECONDS.toNanos(5));
+        assertEquals(2, probes.get());
+    }
+
+    @Test
+    public void missingModelFailsBeforeContinuingToBreakpointRegistration()
+    {
+        IProject project = mock(IProject.class);
+        when(project.isAccessible()).thenReturn(true);
+        when(project.getName()).thenReturn("Extension"); //$NON-NLS-1$
+        IllegalStateException failure = assertThrows(IllegalStateException.class,
+            () -> SetBreakpointTool.awaitBreakpointProject(project, () -> false, 0));
+        assertTrue(failure.getMessage().contains("Extension")); //$NON-NLS-1$
+    }
+
     @Test
     public void testName()
     {

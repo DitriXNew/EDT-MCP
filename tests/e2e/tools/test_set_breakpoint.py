@@ -39,8 +39,7 @@ Real execute() error paths (SetBreakpointTool.java, all via ToolResult.error):
   - lineNumber < 1 (incl. omitted=-1)    -> "lineNumber must be >= 1"
   - module-relative path but no project  -> "projectName is required when
                                             modulePath is given as an EDT module path"
-  - project BUILDING (module-rel only)   -> ProjectStateChecker.buildingErrorOrNull:
-                                            "...building... Please wait and retry."
+  - module project not ready          -> wait for its context and model before mutation.
                                             (transient state ONLY; a missing/closed
                                             project falls THROUGH to the not-found branch)
   - file does not resolve/exist          -> "Module file not found: <module>
@@ -60,6 +59,8 @@ not accumulate breakpoints across runs and the list_breakpoints read-back stays
 deterministic. assert_no_diff() still proves the project source was untouched.
 """
 
+from pathlib import Path
+
 from harness import (
     call,
     assert_ok,
@@ -70,6 +71,7 @@ from harness import (
     assert_no_diff,
     e2e_test,
     PROJECT,
+    PROJECT_DIR,
 )
 
 CALC_MODULE = "CommonModules/Calc/Module.bsl"
@@ -352,11 +354,7 @@ def test_module_relative_path_without_project_errors_actionably():
 
 @e2e_test(tool="set_breakpoint", kind="read")
 def test_nonexistent_project_errors():
-    """A module-relative path with a project that does not exist. The readiness
-    check now refuses ONLY the transient BUILDING state
-    (ProjectStateChecker.buildingErrorOrNull), so a non-existent project falls
-    THROUGH it to file resolution, which cannot resolve the module under a
-    non-existent project -> "Module file not found: <module> in project
+    """A module-relative path with a project that does not exist. File resolution precedes the context wait, so a missing project -> "Module file not found: <module> in project
     <projectName>". The bad project name IS echoed, so the error names the value.
     """
     bad = "NoSuchProject_ZZZ_e2e"
@@ -405,3 +403,22 @@ def test_nonexistent_absolute_path_errors_and_names_value():
     assert_error_quality(e, names=[bad_abs], suggests=[],
                          ctx="absolute-path not-found names the bad path")
     assert_no_diff("an invalid call must not touch the project on disk")
+
+
+@e2e_test(tool="set_breakpoint", kind="read")
+def test_absolute_module_path_resolves_project_without_explicit_name():
+    """The file's owning project is used when the caller supplies an absolute path."""
+    _require_free_probe()
+    module = (Path(PROJECT_DIR) / "src" / CALC_MODULE).resolve()
+    result = call("set_breakpoint", {"modulePath": str(module), "lineNumber": CALC_LINE})
+    assert_ok(result, "set_breakpoint with an absolute module path")
+    marker_id = result.structured["breakpointId"]
+    try:
+        listed = call("list_breakpoints", {"projectName": PROJECT})
+        assert_ok(listed, "read back the absolute-path breakpoint")
+        assert any(bp.get("breakpointId") == marker_id and bp.get("lineNumber") == CALC_LINE
+                   for bp in listed.structured["breakpoints"])
+    finally:
+        removed = call("remove_breakpoint", {"breakpointId": marker_id})
+        assert_ok(removed, "remove the absolute-path breakpoint")
+    assert_no_diff("An absolute-path breakpoint must not modify project sources")
