@@ -127,6 +127,11 @@ def test_import_round_trip_leaves_a_project_edt_has_started():
     _ensure_absent(_ROUND_TRIP_PROJECT)
     dump_dir = tempfile.mkdtemp(prefix="edt_import_e2e_")
     try:
+        # This test is about the IMPORT. The previous test may leave EDT recomputing derived data
+        # (a clean or a model reset), and an export started in that window is the #1058 race. The
+        # export race itself is pinned by test_export_configuration_to_xml.py, so settle here
+        # instead of letting an unrelated export failure masquerade as an import failure.
+        settle_or_fail("the export of the fixture for the import round trip")
         ex = call("export_configuration_to_xml",
                   {"projectName": PROJECT, "outputPath": dump_dir})
         assert_ok(ex, "export the fixture configuration to XML")

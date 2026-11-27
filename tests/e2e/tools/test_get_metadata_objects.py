@@ -35,7 +35,7 @@ Fixture inventory used (TestConfiguration, English Names):
 from harness import (
     call, assert_ok, assert_error, assert_error_quality,
     assert_contains, assert_not_contains, assert_no_diff, e2e_test, PROJECT,
-    wait_for_project_ready,
+    wait_for_project_ready, settle_or_fail,
 )
 
 
@@ -272,3 +272,34 @@ def test_windowed_formatter_contract():
     from read_host_contracts import contract_get_metadata_objects
     contract_get_metadata_objects(call, "WINDOWED")
     assert_no_diff("pinned formatter reads must not change fixture files")
+
+
+@e2e_test(tool="get_metadata_objects", kind="action")
+def test_listing_right_after_clean_project_lists_or_says_restarting():
+    """clean_project, then IMMEDIATELY list the configuration (#1058).
+
+    The clean restarts the project context; a read landing in that window used to die with a
+    bare NullPointerException from Xtext's CurrentDescriptions (logged at ERROR). The tool must
+    either wait and retry internally and return the real listing, or answer a retryable
+    "project is restarting" error that names the project and says to retry.
+
+    Anti-cheat: the success branch must carry fixture rows (a response that is empty or lost the
+    objects fails); the error branch must name the project and say retry and must NOT be the
+    leaked NullPointerException / "Unknown error" (the pre-fix answer). A tool that fails the
+    race either way fails one of the two branches.
+    """
+    cleaned = call("clean_project", {"projectName": PROJECT})
+    assert_ok(cleaned, "clean before the immediate listing")
+    r = call("get_metadata_objects", {"projectName": PROJECT, "limit": 1000})
+    if r.is_error:
+        err = r.error_text()
+        assert_error_quality(err, names=[PROJECT], suggests=["retry"],
+                             ctx="a read that hit the restart must say the project is restarting")
+        assert_not_contains(err, "NullPointerException", "no leaked NPE")
+        assert_not_contains(err, "Unknown error", "no opaque failure")
+    else:
+        assert_contains(r.text, "CommonModule",
+                        "the listing right after a clean must still carry the fixture modules")
+        assert_contains(r.text, "HTTPService", "the listing must carry the fixture HTTPService")
+    assert_no_diff("a read tool must not touch the project on disk")
+    settle_or_fail("leaving the project ready for the next test")

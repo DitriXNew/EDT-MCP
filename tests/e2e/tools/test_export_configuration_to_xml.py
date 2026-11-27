@@ -78,6 +78,7 @@ from harness import (
     assert_error_quality,
     assert_contains,
     assert_no_diff,
+    settle_or_fail,
     e2e_test,
     PROJECT,
 )
@@ -208,6 +209,54 @@ def test_export_to_temp_dir_succeeds_or_clear_api_sentinel():
         # The temp dir is outside the repo; removing it has no effect on the git
         # fixture. Cleanup keeps the OS temp area tidy across the serial run.
         shutil.rmtree(out_dir, ignore_errors=True)
+
+
+@e2e_test(tool="export_configuration_to_xml", kind="action")
+def test_export_right_after_clean_project_writes_a_root():
+    """clean_project, then IMMEDIATELY export to a FRESH directory (#1058).
+
+    clean_project restarts the project context, and EDT's export CLI can return normally in that
+    window without writing anything (it cancels on an interrupted thread and only logs the
+    status). The tool must either wait/retry until the dump exists or answer an honest error -
+    never report success over an empty directory. The directory is fresh, so a Configuration.xml
+    that is a regular file containing the root element AND the fixture catalog's own file can
+    only come from THIS export (a pre-existing root cannot satisfy it).
+
+    Anti-cheat: a tool that returns success without writing (the pre-fix behaviour, or one that
+    ignores a cancelled attempt) fails the on-disk asserts; a tool that answers the race with an
+    error fails assert_ok. API absent -> the documented not-installed sentinel branch (the race
+    cannot exist without the API).
+    """
+    cleaned = call("clean_project", {"projectName": PROJECT})
+    assert_ok(cleaned, "clean before the immediate export")
+    out_dir = tempfile.mkdtemp(prefix="edt_export_e2e_clean_")
+    try:
+        # No settle between the clean and the export: the immediate call IS the scenario.
+        r = call("export_configuration_to_xml", {"projectName": PROJECT, "outputPath": out_dir})
+        if r.is_error:
+            err = r.error_text()
+            assert_contains(err, _API_ABSENT_MARKER,
+                            "the only acceptable error right after a clean is the not-installed "
+                            "API sentinel; a restart race must be absorbed by the tool")
+            assert not _has_xml_output(out_dir), \
+                "API-absent sentinel must not have written any XML files"
+        else:
+            assert_ok(r, "export right after clean_project")
+            assert_contains(r.text, "status: success", "FrontMatter must report success")
+            root_xml = os.path.join(out_dir, "Configuration.xml")
+            assert os.path.isfile(root_xml), \
+                "success right after clean_project, but no Configuration.xml under outputPath"
+            with open(root_xml, encoding="utf-8-sig", errors="replace") as fh:
+                root_text = fh.read()
+            assert "<Configuration" in root_text, \
+                "Configuration.xml must hold the root element, got: " + root_text[:200]
+            catalog_xml = os.path.join(out_dir, "Catalogs", "Catalog.xml")
+            assert os.path.isfile(catalog_xml), \
+                "the dump must contain the fixture catalog's own file (Catalogs/Catalog.xml)"
+        assert_no_diff("export writes to an external dir, never into TestConfiguration")
+    finally:
+        shutil.rmtree(out_dir, ignore_errors=True)
+    settle_or_fail("leaving the project ready for the next test")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
