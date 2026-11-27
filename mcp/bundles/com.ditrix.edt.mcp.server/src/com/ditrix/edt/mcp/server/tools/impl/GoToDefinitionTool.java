@@ -31,6 +31,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.ExtensionOriginUtils;
 import com.ditrix.edt.mcp.server.utils.FrontMatter;
 import com.ditrix.edt.mcp.server.utils.InterceptionUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
@@ -170,10 +171,35 @@ public class GoToDefinitionTool implements IMcpTool
 
         // Execute on the host (UI thread when windowed; required for EDT API access). An EDT
         // context-restart failure is retried once by dispatchReadTool.
-        return ReadToolExecution.dispatchReadTool(projectName, "Error resolving definition", //$NON-NLS-1$
+        return ReadToolExecution.dispatchReadTool(projectName, settleProjectName(projectName),
+            "Error resolving definition", //$NON-NLS-1$
             () -> ReadToolExecution.readOnHost(projectName, NAME,
                 () -> resolveDefinition(projectName, symbol, modulePath, includeSource)),
             e -> ToolResult.error(e.getMessage()).toJson());
+    }
+
+    /**
+     * The project a restart retry must settle and name. An extension's adopted module is read from
+     * its base project, so the restart artifact can come from the base, whose search scope (the base
+     * plus its dependents) also covers the extension. Any other project settles as itself.
+     *
+     * @param projectName the requested project
+     * @return the base project's name for a dependent project with a wired base, else
+     *         {@code projectName}
+     */
+    static String settleProjectName(String projectName)
+    {
+        if (projectName == null || projectName.isEmpty())
+        {
+            return projectName;
+        }
+        ProjectContext ctx = ProjectContext.of(projectName);
+        if (!ctx.exists())
+        {
+            return projectName;
+        }
+        IProject base = ExtensionOriginUtils.resolveBaseProject(ctx.project());
+        return base == null ? projectName : base.getName();
     }
 
     // ========== Main resolution logic ==========

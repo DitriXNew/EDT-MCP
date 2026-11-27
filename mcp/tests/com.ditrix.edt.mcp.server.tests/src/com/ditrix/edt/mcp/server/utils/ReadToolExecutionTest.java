@@ -482,6 +482,38 @@ public class ReadToolExecutionTest
         assertEquals(0, logged(org.eclipse.core.runtime.IStatus.ERROR));
     }
 
+    @Test public void retrySettlesAndNamesTheGivenSettleProject()
+    {
+        Refusals.setSink(logged::add);
+        java.util.List<String> settled = new java.util.ArrayList<>();
+        String result = ReadToolExecution.dispatchReadTool("Ext", "Base", "Error test", () -> {
+            throw restartNpe();
+        }, e -> "mapped", Runnable::run, (name, budget) -> {
+            settled.add(name);
+            return java.util.List.of();
+        }, () -> true, ms -> true, () -> false);
+        assertEquals(java.util.List.of("Base"), settled);
+        String error = errorText(result);
+        assertTrue(error, error.contains("'Base'"));
+        assertFalse(error, error.contains("Ext"));
+    }
+
+    @Test public void emptySettleProjectFallsBackToTheRequestedProject()
+    {
+        Refusals.setSink(logged::add);
+        java.util.List<String> settled = new java.util.ArrayList<>();
+        int[] attempts = {0};
+        String result = ReadToolExecution.dispatchReadTool("Ext", null, "Error test", () -> {
+            if (++attempts[0] == 1) { throw restartNpe(); }
+            return "ok";
+        }, e -> "mapped", Runnable::run, (name, budget) -> {
+            settled.add(name);
+            return java.util.List.of();
+        }, () -> true, ms -> true, () -> false);
+        assertEquals("ok", result);
+        assertEquals(java.util.List.of("Ext"), settled);
+    }
+
     @Test public void interruptedPauseSkipsTheRetry()
     {
         Refusals.setSink(logged::add);

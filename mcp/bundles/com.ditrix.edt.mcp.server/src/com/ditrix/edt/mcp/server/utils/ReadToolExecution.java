@@ -99,10 +99,31 @@ public final class ReadToolExecution
     public static String dispatchReadTool(String projectName, String logContext,
         Supplier<String> read, Function<Exception, String> failureJson)
     {
+        return dispatchReadTool(projectName, projectName, logContext, read, failureJson);
+    }
+
+    /**
+     * As {@link #dispatchReadTool(String, String, Supplier, Function)}, for a read that can cross
+     * into another project (an extension's adopted module is read from its base project): the
+     * restart artifact may come from that other project, so the settle waits for, and the retryable
+     * answer names, {@code settleProjectName} instead. The settle treats it as a base and includes
+     * its dependents, so passing the base project also covers the extension.
+     *
+     * @param projectName the project the read was requested for
+     * @param settleProjectName the project to settle and to name in the retryable answer
+     *            (falls back to {@code projectName} when {@code null} or empty)
+     * @param logContext the {@link Refusals#log} context
+     * @param read the read itself; it opens its own BM boundary
+     * @param failureJson maps any other failure to the tool's error JSON
+     * @return the read's JSON, or the mapped error
+     */
+    public static String dispatchReadTool(String projectName, String settleProjectName,
+        String logContext, Supplier<String> read, Function<Exception, String> failureJson)
+    {
         // Captured here, on the executor thread: the probe must stay valid inside the runnable
         // that the UI thread runs later, where the thread-local lookup finds no call.
         BooleanSupplier responseDelivered = ExecutingToolCall.capture();
-        return dispatchReadTool(projectName, logContext, read, failureJson,
+        return dispatchReadTool(projectName, settleProjectName, logContext, read, failureJson,
             work -> dispatch(work),
             (name, budgetMs) -> ProjectStateChecker.awaitSearchScopeReady(name, budgetMs)
                 .getNotReadyProjectNames(),
@@ -121,6 +142,18 @@ public final class ReadToolExecution
         BiFunction<String, Long, List<String>> settle, BooleanSupplier mayWait,
         LongPredicate pause, BooleanSupplier responseDelivered)
     {
+        return dispatchReadTool(projectName, projectName, logContext, read, failureJson, host,
+            settle, mayWait, pause, responseDelivered);
+    }
+
+    /** Seam with a separate project to settle and name; see the public overload. */
+    static String dispatchReadTool(String requestedProject, String settleProjectName,
+        String logContext, Supplier<String> read, Function<Exception, String> failureJson,
+        Consumer<Runnable> host, BiFunction<String, Long, List<String>> settle,
+        BooleanSupplier mayWait, LongPredicate pause, BooleanSupplier responseDelivered)
+    {
+        String projectName = settleProjectName == null || settleProjectName.isEmpty()
+            ? requestedProject : settleProjectName;
         ReadAttempt first = attemptRead(logContext, read, failureJson, host, null);
         if (first.restartArtifact == null)
         {

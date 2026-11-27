@@ -228,6 +228,15 @@ public class GoToDefinitionToolTest
         assertTrue(message, message.contains("MissingModule.MissingMethod"));
         assertTrue(message, message.contains("modulePath"));
     }
+
+    @Test
+    public void testSettleProjectNameKeepsAnEmptyName()
+    {
+        // The extension -> base mapping needs a live workspace (e2e); the null/empty guard does not.
+        assertEquals("", GoToDefinitionTool.settleProjectName("")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(null, GoToDefinitionTool.settleProjectName(null));
+    }
+
     // ==================== Tool metadata ====================
 
     @Test
