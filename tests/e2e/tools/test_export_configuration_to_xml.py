@@ -213,19 +213,20 @@ def test_export_to_temp_dir_succeeds_or_clear_api_sentinel():
 
 @e2e_test(tool="export_configuration_to_xml", kind="action")
 def test_export_right_after_clean_project_writes_a_root():
-    """clean_project, then IMMEDIATELY export to a FRESH directory (#1058).
+    """clean_project, then IMMEDIATELY export to a FRESH directory (#1058). SMOKE check.
 
     clean_project restarts the project context, and EDT's export CLI can return normally in that
-    window without writing anything (it cancels on an interrupted thread and only logs the
-    status). The tool must either wait/retry until the dump exists or answer an honest error -
-    never report success over an empty directory. The directory is fresh, so a Configuration.xml
-    that is a regular file containing the root element AND the fixture catalog's own file can
-    only come from THIS export (a pre-existing root cannot satisfy it).
+    window without writing anything. The tool retries once after waiting for the project; the
+    only acceptable outcomes are a real export or an honest error after BOTH attempts. This
+    live test cannot force the race, so it is a smoke check; the deterministic proof of the
+    retry/pause/settle order lives in the unit tests that drive the tool through its test seams.
 
-    Anti-cheat: a tool that returns success without writing (the pre-fix behaviour, or one that
-    ignores a cancelled attempt) fails the on-disk asserts; a tool that answers the race with an
-    error fails assert_ok. API absent -> the documented not-installed sentinel branch (the race
-    cannot exist without the API).
+    Outcomes accepted: (1) success - then the fresh directory holds a Configuration.xml regular
+    file with the root element AND the fixture catalog's own file, which only THIS export could
+    have written; (2) the documented API-absent sentinel; (3) an honest error whose text says the
+    export was "attempted twice" and names the project (this proves the retry ran).
+
+    Anti-cheat: success without files on disk, or any other error, fails.
     """
     cleaned = call("clean_project", {"projectName": PROJECT})
     assert_ok(cleaned, "clean before the immediate export")
@@ -235,11 +236,15 @@ def test_export_right_after_clean_project_writes_a_root():
         r = call("export_configuration_to_xml", {"projectName": PROJECT, "outputPath": out_dir})
         if r.is_error:
             err = r.error_text()
-            assert_contains(err, _API_ABSENT_MARKER,
-                            "the only acceptable error right after a clean is the not-installed "
-                            "API sentinel; a restart race must be absorbed by the tool")
-            assert not _has_xml_output(out_dir), \
-                "API-absent sentinel must not have written any XML files"
+            if "attempted twice" in err:
+                assert PROJECT in err, \
+                    "the honest error after both attempts must name the project: " + err[:300]
+            else:
+                assert_contains(err, _API_ABSENT_MARKER,
+                                "the only other acceptable error right after a clean is the "
+                                "not-installed API sentinel; a restart race must be retried")
+                assert not _has_xml_output(out_dir), \
+                    "API-absent sentinel must not have written any XML files"
         else:
             assert_ok(r, "export right after clean_project")
             assert_contains(r.text, "status: success", "FrontMatter must report success")

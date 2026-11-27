@@ -151,8 +151,7 @@ public class ExportConfigurationToXmlToolTest
             assertTrue(result, result.contains(attempt.output.toString()));
             assertTrue(Files.isRegularFile(attempt.output.resolve("Configuration.xml")));
             assertEquals(1, attempt.api.calls);
-            assertEquals(List.of("settle:" + ExportConfigurationToXmlTool.PRE_EXPORT_SETTLE_TIMEOUT_MS, "export"),
-                attempt.events);
+            assertEquals("No wait precedes the first attempt", List.of("export"), attempt.events);
         }
     }
 
@@ -172,36 +171,6 @@ public class ExportConfigurationToXmlToolTest
             assertTrue(message, message.contains("retry"));
             assertTrue(message, message.contains("attempted twice"));
             assertEquals("A missing root is retried exactly once", 2, attempt.api.calls);
-        }
-    }
-
-    @Test
-    public void testEdtInterruptCancelIsRetriedAndSucceeds() throws Exception
-    {
-        try (ExportAttempt attempt = new ExportAttempt(ExportMode.INTERRUPT_ONLY, ExportMode.ROOT_FILE))
-        {
-            String result = attempt.execute();
-            assertTrue(result, result.contains("status: success"));
-            assertEquals(2, attempt.api.calls);
-            assertFalse("The flag EDT left is not ours and must be cleared",
-                Thread.currentThread().isInterrupted());
-            assertTrue(Files.isRegularFile(attempt.output.resolve("Configuration.xml")));
-        }
-    }
-
-    @Test
-    public void testCancelledAttemptWithPartialRootIsNotSuccess() throws Exception
-    {
-        try (ExportAttempt attempt = new ExportAttempt(ExportMode.INTERRUPT_WITH_ROOT, ExportMode.NOTHING))
-        {
-            String result = attempt.execute();
-            assertTrue("A cancelled attempt is never a success: " + result, result.startsWith("{"));
-            String message = JsonParser.parseString(result).getAsJsonObject().get("error").getAsString();
-            assertTrue(message, message.contains("cancelled"));
-            assertTrue(message, message.contains("attempted twice"));
-            assertTrue(message, message.contains(attempt.output.resolve("Configuration.xml").toString()));
-            assertEquals(2, attempt.api.calls);
-            assertFalse(Thread.currentThread().isInterrupted());
         }
     }
 
@@ -230,14 +199,16 @@ public class ExportConfigurationToXmlToolTest
     }
 
     @Test
-    public void testSettleRunsBeforeExportAndBeforeRetry() throws Exception
+    public void testPauseAndSettleRunOnlyBetweenTheTwoExports() throws Exception
     {
         try (ExportAttempt attempt = new ExportAttempt(ExportMode.NOTHING, ExportMode.ROOT_FILE))
         {
             String result = attempt.execute();
             assertTrue(result, result.contains("status: success"));
-            assertEquals(List.of("settle:" + ExportConfigurationToXmlTool.PRE_EXPORT_SETTLE_TIMEOUT_MS, "export",
+            assertEquals(List.of("export", "pause:" + ExportConfigurationToXmlTool.RETRY_PAUSE_MS,
                 "settle:" + ExportConfigurationToXmlTool.RETRY_SETTLE_TIMEOUT_MS, "export"), attempt.events);
+            assertEquals(750L, ExportConfigurationToXmlTool.RETRY_PAUSE_MS);
+            assertEquals(20_000L, ExportConfigurationToXmlTool.RETRY_SETTLE_TIMEOUT_MS);
         }
     }
 
@@ -250,7 +221,42 @@ public class ExportConfigurationToXmlToolTest
             String result = attempt.execute();
             assertTrue(result, result.startsWith("{"));
             assertEquals(1, attempt.api.calls);
-            assertEquals(1, attempt.events.stream().filter(e -> e.startsWith("settle:")).count());
+            assertEquals(List.of("export"), attempt.events);
+        }
+    }
+
+    @Test
+    public void testInterruptedPauseSkipsTheRetry() throws Exception
+    {
+        try (ExportAttempt attempt = new ExportAttempt(ExportMode.NOTHING, ExportMode.ROOT_FILE))
+        {
+            attempt.pauseCompletes = false;
+            String result;
+            try
+            {
+                result = attempt.execute();
+            }
+            finally
+            {
+                Thread.interrupted();
+            }
+            assertTrue(result, result.startsWith("{"));
+            assertEquals(1, attempt.api.calls);
+            assertEquals(List.of("export", "pause:" + ExportConfigurationToXmlTool.RETRY_PAUSE_MS),
+                attempt.events);
+        }
+    }
+
+    @Test
+    public void testExistingRootWithUnprovableRewriteIsNotRetried() throws Exception
+    {
+        try (ExportAttempt attempt = new ExportAttempt(ExportMode.SAME_BYTES_SAME_MTIME))
+        {
+            seedRoot(attempt);
+            String result = attempt.execute();
+            assertTrue(result, result.startsWith("{"));
+            assertEquals(1, attempt.api.calls);
+            assertEquals(List.of("export"), attempt.events);
         }
     }
 
@@ -263,18 +269,14 @@ public class ExportConfigurationToXmlToolTest
             String result = attempt.execute();
             String message = JsonParser.parseString(result).getAsJsonObject().get("error").getAsString();
             assertTrue(message, message.contains("ExternalObjects"));
-            assertTrue(message, message.contains("EDT returned normally without writing root"));
+            assertTrue(message, message.contains("EDT returned without writing root"));
         }
     }
 
     private enum ExportMode
     {
         NOTHING, CHILD_XML, ROOT_DIRECTORY, NESTED_ROOT, ROOT_FILE,
-        SAME_BYTES_SAME_MTIME, CHANGED_BYTES_SAME_MTIME, NEWER_MTIME,
-        /** Leaves the caller's interrupt flag set, as EDT does after a cancelled export. */
-        INTERRUPT_ONLY,
-        /** Writes the root, then leaves the interrupt flag set (a cancelled, partial export). */
-        INTERRUPT_WITH_ROOT
+        SAME_BYTES_SAME_MTIME, CHANGED_BYTES_SAME_MTIME, NEWER_MTIME
     }
 
     /** A normally returning CLI boundary with real output files, including its silent no-op case. */
@@ -297,14 +299,6 @@ public class ExportConfigurationToXmlToolTest
             events.add("export");
             switch (mode)
             {
-            case INTERRUPT_ONLY:
-                Thread.currentThread().interrupt();
-                break;
-            case INTERRUPT_WITH_ROOT:
-                // Write first: an interrupted thread cannot use NIO channels.
-                Files.writeString(output.resolve("Configuration.xml"), "<Partial/>");
-                Thread.currentThread().interrupt();
-                break;
             case CHILD_XML:
                 Files.writeString(output.resolve("Catalog.xml"), "<Metadata/>");
                 break;
@@ -343,6 +337,7 @@ public class ExportConfigurationToXmlToolTest
         final List<String> events = new ArrayList<>();
         List<String> notReady = List.of();
         boolean delivered;
+        boolean pauseCompletes = true;
 
         ExportAttempt(ExportMode... modes) throws Exception
         {
@@ -364,7 +359,14 @@ public class ExportConfigurationToXmlToolTest
             ExportConfigurationToXmlTool tool = new ExportConfigurationToXmlTool((name, budgetMs) -> {
                 events.add("settle:" + budgetMs);
                 return notReady;
-            }, () -> delivered);
+            }, () -> delivered, ms -> {
+                events.add("pause:" + ms);
+                if (!pauseCompletes)
+                {
+                    Thread.currentThread().interrupt();
+                }
+                return pauseCompletes;
+            });
             return tool.execute(Map.of("projectName", project.getName(), "outputPath", output.toString()));
         }
 

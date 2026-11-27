@@ -28,6 +28,13 @@ An unchanged stale root, missing file, or unprovable rewrite returns an error ev
 returned normally. Check the EDT Error Log, project readiness and permissions; retry into
 a fresh `outputPath` when timestamps are too coarse to establish a rewrite.
 
+If EDT returns without writing the root where none existed (for example right after
+`clean_project`, while the project context restarts), the tool retries exactly once: a short
+pause, a wait of up to 20 s for the project and its dependents to be ready, then the export
+again. Only that case adds up to ~21 s of delay; a normal export is not delayed. When both
+attempts write nothing the error says the export was attempted twice. Files from an
+interrupted first attempt may remain in `outputPath`; use a fresh directory for the next try.
+
 ## Notes & gotchas
 - This **writes to the filesystem at the path you give** - it can write outside the workspace. The server is trusted-caller-only (loopback + optional token); double-check `outputPath`.
 - Requires the EDT CLI API plugin (`com._1c.g5.v8.dt.cli.api`, present on 2025.x / 2026.1). Without it you get a clear "not available" error - that's environment, not a bug.
