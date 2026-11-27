@@ -530,4 +530,16 @@ public class GetOutgoingStructuresToolTest
         literal.getLines().add(rawLineWithQuotes);
         return literal;
     }
+
+    @Test
+    public void testUnknownProjectStillReportsNotFoundThroughReadDispatch() throws Exception
+    {
+        try (com.ditrix.edt.mcp.server.utils.HeadlessReadFixture fixture =
+            new com.ditrix.edt.mcp.server.utils.HeadlessReadFixture())
+        {
+            String result = new GetOutgoingStructuresTool().execute(Map.of("projectName", "NoSuchProject_zz", "modulePath", "CommonModules/X/Module.bsl"));
+            assertTrue(result, result.contains("Project not found: NoSuchProject_zz"));
+            assertTrue(result, result.contains("\"success\":false"));
+        }
+    }
 }

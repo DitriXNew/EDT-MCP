@@ -10,7 +10,6 @@ import java.util.Locale;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
 import org.eclipse.core.resources.IContainer;
@@ -136,26 +135,14 @@ public class ListModulesTool implements IMcpTool
 
         limit = Pagination.clampLimit(limit, 1000);
 
-        AtomicReference<String> resultRef = new AtomicReference<>();
         final String mdType = metadataType;
         final String objName = objectName;
         final String filter = nameFilter;
         final int maxResults = limit;
 
-        ReadToolExecution.dispatch(() -> {
-            try
-            {
-                String result = listModulesInternal(projectName, mdType, objName, filter, maxResults);
-                resultRef.set(result);
-            }
-            catch (Exception e)
-            {
-                Refusals.log("Error listing modules", e); //$NON-NLS-1$
-                resultRef.set(ToolResult.error(e.getMessage()).toJson());
-            }
-        });
-
-        return resultRef.get();
+        return ReadToolExecution.dispatchReadTool(projectName, "Error listing modules", //$NON-NLS-1$
+            () -> listModulesInternal(projectName, mdType, objName, filter, maxResults),
+            e -> ToolResult.error(e.getMessage()).toJson());
     }
 
     private String listModulesInternal(String projectName, String metadataType,

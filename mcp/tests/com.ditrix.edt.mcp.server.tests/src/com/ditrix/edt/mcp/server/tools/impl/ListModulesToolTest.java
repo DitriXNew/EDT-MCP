@@ -206,4 +206,16 @@ public class ListModulesToolTest
             assertFalse(refused, refused.contains("CommonModules/Код/Module.bsl"));
         }
     }
+
+    @Test
+    public void testUnknownProjectStillReportsNotFoundThroughReadDispatch() throws Exception
+    {
+        try (com.ditrix.edt.mcp.server.utils.HeadlessReadFixture fixture =
+            new com.ditrix.edt.mcp.server.utils.HeadlessReadFixture())
+        {
+            String result = new ListModulesTool().execute(Map.of("projectName", "NoSuchProject_zz", "metadataType", "commonModules"));
+            assertTrue(result, result.contains("Project not found: NoSuchProject_zz"));
+            assertTrue(result, result.contains("\"success\":false"));
+        }
+    }
 }

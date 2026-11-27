@@ -17,7 +17,6 @@ import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.emf.ecore.EObject;
@@ -47,7 +46,6 @@ import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
 import com.ditrix.edt.mcp.server.utils.BslMethodRecovery;
 import com.ditrix.edt.mcp.server.utils.Pagination;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
-import com.ditrix.edt.mcp.server.utils.Refusals;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 
@@ -197,20 +195,10 @@ public class GetOutgoingStructuresTool implements IMcpTool
         final String methodFilter = (method != null && !method.isEmpty()) ? method : null;
         final String qualifierFilter = (qualifier != null && !qualifier.isEmpty()) ? qualifier : null;
 
-        AtomicReference<String> resultRef = new AtomicReference<>();
-        ReadToolExecution.dispatch(() -> {
-            try
-            {
-                resultRef.set(ReadToolExecution.readOnHost(projectName, NAME, () -> analyze(projectName, modulePath, methodFilter, qualifierFilter, maxResults)));
-            }
-            catch (Exception e)
-            {
-                Refusals.log("Error collecting outgoing structures", e); //$NON-NLS-1$
-                resultRef.set(ToolResult.error(e.getMessage()).toJson());
-            }
-        });
-
-        return resultRef.get();
+        return ReadToolExecution.dispatchReadTool(projectName, "Error collecting outgoing structures", //$NON-NLS-1$
+            () -> ReadToolExecution.readOnHost(projectName, NAME,
+                () -> analyze(projectName, modulePath, methodFilter, qualifierFilter, maxResults)),
+            e -> ToolResult.error(e.getMessage()).toJson());
     }
 
     /**

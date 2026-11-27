@@ -813,4 +813,16 @@ public class GetMethodCallHierarchyToolTest
             return null;
         }
     }
+
+    @Test
+    public void testUnknownProjectStillReportsNotFoundThroughReadDispatch() throws Exception
+    {
+        try (com.ditrix.edt.mcp.server.utils.HeadlessReadFixture fixture =
+            new com.ditrix.edt.mcp.server.utils.HeadlessReadFixture())
+        {
+            String result = new GetMethodCallHierarchyTool().execute(Map.of("projectName", "NoSuchProject_zz", "modulePath", "CommonModules/X/Module.bsl", "direction", "outgoing"));
+            assertTrue(result, result.contains("Project not found: NoSuchProject_zz"));
+            assertTrue(result, result.contains("\"success\":false"));
+        }
+    }
 }

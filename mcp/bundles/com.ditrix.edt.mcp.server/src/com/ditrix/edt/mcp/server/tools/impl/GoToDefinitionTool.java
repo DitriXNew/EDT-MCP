@@ -10,7 +10,6 @@ import java.util.Locale;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiFunction;
 
 import org.eclipse.core.resources.IFile;
@@ -169,23 +168,12 @@ public class GoToDefinitionTool implements IMcpTool
                 + symbol + "'. Or pass a qualified 'ModuleName.MethodName' or a metadata FQN like 'Catalog.Products'.").toJson(); //$NON-NLS-1$
         }
 
-        // Execute on UI thread (required for EDT API access)
-        AtomicReference<String> resultRef = new AtomicReference<>();
-
-        ReadToolExecution.dispatch(() -> {
-            try
-            {
-                String result = ReadToolExecution.readOnHost(projectName, NAME, () -> resolveDefinition(projectName, symbol, modulePath, includeSource));
-                resultRef.set(result);
-            }
-            catch (Exception e)
-            {
-                Refusals.log("Error resolving definition", e); //$NON-NLS-1$
-                resultRef.set(ToolResult.error(e.getMessage()).toJson());
-            }
-        });
-
-        return resultRef.get();
+        // Execute on the host (UI thread when windowed; required for EDT API access). An EDT
+        // context-restart failure is retried once by dispatchReadTool.
+        return ReadToolExecution.dispatchReadTool(projectName, "Error resolving definition", //$NON-NLS-1$
+            () -> ReadToolExecution.readOnHost(projectName, NAME,
+                () -> resolveDefinition(projectName, symbol, modulePath, includeSource)),
+            e -> ToolResult.error(e.getMessage()).toJson());
     }
 
     // ========== Main resolution logic ==========

@@ -18,7 +18,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 
 import org.eclipse.core.resources.IFile;
@@ -382,19 +381,10 @@ public class GetMethodCallHierarchyTool implements IMcpTool
      */
     private String runOnDisplay(String projectName, String modulePath, RequestArgs request)
     {
-        AtomicReference<String> resultRef = new AtomicReference<>();
-        ReadToolExecution.dispatch(() -> {
-            try
-            {
-                resultRef.set(ReadToolExecution.readOnHost(projectName, NAME, () -> dispatch(projectName, modulePath, request)));
-            }
-            catch (Exception e)
-            {
-                Refusals.log("Error finding call hierarchy", e); //$NON-NLS-1$
-                resultRef.set(ToolResult.error(e.getMessage()).toJson());
-            }
-        });
-        return resultRef.get();
+        return ReadToolExecution.dispatchReadTool(projectName, "Error finding call hierarchy", //$NON-NLS-1$
+            () -> ReadToolExecution.readOnHost(projectName, NAME,
+                () -> dispatch(projectName, modulePath, request)),
+            e -> ToolResult.error(e.getMessage()).toJson());
     }
 
     /**

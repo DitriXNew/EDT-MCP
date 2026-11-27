@@ -474,4 +474,15 @@ public class GoToDefinitionToolTest
         }
     }
 
+    @Test
+    public void testUnknownProjectStillReportsNotFoundThroughReadDispatch() throws Exception
+    {
+        try (com.ditrix.edt.mcp.server.utils.HeadlessReadFixture fixture =
+            new com.ditrix.edt.mcp.server.utils.HeadlessReadFixture())
+        {
+            String result = new GoToDefinitionTool().execute(Map.of("projectName", "NoSuchProject_zz", "symbol", "Catalog.Goods"));
+            assertTrue(result, result.contains("Project not found: NoSuchProject_zz"));
+            assertTrue(result, result.contains("\"success\":false"));
+        }
+    }
 }
