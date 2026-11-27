@@ -1,5 +1,15 @@
 Creates a 1C:EDT runtime-client launch configuration (thin / thick / web client) and persists it in the workspace metadata. The configuration is immediately visible in `list_configurations` and usable by `launch`, `run_yaxunit_tests`, and `update_database`.
 
+## Attach to an existing debug server
+
+Use `clientType: "attach"` with an explicit `name`, `projectName`, and the real
+`applicationId` of the current branch. Pass its exact `infobaseAlias` and
+`debugServerUrl` (loopback HTTP with an explicit port). The tool saves a
+`RemoteRuntime` configuration. Call `launch` with its returned name and
+`mode: "debug"` to connect EDT without starting another 1C client.
+Check `debug_status` and identify the intended thread before resuming it.
+Automated testing options are only for runtime-client configurations.
+
 ## Run vs debug — one config, two modes
 
 There is **no separate debug configuration type** for a runtime client. The same `RuntimeClient` config works for both run and debug:
@@ -7,7 +17,7 @@ There is **no separate debug configuration type** for a runtime client. The same
 - `launch({launchConfigurationName: "<name>"})` — launches and attaches the debugger.
 - `run_yaxunit_tests({launchConfigurationName: "<name>"})` — runs YAXUnit tests.
 
-Run mode vs debug mode is chosen at launch time (the mode string), never a different config or attribute. Attach-to-server configs (`RemoteRuntime` / `LocalRuntime`) are a different feature and are out of scope here.
+Run mode vs debug mode is chosen at launch time (the mode string), never a different config or attribute. Attach-to-server configs (`RemoteRuntime` / `LocalRuntime`) connect EDT to the debug server separately from runtime-client launches.
 
 ## Parameter details
 
