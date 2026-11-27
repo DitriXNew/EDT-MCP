@@ -309,7 +309,7 @@ public class ExportConfigurationToXmlToolTest
                 Files.writeString(output.resolve("Catalog.xml"), "<Metadata/>");
                 break;
             case ROOT_DIRECTORY:
-                Files.createDirectory(output.resolve("Configuration.xml"));
+                Files.createDirectories(output.resolve("Configuration.xml")); // idempotent: the retry calls again
                 break;
             case NESTED_ROOT:
                 Files.createDirectories(output.resolve("elsewhere"));
