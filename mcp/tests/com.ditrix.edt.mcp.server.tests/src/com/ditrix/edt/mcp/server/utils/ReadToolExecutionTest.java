@@ -4,6 +4,7 @@ package com.ditrix.edt.mcp.server.utils;
 
 import static org.junit.Assert.*;
 import java.nio.charset.StandardCharsets;
+import org.junit.After;
 import org.junit.Test;
 import com.ditrix.edt.mcp.server.HostKind;
 
@@ -419,4 +420,126 @@ public class ReadToolExecutionTest
         }
     }
 
+
+    // ========== dispatchReadTool: one bounded retry for the EDT context-restart NPE ==========
+
+    private final java.util.List<org.eclipse.core.runtime.IStatus> logged = new java.util.ArrayList<>();
+
+    @After public void restoreRefusalsSink() { Refusals.setSink(null); }
+
+    private long logged(int severity)
+    {
+        return logged.stream().filter(status -> status.getSeverity() == severity).count();
+    }
+
+    private static NullPointerException restartNpe()
+    {
+        NullPointerException npe = new NullPointerException();
+        npe.setStackTrace(new StackTraceElement[] { new StackTraceElement(
+            "org.eclipse.xtext.resource.CurrentDescriptions$ResourceSetAware", "getExportedObjects",
+            "CurrentDescriptions.java", 1) });
+        return npe;
+    }
+
+    private static String errorText(String json)
+    {
+        var parsed = com.google.gson.JsonParser.parseString(json).getAsJsonObject();
+        assertFalse(json, parsed.get("success").getAsBoolean());
+        return parsed.get("error").getAsString();
+    }
+
+    @Test public void successfulReadNeverSettles()
+    {
+        Refusals.setSink(logged::add);
+        String result = ReadToolExecution.dispatchReadTool("Proj", "Error test", () -> "ok",
+            e -> "mapped", Runnable::run,
+            (name, budget) -> { throw new AssertionError("a successful read must not settle"); },
+            () -> true);
+        assertEquals("ok", result);
+        assertTrue(logged.isEmpty());
+    }
+
+    @Test public void restartArtifactIsRetriedOnceAfterSettle()
+    {
+        Refusals.setSink(logged::add);
+        int[] attempts = {0};
+        java.util.List<String> settled = new java.util.ArrayList<>();
+        String result = ReadToolExecution.dispatchReadTool("Proj", "Error test", () -> {
+            if (++attempts[0] == 1) { throw restartNpe(); }
+            return "ok";
+        }, e -> "mapped", Runnable::run, (name, budget) -> {
+            settled.add(name + ":" + budget);
+            return java.util.List.of();
+        }, () -> true);
+        assertEquals("ok", result);
+        assertEquals(2, attempts[0]);
+        assertEquals(java.util.List.of("Proj:" + ReadToolExecution.RESTART_SETTLE_TIMEOUT_MS), settled);
+        assertEquals(10_000L, ReadToolExecution.RESTART_SETTLE_TIMEOUT_MS);
+        assertEquals(1, logged(org.eclipse.core.runtime.IStatus.WARNING));
+        assertEquals(0, logged(org.eclipse.core.runtime.IStatus.ERROR));
+    }
+
+    @Test public void repeatedRestartArtifactAnswersRetryableError()
+    {
+        Refusals.setSink(logged::add);
+        int[] attempts = {0};
+        String result = ReadToolExecution.dispatchReadTool("Proj", "Error test", () -> {
+            attempts[0]++;
+            throw restartNpe();
+        }, e -> "mapped", Runnable::run, (name, budget) -> java.util.List.of(), () -> true);
+        assertEquals(2, attempts[0]);
+        String error = errorText(result);
+        for (String part : new String[] { "Proj", "list_projects", "ready", "retry", "clean_project" })
+        {
+            assertTrue(error, error.contains(part));
+        }
+        assertFalse(error, error.contains("NullPointerException: null"));
+        assertEquals(2, logged(org.eclipse.core.runtime.IStatus.WARNING));
+        assertEquals(0, logged(org.eclipse.core.runtime.IStatus.ERROR));
+    }
+
+    @Test public void otherFailureIsNotRetriedAndUsesToolMapping()
+    {
+        Refusals.setSink(logged::add);
+        int[] attempts = {0};
+        String result = ReadToolExecution.dispatchReadTool("Proj", "Error test", () -> {
+            attempts[0]++;
+            throw new IllegalStateException("platform broke");
+        }, e -> "mapped:" + e.getMessage(), Runnable::run,
+            (name, budget) -> { throw new AssertionError("an ordinary failure must not settle"); },
+            () -> true);
+        assertEquals("mapped:platform broke", result);
+        assertEquals(1, attempts[0]);
+        assertEquals(1, logged(org.eclipse.core.runtime.IStatus.ERROR));
+    }
+
+    @Test public void refusalIsNotRetried()
+    {
+        Refusals.setSink(logged::add);
+        int[] attempts = {0};
+        String result = ReadToolExecution.dispatchReadTool("Proj", "Error test", () -> {
+            attempts[0]++;
+            throw Refusals.state("not allowed");
+        }, e -> "mapped", Runnable::run,
+            (name, budget) -> { throw new AssertionError("a refusal must not settle"); }, () -> true);
+        assertEquals("mapped", result);
+        assertEquals(1, attempts[0]);
+        assertEquals(1, logged(org.eclipse.core.runtime.IStatus.INFO));
+        assertEquals(0, logged(org.eclipse.core.runtime.IStatus.ERROR));
+    }
+
+    @Test public void noWaitWhenWaitingIsNotAllowed()
+    {
+        Refusals.setSink(logged::add);
+        int[] attempts = {0};
+        String result = ReadToolExecution.dispatchReadTool("Proj", "Error test", () -> {
+            attempts[0]++;
+            throw restartNpe();
+        }, e -> "mapped", Runnable::run,
+            (name, budget) -> { throw new AssertionError("must not wait on the UI thread"); },
+            () -> false);
+        assertEquals(1, attempts[0]);
+        assertTrue(errorText(result), errorText(result).contains("Proj"));
+        assertEquals(1, logged(org.eclipse.core.runtime.IStatus.WARNING));
+    }
 }

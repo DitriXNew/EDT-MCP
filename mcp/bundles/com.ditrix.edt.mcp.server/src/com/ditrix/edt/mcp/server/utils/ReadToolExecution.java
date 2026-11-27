@@ -2,10 +2,13 @@
 // Copyright (C) 2026 DitriX
 package com.ditrix.edt.mcp.server.utils;
 
+import java.util.function.BiFunction;
+import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import org.eclipse.core.resources.IProject;
@@ -18,6 +21,9 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 /** Shared host dispatch and BM read boundary; UI linkage stays in the windowed branch. */
 public final class ReadToolExecution
 {
+    /** Settle budget before the one retry of a read that hit an EDT context restart. */
+    static final long RESTART_SETTLE_TIMEOUT_MS = 10_000L;
+
     private static final ThreadLocal<Map<IProject, IBmModel>> READ_SCOPES = new ThreadLocal<>();
     private ReadToolExecution() { }
 
@@ -68,6 +74,96 @@ public final class ReadToolExecution
     {
         if (kind == HostKind.HEADLESS) { work.run(); }
         else { windowed.accept(work); }
+    }
+
+    /**
+     * Runs a tool read on the host (windowed: UI thread) and maps its failure. A failure that
+     * {@link PlatformFailures#isContextRestartArtifact} recognises is retried once after a bounded
+     * wait for the project and its dependents (off the UI thread only); a second one answers the
+     * retryable {@link #restartingError}. Every other failure is logged through
+     * {@link Refusals#log} and mapped by the tool's own {@code failureJson}, exactly as before.
+     *
+     * @param projectName the project the read targets (used for the settle and the message)
+     * @param logContext the {@link Refusals#log} context, e.g. "Error getting metadata objects"
+     * @param read the read itself; it opens its own BM boundary
+     * @param failureJson maps any other failure to the tool's error JSON
+     * @return the read's JSON, or the mapped error
+     */
+    public static String dispatchReadTool(String projectName, String logContext,
+        Supplier<String> read, Function<Exception, String> failureJson)
+    {
+        return dispatchReadTool(projectName, logContext, read, failureJson,
+            work -> dispatch(work),
+            (name, budgetMs) -> ProjectStateChecker.awaitSearchScopeReady(name, budgetMs)
+                .getNotReadyProjectNames(),
+            () -> HostKind.current() == HostKind.HEADLESS || Windowed.notOnUiThread());
+    }
+
+    /**
+     * Seam. {@code host} is how the read is dispatched, {@code settle} maps (projectName,
+     * budgetMs) to the not-ready project names, {@code mayWait} is false on the UI thread.
+     */
+    static String dispatchReadTool(String projectName, String logContext, Supplier<String> read,
+        Function<Exception, String> failureJson, Consumer<Runnable> host,
+        BiFunction<String, Long, List<String>> settle, BooleanSupplier mayWait)
+    {
+        ReadAttempt first = attemptRead(logContext, read, failureJson, host);
+        if (first.restartArtifact == null)
+        {
+            return first.json;
+        }
+        if (!mayWait.getAsBoolean())
+        {
+            return restartingError(projectName, first.restartArtifact);
+        }
+        // Outside the host dispatch and any BM transaction, bounded: the retry gives EDT the
+        // chance to finish wiring the restarted context.
+        settle.apply(projectName, RESTART_SETTLE_TIMEOUT_MS);
+        ReadAttempt second = attemptRead(logContext, read, failureJson, host);
+        return second.restartArtifact == null
+            ? second.json : restartingError(projectName, second.restartArtifact);
+    }
+
+    /** The retryable answer for a read that EDT failed while restarting the context. */
+    static String restartingError(String projectName, Exception failure)
+    {
+        return ToolResult.error("EDT was restarting the context of project '" + projectName //$NON-NLS-1$
+            + "' and failed the read inside EDT (" + PlatformFailures.describe(failure) //$NON-NLS-1$
+            + "). The request itself is fine: wait until list_projects reads 'ready' for '" //$NON-NLS-1$
+            + projectName + "' and retry. If it keeps failing once 'ready', run clean_project on '" //$NON-NLS-1$
+            + projectName + "'.").toJson(); //$NON-NLS-1$
+    }
+
+    /** Outcome of one read attempt: the JSON, or the restart artifact that needs a retry. */
+    private static final class ReadAttempt
+    {
+        String json;
+        Exception restartArtifact;
+    }
+
+    private static ReadAttempt attemptRead(String logContext, Supplier<String> read,
+        Function<Exception, String> failureJson, Consumer<Runnable> host)
+    {
+        ReadAttempt attempt = new ReadAttempt();
+        host.accept(() -> {
+            try
+            {
+                attempt.json = read.get();
+            }
+            catch (Exception e)
+            {
+                Refusals.log(logContext, e);
+                if (PlatformFailures.isContextRestartArtifact(e))
+                {
+                    attempt.restartArtifact = e;
+                }
+                else
+                {
+                    attempt.json = failureJson.apply(e);
+                }
+            }
+        });
+        return attempt;
     }
 
     /** Dispatches reads inside a BM boundary on either host. */
@@ -137,6 +233,11 @@ public final class ReadToolExecution
 
     private static final class Windowed
     {
+        private static boolean notOnUiThread()
+        {
+            return org.eclipse.swt.widgets.Display.getCurrent() == null;
+        }
+
         private static Consumer<Runnable> workbenchExecutor()
         {
             var display = org.eclipse.ui.PlatformUI.getWorkbench().getDisplay();

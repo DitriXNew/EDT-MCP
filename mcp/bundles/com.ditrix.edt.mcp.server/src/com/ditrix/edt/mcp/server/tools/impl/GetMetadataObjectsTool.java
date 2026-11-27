@@ -10,7 +10,6 @@ import java.util.Locale;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
 import org.eclipse.core.resources.IProject;
@@ -24,7 +23,6 @@ import com._1c.g5.v8.dt.metadata.mdclass.ExternalReport;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.ObjectBelonging;
 import com.ditrix.edt.mcp.server.utils.ReadToolExecution;
-import com.ditrix.edt.mcp.server.utils.Refusals;
 import com.ditrix.edt.mcp.server.preferences.ToolParameterSettings;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
@@ -180,38 +178,26 @@ public class GetMetadataObjectsTool implements IMcpTool
         final int offset = Math.max(0, JsonUtils.extractIntArgument(params, OFFSET, 0));
 
         // Preserve windowed dispatch; headless reads stay on the calling thread.
-        AtomicReference<String> resultRef = new AtomicReference<>();
         final String mdType = metadataType;
         final boolean useTextFilter = hasFilter(textFilter);
         final String filter = useTextFilter ? textFilter : nameFilter;
         final FilterMode filterMode = useTextFilter ? FilterMode.TEXT : FilterMode.NAME;
         final int maxResults = limit;
         final String lang = language; // null means use config default
-        
-        ReadToolExecution.dispatch(() -> {
-            try
-            {
-                String result = ReadToolExecution.read(projectName, NAME,
-                    () -> getMetadataObjectsInternal(projectName, mdType, filter, filterMode,
-                        new PageWindow(offset, maxResults), lang));
-                resultRef.set(result);
-            }
-            catch (Exception e)
-            {
-                Refusals.log("Error getting metadata objects", e); //$NON-NLS-1$
-                // NOT e.getMessage(): the failure actually seen here was a NullPointerException,
-                // whose message is null, so the caller was handed "Unknown error" - a dead end for
-                // anyone, and worse for an agent that cannot read the EDT log. PlatformFailures
-                // walks the cause chain and any IStatus children for something that names the
-                // failure, and falls back to the exception's own type when nothing else does.
-                resultRef.set(ToolResult.error(
-                    "Could not list metadata objects: " + PlatformFailures.describe(e) //$NON-NLS-1$
-                    + ". If this followed a clean_project or a project reload, EDT may still be " //$NON-NLS-1$
-                    + "restarting the project context - retry once it reports ready.").toJson()); //$NON-NLS-1$
-            }
-        });
-        
-        return resultRef.get();
+
+        // The NPE EDT raises while it restarts the project context (after clean_project or a
+        // reload) is recognised and retried once by dispatchReadTool; the mapping below handles
+        // every other failure. NOT e.getMessage(): an NPE has none, so the caller would be handed
+        // "Unknown error" - PlatformFailures walks the cause chain and any IStatus children for
+        // something that names the failure.
+        return ReadToolExecution.dispatchReadTool(projectName, "Error getting metadata objects", //$NON-NLS-1$
+            () -> ReadToolExecution.read(projectName, NAME,
+                () -> getMetadataObjectsInternal(projectName, mdType, filter, filterMode,
+                    new PageWindow(offset, maxResults), lang)),
+            e -> ToolResult.error(
+                "Could not list metadata objects: " + PlatformFailures.describe(e) //$NON-NLS-1$
+                + ". If this followed a clean_project or a project reload, EDT may still be " //$NON-NLS-1$
+                + "restarting the project context - retry once it reports ready.").toJson()); //$NON-NLS-1$
     }
     
     /**

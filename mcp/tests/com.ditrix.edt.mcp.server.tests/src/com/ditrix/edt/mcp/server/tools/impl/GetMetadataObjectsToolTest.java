@@ -23,6 +23,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.CommonModule;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
+import com.ditrix.edt.mcp.server.utils.HeadlessReadFixture;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 
 /**
@@ -255,6 +256,18 @@ public class GetMetadataObjectsToolTest
         assertTrue(result.contains("textFilter='Debt adjustment'")); //$NON-NLS-1$
         assertTrue(result.contains("programmatic Name")); //$NON-NLS-1$
         assertTrue(result.contains("effective language")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testUnknownProjectStillReportsNotFoundThroughReadDispatch() throws Exception
+    {
+        try (HeadlessReadFixture fixture = new HeadlessReadFixture())
+        {
+            String result = new GetMetadataObjectsTool()
+                .execute(Map.of("projectName", "NoSuchProject_zz")); //$NON-NLS-1$ //$NON-NLS-2$
+            assertTrue(result, result.contains("Project not found: NoSuchProject_zz")); //$NON-NLS-1$
+            assertTrue(result, result.contains("\"success\":false")); //$NON-NLS-1$
+        }
     }
 
     // ==================== Name / localized-text matching (pure model logic) ====================
