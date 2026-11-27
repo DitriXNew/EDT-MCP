@@ -417,13 +417,38 @@ public final class BslModuleUtils
      */
     public static Module loadModule(IProject project, String modulePath)
     {
+        return loadModule(project, modulePath, false);
+    }
+
+    /**
+     * Same as {@link #loadModule(IProject, String)} except that the transient EDT context-restart
+     * failure ({@link PlatformFailures#isContextRestartArtifact}) is rethrown instead of being
+     * logged and turned into {@code null}. For tools that run under
+     * {@code ReadToolExecution.dispatchReadTool}: the rethrown failure reaches the dispatcher,
+     * which retries the read once. Every other failure behaves exactly as in
+     * {@link #loadModule(IProject, String)} (logged, {@code null}). Tools without that dispatcher
+     * must keep using {@link #loadModule(IProject, String)}, whose null-on-failure contract they
+     * rely on.
+     *
+     * @param project the EDT project
+     * @param modulePath path from the source folder or an absolute filesystem path
+     * @return loaded Module or null if not found
+     * @throws RuntimeException the context-restart failure, unchanged
+     */
+    public static Module loadModuleOrThrowOnRestart(IProject project, String modulePath)
+    {
+        return loadModule(project, modulePath, true);
+    }
+
+    private static Module loadModule(IProject project, String modulePath, boolean rethrowRestart)
+    {
         IFile file = resolveModuleFile(project, modulePath);
         if (file == null)
         {
             Activator.logWarning("BSL module not found in the workspace: " + modulePath); //$NON-NLS-1$
             return null;
         }
-        return loadModule(file);
+        return loadModule(file, rethrowRestart);
     }
 
     /**
@@ -434,6 +459,11 @@ public final class BslModuleUtils
      * @return loaded Module or null if not found
      */
     public static Module loadModule(IFile file)
+    {
+        return loadModule(file, false);
+    }
+
+    private static Module loadModule(IFile file, boolean rethrowRestart)
     {
         IProject project = file.getProject();
         // Try to obtain BmAwareResourceSetProvider
@@ -474,7 +504,22 @@ public final class BslModuleUtils
 
         URI uri = moduleUri(file);
         Activator.logInfo("Loading BSL module: " + uri.toString()); //$NON-NLS-1$
+        return readModule(resourceSet, uri, rethrowRestart);
+    }
 
+    /**
+     * Reads the module resource {@code uri} from {@code resourceSet}. A failure of
+     * {@code getResource} is logged and answered with {@code null}, except the context-restart
+     * artifact when {@code rethrowRestart} is set: that one escapes unchanged so a retrying caller
+     * can see it.
+     *
+     * @param resourceSet the resource set to load from
+     * @param uri the module URI
+     * @param rethrowRestart whether a context-restart failure is rethrown instead of swallowed
+     * @return the module or null
+     */
+    static Module readModule(ResourceSet resourceSet, URI uri, boolean rethrowRestart)
+    {
         try
         {
             Resource resource = resourceSet.getResource(uri, true);
@@ -497,6 +542,10 @@ public final class BslModuleUtils
         }
         catch (Exception e)
         {
+            if (rethrowRestart && PlatformFailures.isContextRestartArtifact(e))
+            {
+                throw e;
+            }
             Log.log(moduleLoadStatus(uriExists(resourceSet, uri), uri, e));
         }
 

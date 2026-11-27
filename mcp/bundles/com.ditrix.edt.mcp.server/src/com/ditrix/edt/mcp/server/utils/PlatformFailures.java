@@ -178,8 +178,19 @@ public final class PlatformFailures
             return true;
         }
         String message = wrapper.getMessage();
+        if (SWT_EXCEPTION.equals(wrapper.getClass().getName()) && message != null
+            && message.startsWith(SWT_FAILED_EXEC_MESSAGE))
+        {
+            // Display.syncExec rethrows the runnable's failure as SWTException(ERROR_FAILED_EXEC)
+            // whose message is "Failed to execute runnable (<cause>)": a pure wrapper. Matched by
+            // name so this class stays free of SWT for headless hosts.
+            return true;
+        }
         return message == null || message.equals(cause.toString());
     }
+
+    private static final String SWT_EXCEPTION = "org.eclipse.swt.SWTException"; //$NON-NLS-1$
+    private static final String SWT_FAILED_EXEC_MESSAGE = "Failed to execute runnable"; //$NON-NLS-1$
 
     /**
      * The most informative message the failure carries.

@@ -1290,6 +1290,51 @@ public class BslModuleUtilsTest
     }
 
     @Test
+    public void testReadModuleRethrowsTheRestartNpeWhenAsked()
+    {
+        ResourceSet resourceSet = mock(ResourceSet.class);
+        NullPointerException restart = HeadlessReadFixture.restartNpe();
+        when(resourceSet.getResource(any(URI.class), org.mockito.ArgumentMatchers.anyBoolean()))
+            .thenThrow(restart);
+
+        try
+        {
+            BslModuleUtils.readModule(resourceSet, MODULE_URI, true);
+            org.junit.Assert.fail("the restart artifact must escape so dispatchReadTool can retry"); //$NON-NLS-1$
+        }
+        catch (NullPointerException thrown)
+        {
+            assertSame(restart, thrown);
+        }
+    }
+
+    @Test
+    public void testReadModuleSwallowsTheRestartNpeByDefault()
+    {
+        // loadModule's null-on-failure contract is what the tools without a retry layer rely on.
+        ResourceSet resourceSet = mock(ResourceSet.class);
+        when(resourceSet.getResource(any(URI.class), org.mockito.ArgumentMatchers.anyBoolean()))
+            .thenThrow(HeadlessReadFixture.restartNpe());
+
+        assertNull(BslModuleUtils.readModule(resourceSet, MODULE_URI, false));
+    }
+
+    @Test
+    public void testReadModuleAnswersNullForAnyOtherFailureEvenWhenRethrowing()
+    {
+        ResourceSet resourceSet = mock(ResourceSet.class);
+        when(resourceSet.getResource(any(URI.class), org.mockito.ArgumentMatchers.anyBoolean()))
+            .thenThrow(new IllegalStateException("parser blew up")); //$NON-NLS-1$
+
+        assertNull(BslModuleUtils.readModule(resourceSet, MODULE_URI, true));
+        // An ordinary NPE is not the restart artifact either.
+        ResourceSet plain = mock(ResourceSet.class);
+        when(plain.getResource(any(URI.class), org.mockito.ArgumentMatchers.anyBoolean()))
+            .thenThrow(new NullPointerException("ours")); //$NON-NLS-1$
+        assertNull(BslModuleUtils.readModule(plain, MODULE_URI, true));
+    }
+
+    @Test
     public void testModuleUriAddressesAFileOutsideSrc()
     {
         // resolveModuleFile also finds a module in a non-src top-level folder; the load must

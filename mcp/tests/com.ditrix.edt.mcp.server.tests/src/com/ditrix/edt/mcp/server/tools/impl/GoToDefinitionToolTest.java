@@ -11,6 +11,8 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.io.ByteArrayInputStream;
@@ -29,7 +31,9 @@ import org.junit.Test;
 
 import com._1c.g5.v8.dt.bsl.BslStandaloneSetup;
 import com._1c.g5.v8.dt.bsl.model.Module;
+import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
+import com.ditrix.edt.mcp.server.utils.HeadlessReadFixture;
 
 /**
  * Tests for {@link GoToDefinitionTool}.
@@ -224,6 +228,26 @@ public class GoToDefinitionToolTest
         assertTrue(message, message.contains("MissingModule.MissingMethod"));
         assertTrue(message, message.contains("modulePath"));
     }
+
+    @Test
+    public void testSettleProjectNameKeepsAnEmptyName()
+    {
+        // The extension -> base mapping needs a live workspace (e2e); the null/empty guard does not.
+        assertEquals("", GoToDefinitionTool.settleProjectName("")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(null, GoToDefinitionTool.settleProjectName(null));
+    }
+
+    @Test
+    public void testSettleProjectFallsBackToTheDeclaredBaseWhileTheParentIsUnwired()
+    {
+        // Wired runtime parent wins; while it is unwired (the context is restarting) the manifest's
+        // Base-Project is used; a project that declares no base settles itself.
+        assertEquals("Base", GoToDefinitionTool.chooseSettleProject("Ext", "Base", "Declared")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        assertEquals("Declared", GoToDefinitionTool.chooseSettleProject("Ext", null, "Declared")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertEquals("Ext", GoToDefinitionTool.chooseSettleProject("Ext", null, null)); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("Ext", GoToDefinitionTool.chooseSettleProject("Ext", "", "")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+    }
+
     // ==================== Tool metadata ====================
 
     @Test
@@ -474,4 +498,57 @@ public class GoToDefinitionToolTest
         }
     }
 
+    @Test
+    public void testUnknownProjectStillReportsNotFoundThroughReadDispatch() throws Exception
+    {
+        try (HeadlessReadFixture fixture = new HeadlessReadFixture())
+        {
+            String result = new GoToDefinitionTool().execute(
+                Map.of("projectName", "NoSuchProject_zz", "symbol", "Catalog.Goods"));
+            assertTrue(result, result.contains("Project not found: NoSuchProject_zz"));
+            assertTrue(result, result.contains("\"success\":false"));
+        }
+    }
+
+    @Test
+    public void testRestartFailureIsRetriedOnceAndSucceeds() throws Exception
+    {
+        try (HeadlessReadFixture fixture = new HeadlessReadFixture())
+        {
+            fixture.failConfigurationLookups(HeadlessReadFixture.restartNpe());
+            String result = fixture.call(new GoToDefinitionTool(),
+                Map.of("symbol", "Catalog.Goods"));
+            assertFalse(result, result.contains("EDT was restarting"));
+            verify(fixture.configurations, times(2)).getConfiguration(fixture.project());
+        }
+    }
+
+    @Test
+    public void testRepeatedRestartFailureAnswersRetryableError() throws Exception
+    {
+        try (HeadlessReadFixture fixture = new HeadlessReadFixture())
+        {
+            fixture.failConfigurationLookups(HeadlessReadFixture.restartNpe(),
+                HeadlessReadFixture.restartNpe());
+            String result = fixture.call(new GoToDefinitionTool(),
+                Map.of("symbol", "Catalog.Goods"));
+            assertTrue(result, result.contains(
+                "EDT was restarting the context of project '" + fixture.name() + "'"));
+            assertTrue(result, result.contains("\"success\":false"));
+            verify(fixture.configurations, times(2)).getConfiguration(fixture.project());
+        }
+    }
+
+    @Test
+    public void testOrdinaryFailureIsNotRetried() throws Exception
+    {
+        try (HeadlessReadFixture fixture = new HeadlessReadFixture())
+        {
+            fixture.failConfigurationLookups(new IllegalStateException("boom"));
+            String result = fixture.call(new GoToDefinitionTool(),
+                Map.of("symbol", "Catalog.Goods"));
+            assertEquals(ToolResult.error("boom").toJson(), result);
+            verify(fixture.configurations, times(1)).getConfiguration(fixture.project());
+        }
+    }
 }
