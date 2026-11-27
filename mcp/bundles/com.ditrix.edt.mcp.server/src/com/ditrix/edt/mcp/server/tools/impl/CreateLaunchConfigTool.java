@@ -343,14 +343,6 @@ public class CreateLaunchConfigTool implements IMcpTool
         {
             return ToolResult.error("Attach requires infobaseAlias and a loopback HTTP debug server URL with an explicit port.").toJson();
         }
-        try
-        {
-            UUID.fromString(applicationId);
-        }
-        catch (IllegalArgumentException e)
-        {
-            return ToolResult.error("Attach requires the real infobase application UUID.").toJson();
-        }
         ProjectResolution resolved = resolveOpenProject(projectName);
         if (resolved.error != null)
         {
@@ -361,39 +353,10 @@ public class CreateLaunchConfigTool implements IMcpTool
         {
             return natureError;
         }
-        IApplicationManager applicationManager = Activator.getDefault().getApplicationManager();
-        if (applicationManager == null)
+        String bindingError = validateAttachBinding(resolved.project, applicationId, alias);
+        if (bindingError != null)
         {
-            return ToolResult.error(ApplicationSupport.MANAGER_UNAVAILABLE).toJson();
-        }
-        var lookup = ApplicationSupport.getApplicationBounded(applicationManager, resolved.project,
-            applicationId, ApplicationSupport.LOOKUP_TIMEOUT_MS);
-        if (!lookup.concluded())
-        {
-            return ToolResult.error("Attach application lookup did not complete: " + lookup.deadlineFailure()).toJson();
-        }
-        try
-        {
-            Optional<IApplication> application = lookup.valueOrRethrow();
-            if (application.isEmpty())
-            {
-                return buildAppNotFoundError(projectName, applicationId);
-            }
-            String refusal = BranchInfobaseBinding.refusalOrNull(resolved.project, application.get(), applicationId);
-            if (refusal != null)
-            {
-                return ToolResult.error(refusal).toJson();
-            }
-            var infobase = InfobaseAccessSupport.resolveInfobaseReference(application.get());
-            if (infobase == null || !alias.equals(InfobaseReferences.getAlias(infobase)))
-            {
-                return ToolResult.error("The supplied debug alias does not match the selected application.").toJson();
-            }
-        }
-        catch (ApplicationException e)
-        {
-            Activator.logError("Error resolving the Attach application", e);
-            return ToolResult.error("Could not resolve the selected Attach application.").toJson();
+            return bindingError;
         }
         ILaunchManager manager = LaunchConfigUtils.getLaunchManager();
         ILaunchConfigurationType type = manager == null ? null
@@ -429,6 +392,54 @@ public class CreateLaunchConfigTool implements IMcpTool
                 return ToolResult.error("Failed to create Attach configuration: " + e.getMessage()).toJson();
             }
         }
+    }
+
+    /** Checks the infobase selected by both a new and a saved RemoteRuntime Attach configuration. */
+    static String validateAttachBinding(IProject project, String applicationId, String alias)
+    {
+        try
+        {
+            UUID.fromString(applicationId);
+        }
+        catch (IllegalArgumentException e)
+        {
+            return ToolResult.error("Attach requires the real infobase application UUID.").toJson();
+        }
+        IApplicationManager applicationManager = Activator.getDefault().getApplicationManager();
+        if (applicationManager == null)
+        {
+            return ToolResult.error(ApplicationSupport.MANAGER_UNAVAILABLE).toJson();
+        }
+        var lookup = ApplicationSupport.getApplicationBounded(applicationManager, project,
+            applicationId, ApplicationSupport.LOOKUP_TIMEOUT_MS);
+        if (!lookup.concluded())
+        {
+            return ToolResult.error("Attach application lookup did not complete: " + lookup.deadlineFailure()).toJson();
+        }
+        try
+        {
+            Optional<IApplication> application = lookup.valueOrRethrow();
+            if (application.isEmpty())
+            {
+                return buildAppNotFoundError(project.getName(), applicationId);
+            }
+            String refusal = BranchInfobaseBinding.refusalOrNull(project, application.get(), applicationId);
+            if (refusal != null)
+            {
+                return ToolResult.error(refusal).toJson();
+            }
+            var infobase = InfobaseAccessSupport.resolveInfobaseReference(application.get());
+            if (infobase == null || alias == null || !alias.equals(InfobaseReferences.getAlias(infobase)))
+            {
+                return ToolResult.error("The Attach debug alias does not match the selected application. Check the current branch binding and recreate the configuration.").toJson();
+            }
+        }
+        catch (ApplicationException e)
+        {
+            Activator.logError("Error resolving the Attach application", e);
+            return ToolResult.error("Could not resolve the selected Attach application.").toJson();
+        }
+        return null;
     }
 
     static boolean validLocalDebugUrl(String url)

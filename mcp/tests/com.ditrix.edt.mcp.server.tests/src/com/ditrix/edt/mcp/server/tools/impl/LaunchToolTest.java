@@ -102,6 +102,36 @@ import com.google.gson.JsonParser;
  */
 public class LaunchToolTest
 {
+    @Test
+    public void boundRemoteAttachRevalidatesSavedApplicationAndAliasBeforeLaunch() throws Exception
+    {
+        ILaunchConfiguration config = mock(ILaunchConfiguration.class);
+        when(config.getAttribute(LaunchConfigUtils.ATTR_APPLICATION_ID, (String) null))
+            .thenReturn("previous-branch-id"); //$NON-NLS-1$
+        when(config.getAttribute(LaunchConfigUtils.ATTR_DEBUG_INFOBASE_ALIAS, (String) null))
+            .thenReturn("previous-alias"); //$NON-NLS-1$
+        String refusal = LaunchTool.savedAttachBindingError(config, LaunchConfigUtils.TYPE_REMOTE_RUNTIME,
+            "Project", (project, appId, alias) -> { //$NON-NLS-1$
+                assertEquals("Project", project); //$NON-NLS-1$
+                assertEquals("previous-branch-id", appId); //$NON-NLS-1$
+                assertEquals("previous-alias", alias); //$NON-NLS-1$
+                return "Application belongs to another branch"; //$NON-NLS-1$
+            });
+        assertEquals("Application belongs to another branch", refusal); //$NON-NLS-1$
+        assertNull(LaunchTool.savedAttachBindingError(config, LaunchConfigUtils.TYPE_REMOTE_RUNTIME,
+            "Project", (project, appId, alias) -> null)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void unboundRemoteAttachKeepsTheNativeEdtLaunchPath() throws Exception
+    {
+        ILaunchConfiguration config = mock(ILaunchConfiguration.class);
+        assertNull(LaunchTool.savedAttachBindingError(config, LaunchConfigUtils.TYPE_REMOTE_RUNTIME,
+            "Project", (project, appId, alias) -> { //$NON-NLS-1$
+                throw new AssertionError("An unbound configuration has no application to revalidate"); //$NON-NLS-1$
+            }));
+    }
+
     private static ILaunchConfiguration lockedLaunchConfig(String project, String application) throws Exception
     {
         ILaunchConfiguration config = mock(ILaunchConfiguration.class);

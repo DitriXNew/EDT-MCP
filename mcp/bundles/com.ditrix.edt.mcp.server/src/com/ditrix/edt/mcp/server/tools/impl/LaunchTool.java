@@ -518,6 +518,17 @@ public class LaunchTool implements IMcpTool
                 return preflightError;
             }
 
+            String bindingError = savedAttachBindingError(config, typeId, configProject,
+                (projectName, applicationId, alias) -> {
+                    IProject project = ProjectContext.of(projectName).project();
+                    return project == null ? ToolResult.error(ProjectContext.notFoundMessage(projectName)).toJson()
+                        : CreateLaunchConfigTool.validateAttachBinding(project, applicationId, alias);
+                });
+            if (bindingError != null)
+            {
+                return bindingError;
+            }
+
             // An Attach configuration performs no DB update at all (the preflight above is
             // skipped for it), so the conflict matcher must stay unarmed: an "Infobase
             // configuration changes" dialog appearing during an Attach is somebody else's.
@@ -587,6 +598,33 @@ public class LaunchTool implements IMcpTool
         ctx.attach = Boolean.FALSE;
         ctx.project = projectName;
         return handleExistingClientSession(existing, applicationId, restartIfRunning, ctx);
+    }
+
+    @FunctionalInterface
+    interface AttachBindingCheck
+    {
+        String validate(String projectName, String applicationId, String alias);
+    }
+
+    static String savedAttachBindingError(ILaunchConfiguration config, String typeId, String projectName,
+        AttachBindingCheck bindingCheck) throws CoreException
+    {
+        if (!LaunchConfigUtils.TYPE_REMOTE_RUNTIME.equals(typeId))
+        {
+            return null;
+        }
+        String applicationId = config.getAttribute(LaunchConfigUtils.ATTR_APPLICATION_ID, (String) null);
+        if (applicationId == null || applicationId.isBlank())
+        {
+            // EDT can also create an unbound RemoteRuntime configuration.
+            return null;
+        }
+        if (projectName.isBlank())
+        {
+            return ToolResult.error("The bound Attach configuration has no EDT project. Recreate it for the current branch.").toJson();
+        }
+        String alias = config.getAttribute(LaunchConfigUtils.ATTR_DEBUG_INFOBASE_ALIAS, (String) null);
+        return bindingCheck.validate(projectName, applicationId, alias);
     }
 
     /** Resolves by-name targets supported here without expanding the shared debug lookup. */

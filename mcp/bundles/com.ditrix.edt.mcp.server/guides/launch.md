@@ -119,7 +119,7 @@ If the 1003 modal still appears in a debug launch (a race with a second client),
 
 ## Gotchas
 
-- Select Attach by `launchConfigurationName`. The returned `applicationId` is `attach:<name>` for use in debug tools.
+- Select Attach by `launchConfigurationName`. The returned `applicationId` is `attach:<name>` for use in debug tools. For a bound RemoteRuntime Attach configuration, EDT MCP rechecks the saved infobase and debug alias against the current project before connecting. If the binding changed, create a configuration for the current branch.
 - Attach configurations support only `mode="debug"`; `mode="run"` is rejected before launch.
 - `alreadyRunning: true` is a success, not an error — don't retry it; terminate first if you truly need a fresh session.
 - `updateBeforeLaunch` has no effect on Attach configs.
