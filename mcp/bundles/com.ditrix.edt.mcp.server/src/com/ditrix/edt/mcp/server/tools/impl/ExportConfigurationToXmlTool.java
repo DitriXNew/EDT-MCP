@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.server.tools.impl;
 import java.io.IOException;
 import java.lang.reflect.Method;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -27,6 +28,7 @@ import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.CliReflectionErrors;
+import com.ditrix.edt.mcp.server.utils.ExecutingToolCall;
 import com.ditrix.edt.mcp.server.utils.FrontMatter;
 import com.ditrix.edt.mcp.server.utils.InterruptiblePause;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
@@ -76,7 +78,7 @@ public class ExportConfigurationToXmlTool implements IMcpTool
     public ExportConfigurationToXmlTool()
     {
         this((project, budgetMs) -> ProjectStateChecker.awaitSearchScopeReady(project, budgetMs)
-            .getNotReadyProjectNames(), ExportConfigurationToXmlTool::executingResponseDelivered,
+            .getNotReadyProjectNames(), ExecutingToolCall::isResponseDelivered,
             InterruptiblePause::pause);
     }
 
@@ -87,14 +89,6 @@ public class ExportConfigurationToXmlTool implements IMcpTool
         this.settle = settle;
         this.responseDelivered = responseDelivered;
         this.pause = pause;
-    }
-
-    private static boolean executingResponseDelivered()
-    {
-        var activator = Activator.getDefault();
-        var server = activator == null ? null : activator.getMcpServer();
-        var call = server == null ? null : server.getExecutingToolCall();
-        return call != null && call.isResponseDelivered();
     }
 
     @Override
@@ -200,10 +194,11 @@ public class ExportConfigurationToXmlTool implements IMcpTool
             List<String> notReady = List.of();
 
             // EDT can return normally without writing anything while the project context restarts
-            // (right after clean_project). Retry exactly once, and only when the root was absent
-            // before and is still not written: an existing root whose rewrite is merely unprovable
-            // is not retried. Never once the caller has left or been answered.
-            if (!proven && before == null && !Files.isRegularFile(rootXml) && !interruptedOnEntry
+            // (right after clean_project). Retry exactly once, and only when the root was truly
+            // absent before and is still absent: an existing root whose rewrite is merely
+            // unprovable, or a non-file at its path, is not retried. Never once the caller has
+            // left or been answered.
+            if (!proven && before.isAbsent() && !interruptedOnEntry
                 && !Thread.currentThread().isInterrupted() && !responseDelivered.getAsBoolean())
             {
                 Activator.logInfo("export_configuration_to_xml: EDT returned without writing '" //$NON-NLS-1$
@@ -212,12 +207,20 @@ public class ExportConfigurationToXmlTool implements IMcpTool
                 if (pause.test(RETRY_PAUSE_MS))
                 {
                     notReady = settle.apply(projectName, RETRY_SETTLE_TIMEOUT_MS);
-                    if (!Thread.currentThread().isInterrupted())
+                    // The wait took time: re-read the root and re-check the caller before
+                    // exporting a second time.
+                    RootBaseline now = RootBaseline.read(rootXml);
+                    if (now.isRegular())
+                    {
+                        // The first attempt finished during the wait: that is its completion,
+                        // not a baseline for a second export.
+                        proven = true;
+                    }
+                    else if (now.isAbsent() && !Thread.currentThread().isInterrupted()
+                        && !responseDelivered.getAsBoolean())
                     {
                         retried = true;
-                        // The baseline is read afresh: a partial root the first attempt left must
-                        // not count as proof for the second.
-                        before = RootBaseline.read(rootXml);
+                        before = now;
                         invokeExport(method, api, projectName, outputPath);
                         proven = rootProven(rootXml, before);
                     }
@@ -261,34 +264,57 @@ public class ExportConfigurationToXmlTool implements IMcpTool
         }
     }
 
-    /** Root state before an attempt; {@code null} (no baseline) when no regular root existed. */
+    /**
+     * Root state before an attempt. The path is classified without following links: absent
+     * ({@link NoSuchFileException}), a regular file (with mtime, size and digest), or something
+     * else that exists (a directory, FIFO, symbolic link, even a dangling one). Only a truly
+     * absent root may be retried.
+     */
     private static final class RootBaseline
     {
+        private static final RootBaseline ABSENT = new RootBaseline(0, null, 0L, null);
+        private static final RootBaseline OTHER = new RootBaseline(1, null, 0L, null);
+
+        /** 0 absent, 1 exists but is not a regular file, 2 regular file. */
+        final int kind;
         final FileTime mtime;
         final long size;
         final String digest;
 
-        private RootBaseline(FileTime mtime, long size, String digest)
+        private RootBaseline(int kind, FileTime mtime, long size, String digest)
         {
+            this.kind = kind;
             this.mtime = mtime;
             this.size = size;
             this.digest = digest;
+        }
+
+        boolean isAbsent()
+        {
+            return kind == 0;
+        }
+
+        boolean isRegular()
+        {
+            return kind == 2;
         }
 
         static RootBaseline read(Path root) throws IOException
         {
             try
             {
-                BasicFileAttributes attrs = Files.readAttributes(root, BasicFileAttributes.class);
+                BasicFileAttributes attrs = Files.readAttributes(root, BasicFileAttributes.class,
+                    LinkOption.NOFOLLOW_LINKS);
                 if (!attrs.isRegularFile())
                 {
-                    return null;
+                    return OTHER;
                 }
-                return new RootBaseline(attrs.lastModifiedTime(), attrs.size(), MergeRulesCodec.fileDigest(root));
+                return new RootBaseline(2, attrs.lastModifiedTime(), attrs.size(),
+                    MergeRulesCodec.fileDigest(root));
             }
             catch (NoSuchFileException missing)
             {
-                return null; // An absent root is a valid initial state.
+                return ABSENT; // An absent root is a valid initial state.
             }
         }
     }
@@ -296,11 +322,11 @@ public class ExportConfigurationToXmlTool implements IMcpTool
     /** Whether the attempt created the root or provably rewrote it against the baseline. */
     private static boolean rootProven(Path rootXml, RootBaseline before) throws IOException
     {
-        if (!Files.isRegularFile(rootXml))
+        if (before.kind == 1 || !Files.isRegularFile(rootXml))
         {
-            return false;
+            return false; // A pre-existing non-file root is never proof of an export.
         }
-        if (before == null)
+        if (before.isAbsent())
         {
             return true;
         }
