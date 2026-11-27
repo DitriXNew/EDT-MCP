@@ -1,4 +1,4 @@
-Creates a 1C:EDT runtime-client launch configuration (thin / thick / web client) and persists it in the workspace metadata. The configuration is immediately visible in `list_configurations` and usable by `launch`, `run_yaxunit_tests`, and `update_database`.
+Creates a 1C:EDT runtime-client launch configuration (thin / thick / web client) and persists it in the workspace metadata. The configuration is immediately visible in `list_configurations` and usable by `launch`. Runtime-client configurations can also be used by `run_yaxunit_tests` and `update_database`.
 
 ## Attach to an existing debug server
 
@@ -6,7 +6,7 @@ Use `clientType: "attach"` with an explicit `name`, `projectName`, and the real
 `applicationId` of the current branch. Pass its exact `infobaseAlias` and
 `debugServerUrl` (loopback HTTP with an explicit port). The tool saves a
 `RemoteRuntime` configuration. Call `launch` with its returned name and
-`mode: "debug"` to connect EDT without starting another 1C client.
+`mode: "debug"` to connect EDT without starting or terminating a 1C client.
 Check `debug_status` and identify the intended thread before resuming it.
 Automated testing options are only for runtime-client configurations.
 
@@ -22,9 +22,9 @@ Run mode vs debug mode is chosen at launch time (the mode string), never a diffe
 ## Parameter details
 
 - **projectName** (required): must be a V8 **configuration** project (V8ConfigurationNature). Extension projects, dictionary storage projects, and external-objects projects are rejected — a runtime client targets a configuration. Use `list_projects` to discover available projects and their type.
-- **clientType** (enum, default `thin`): `thin` / `thick` / `web`. Determines which 1C:Enterprise client executable is launched. Web client configs additionally require a published PWA/web application on the infobase, which is outside the scope of this tool.
-- **name** (optional): exact name for the new config. If omitted a unique name is generated: `<Project> Thin|Thick|Web Client` (uniquified if a conflict exists). If a config with the supplied name already exists the call is rejected — use `list_configurations` to check.
-- **applicationId** (optional): the infobase/application ID from `get_applications`. If omitted the project's **default application** is resolved automatically. If the project has no applications the call is rejected with a hint to create an infobase first.
+- **clientType** (enum, default `thin`): `thin` / `thick` / `web` / `attach`. For runtime clients, determines which 1C:Enterprise client executable is launched. Web client configs additionally require a published PWA/web application on the infobase, which is outside the scope of this tool.
+- **name** (optional): exact name for the new config. Required for Attach. Otherwise, if omitted a unique name is generated: `<Project> Thin|Thick|Web Client` (uniquified if a conflict exists). If a config with the supplied name already exists the call is rejected — use `list_configurations` to check.
+- **applicationId** (optional): the infobase/application ID from `get_applications`. Required for Attach. For a runtime client, omitting it selects the project's **default application**. If the project has no applications the call is rejected with a hint to create an infobase first.
 
 ## Automated testing
 

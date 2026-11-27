@@ -32,6 +32,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -2106,6 +2107,33 @@ public class LaunchToolTest
         assertNull("restartIfRunning=true must proceed to relaunch (null), not short-circuit",
             result);
         verify(client, times(1)).terminate();
+    }
+
+    @Test
+    public void namedAttachDoesNotShortCircuitOrTerminateRunningClient() throws Exception
+    {
+        ILaunch runningClient = mock(ILaunch.class);
+        IDebugTarget debugClient = targetWithThreads(liveThread());
+        ILaunchConfiguration attachConfig = mock(ILaunchConfiguration.class);
+        ExistingClientSession run = new ExistingClientSession(runningClient, null, "run"); //$NON-NLS-1$
+        ExistingClientSession debug = new ExistingClientSession(runningClient, debugClient, "debug"); //$NON-NLS-1$
+        LaunchTool tool = new LaunchTool();
+        for (ExistingClientSession session : List.of(run, debug))
+        {
+            for (boolean restart : new boolean[] {false, true})
+            {
+                AtomicBoolean lookedUp = new AtomicBoolean();
+                assertNull(tool.handleExistingNamedClientSession(true, "app-3", restart, attachConfig, //$NON-NLS-1$
+                    "com._1c.g5.v8.dt.debug.core.RemoteRuntime", "MyProject", appId -> //$NON-NLS-1$ //$NON-NLS-2$
+                    {
+                        lookedUp.set(true);
+                        return session;
+                    }));
+                assertFalse("Attach must bypass runtime-client lookup", lookedUp.get()); //$NON-NLS-1$
+            }
+        }
+        verify(runningClient, never()).terminate();
+        verify(debugClient, never()).terminate();
     }
 
     @Test

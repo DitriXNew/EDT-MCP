@@ -13,6 +13,7 @@ import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 import org.eclipse.core.resources.IProject;
@@ -481,32 +482,11 @@ public class LaunchTool implements IMcpTool
                 return ToolResult.error(operation.error()).toJson();
             }
 
-            // Unified existing-session decision. One
-            // (project, app-id) → at most one live CLIENT session, with the
-            // CLIENT-typed-thread discriminator applied so a standalone-SERVER /
-            // profiling session sharing this app id — including a debug-mode server
-            // whose live thread is typed SERVER — NEVER short-circuits the client.
-            // Covers both a live DEBUG target and a debug-target-less RUN-mode launch
-            // (the legacy already-running guard). restartIfRunning is honored here exactly as in
-            // the target-manager path: false → alreadyRunning, true → non-interactive
-            // terminate + relaunch.
-            ExistingClientSession existingByName =
-                LaunchLifecycleUtils.resolveExistingClientSession(effectiveAppId);
-            if (existingByName != null)
+            String existingClientResult = handleExistingNamedClientSession(isAttach, effectiveAppId,
+                restartIfRunning, config, typeId, configProject, LaunchLifecycleUtils::resolveExistingClientSession);
+            if (existingClientResult != null)
             {
-                AlreadyRunningContext ctx = new AlreadyRunningContext(alreadyRunningMessage(existingByName.launch));
-                ctx.launchConfiguration = config.getName();
-                ctx.configurationType = typeId;
-                ctx.attach = Boolean.valueOf(isAttach);
-                ctx.project = configProject;
-                String shortCircuit = handleExistingClientSession(existingByName, effectiveAppId,
-                    restartIfRunning, ctx);
-                if (shortCircuit != null)
-                {
-                    return shortCircuit;
-                }
-                // restartIfRunning=true: the old client was terminated — fall through
-                // and relaunch.
+                return existingClientResult;
             }
 
             // Delegate-criterion duplicate guard. Runtime-client DEBUG
@@ -582,6 +562,31 @@ public class LaunchTool implements IMcpTool
         {
             if (operation != null) { operation.close(); }
         }
+    }
+
+    /**
+     * Applies client restart policy only to runtime-client configurations. Attach configs may
+     * carry the same real application ID, but that ID is only their infobase identity here.
+     */
+    String handleExistingNamedClientSession(boolean attach, String applicationId, boolean restartIfRunning,
+        ILaunchConfiguration config, String typeId, String projectName,
+        Function<String, ExistingClientSession> lookup)
+    {
+        if (attach)
+        {
+            return null;
+        }
+        ExistingClientSession existing = lookup.apply(applicationId);
+        if (existing == null)
+        {
+            return null;
+        }
+        AlreadyRunningContext ctx = new AlreadyRunningContext(alreadyRunningMessage(existing.launch));
+        ctx.launchConfiguration = config.getName();
+        ctx.configurationType = typeId;
+        ctx.attach = Boolean.FALSE;
+        ctx.project = projectName;
+        return handleExistingClientSession(existing, applicationId, restartIfRunning, ctx);
     }
 
     /** Resolves by-name targets supported here without expanding the shared debug lookup. */
