@@ -784,12 +784,26 @@ public class PlatformFailuresTest
     public void testSwtSyncExecWrapperIsTransparent()
     {
         NullPointerException npe = xtextDelegateNpe();
-        // Display.syncExec rethrows the runnable's failure this way in a windowed host.
+        // Display.syncExec rethrows the runnable's failure exactly this way in a windowed host.
         assertTrue(PlatformFailures.isContextRestartArtifact(
-            new org.eclipse.swt.SWTException(org.eclipse.swt.SWT.ERROR_FAILED_EXEC, npe)));
+            swtError(org.eclipse.swt.SWT.ERROR_FAILED_EXEC, npe)));
         // Any other SWT error code carries its own meaning and stops recognition.
         assertFalse(PlatformFailures.isContextRestartArtifact(
-            new org.eclipse.swt.SWTException(org.eclipse.swt.SWT.ERROR_WIDGET_DISPOSED, npe)));
+            swtError(org.eclipse.swt.SWT.ERROR_WIDGET_DISPOSED, npe)));
+    }
+
+    /** The exception SWT itself builds for an error code and a cause ({@code SWT.error}). */
+    private static org.eclipse.swt.SWTException swtError(int code, Throwable cause)
+    {
+        try
+        {
+            org.eclipse.swt.SWT.error(code, cause);
+        }
+        catch (org.eclipse.swt.SWTException e)
+        {
+            return e;
+        }
+        throw new AssertionError("SWT.error must throw SWTException"); //$NON-NLS-1$
     }
 
     @Test
