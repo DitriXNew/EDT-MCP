@@ -69,6 +69,7 @@ import com.ditrix.edt.mcp.server.utils.BoundedJob;
 import com.ditrix.edt.mcp.server.utils.ExternalInfobaseChangesPolicy;
 import com.ditrix.edt.mcp.server.utils.InfobaseAuthDialogSuppressor;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
+import com.ditrix.edt.mcp.server.utils.git.BranchBindingLock;
 import com.ditrix.edt.mcp.server.utils.LaunchOverrides;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils.ExistingClientSession;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils;
@@ -102,6 +103,31 @@ import com.google.gson.JsonParser;
  */
 public class LaunchToolTest
 {
+    @Test
+    public void boundRemoteAttachRevalidatesUnderTheCheckoutLockAtDispatch() throws Exception
+    {
+        ILaunchConfiguration config = mock(ILaunchConfiguration.class);
+        ILaunchConfigurationType type = mock(ILaunchConfigurationType.class);
+        when(type.getIdentifier()).thenReturn(LaunchConfigUtils.TYPE_REMOTE_RUNTIME);
+        when(config.getType()).thenReturn(type);
+        when(config.getAttribute(LaunchConfigUtils.ATTR_APPLICATION_ID, (String) null))
+            .thenReturn("bound"); //$NON-NLS-1$
+        when(config.getAttribute(LaunchConfigUtils.ATTR_PROJECT_NAME, "")).thenReturn("Project"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        LaunchTool.dispatchWithAttachBinding(config, (project, app, alias) -> {
+            assertTrue(BranchBindingLock.isHeldByCurrentThread());
+            return null;
+        }, () -> assertTrue(BranchBindingLock.isHeldByCurrentThread()));
+        assertFalse(BranchBindingLock.isHeldByCurrentThread());
+
+        CoreException failure = org.junit.Assert.assertThrows(CoreException.class,
+            () -> LaunchTool.dispatchWithAttachBinding(config, (project, app, alias) ->
+                "{\"success\":false,\"error\":\"Branch changed before dispatch\"}", //$NON-NLS-1$
+                () -> { throw new AssertionError("Refused Attach must not dispatch"); })); //$NON-NLS-1$
+        assertEquals("Branch changed before dispatch", failure.getStatus().getMessage()); //$NON-NLS-1$
+        assertFalse(BranchBindingLock.isHeldByCurrentThread());
+    }
+
     @Test
     public void savedAttachRefusesMissingAndClosedProjectHandlesBeforeResolvingApplication()
     {

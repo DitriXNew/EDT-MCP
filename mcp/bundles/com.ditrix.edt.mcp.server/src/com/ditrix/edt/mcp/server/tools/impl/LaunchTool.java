@@ -54,6 +54,7 @@ import com.ditrix.edt.mcp.server.utils.LaunchUpdateDialogAutoConfirmer;
 import com.ditrix.edt.mcp.server.utils.McpJobs;
 import com.ditrix.edt.mcp.server.utils.PlatformFailures;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
+import com.ditrix.edt.mcp.server.utils.git.BranchBindingLock;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.ditrix.edt.mcp.server.utils.StandaloneServerPortConflictPolicy;
 import com.ditrix.edt.mcp.server.utils.StandaloneServerStateRecovery;
@@ -519,11 +520,7 @@ public class LaunchTool implements IMcpTool
             }
 
             String bindingError = savedAttachBindingError(config, typeId, configProject,
-                (projectName, applicationId, alias) -> {
-                    IProject project = ProjectContext.of(projectName).project();
-                    return project == null ? ToolResult.error(ProjectContext.notFoundMessage(projectName)).toJson()
-                        : CreateLaunchConfigTool.validateAttachBinding(project, applicationId, alias);
-                });
+                LaunchTool::validateSavedAttachBinding);
             if (bindingError != null)
             {
                 return bindingError;
@@ -625,6 +622,60 @@ public class LaunchTool implements IMcpTool
         }
         String alias = config.getAttribute(LaunchConfigUtils.ATTR_DEBUG_INFOBASE_ALIAS, (String) null);
         return bindingCheck.validate(projectName, applicationId, alias);
+    }
+
+    private static String validateSavedAttachBinding(String projectName, String applicationId, String alias)
+    {
+        IProject project = ProjectContext.of(projectName).project();
+        return project == null ? ToolResult.error(ProjectContext.notFoundMessage(projectName)).toJson()
+            : CreateLaunchConfigTool.validateAttachBinding(project, applicationId, alias);
+    }
+
+    @FunctionalInterface
+    interface LaunchDispatch
+    {
+        void run() throws CoreException;
+    }
+
+    static void dispatchWithAttachBinding(ILaunchConfiguration config, AttachBindingCheck bindingCheck,
+        LaunchDispatch dispatch) throws CoreException
+    {
+        String typeId = LaunchConfigUtils.getConfigTypeId(config);
+        String applicationId = LaunchConfigUtils.TYPE_REMOTE_RUNTIME.equals(typeId)
+            ? config.getAttribute(LaunchConfigUtils.ATTR_APPLICATION_ID, (String) null) : null;
+        if (applicationId == null || applicationId.isBlank())
+        {
+            dispatch.run();
+            return;
+        }
+
+        if (!BranchBindingLock.tryLock())
+        {
+            throw new CoreException(new Status(IStatus.ERROR, Activator.PLUGIN_ID,
+                "Refusing Attach: " + BranchBindingLock.busyReason())); //$NON-NLS-1$
+        }
+
+        try
+        {
+            String projectName = config.getAttribute(LaunchConfigUtils.ATTR_PROJECT_NAME, ""); //$NON-NLS-1$
+            if (BranchBindingLock.inFlightAmong(List.of(projectName)) != null)
+            {
+                throw new CoreException(new Status(IStatus.ERROR, Activator.PLUGIN_ID,
+                    "Refusing Attach: a branch change is still running for project '" + projectName //$NON-NLS-1$
+                        + "'. Retry once it finishes.")); //$NON-NLS-1$
+            }
+            String refusal = savedAttachBindingError(config, typeId, projectName, bindingCheck);
+            if (refusal != null)
+            {
+                String message = JsonParser.parseString(refusal).getAsJsonObject().get("error").getAsString(); //$NON-NLS-1$
+                throw new CoreException(new Status(IStatus.ERROR, Activator.PLUGIN_ID, message));
+            }
+            dispatch.run();
+        }
+        finally
+        {
+            BranchBindingLock.unlock();
+        }
     }
 
     /** Resolves by-name targets supported here without expanding the shared debug lookup. */
@@ -2800,7 +2851,8 @@ public class LaunchTool implements IMcpTool
         InfobaseAuthDialogSuppressor.markActivityStart();
         try
         {
-            recordFinishedLaunch(StandaloneServerStateRecovery.launchWithRecovery(config, launchMode, null));
+            dispatchWithAttachBinding(config, LaunchTool::validateSavedAttachBinding,
+                () -> recordFinishedLaunch(StandaloneServerStateRecovery.launchWithRecovery(config, launchMode, null)));
             return null;
         }
         catch (CoreException e)
@@ -2956,8 +3008,9 @@ public class LaunchTool implements IMcpTool
         java.util.List<org.eclipse.debug.core.ILaunch> started = new java.util.ArrayList<>();
         try
         {
-            StandaloneServerStateRecovery.launchWithRecovery(config, launchMode, monitor,
-                () -> abandonedLaunchMessage(config.getName(), abortReason.reason()), started::add);
+            dispatchWithAttachBinding(config, LaunchTool::validateSavedAttachBinding,
+                () -> StandaloneServerStateRecovery.launchWithRecovery(config, launchMode, monitor,
+                    () -> abandonedLaunchMessage(config.getName(), abortReason.reason()), started::add));
             String declined = declinedConflictMessage(launchPolicy, conflicts);
             if (declined != null)
             {
