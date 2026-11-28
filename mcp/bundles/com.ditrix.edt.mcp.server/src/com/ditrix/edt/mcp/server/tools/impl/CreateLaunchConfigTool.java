@@ -11,6 +11,8 @@ import java.net.URI;
 import java.net.UnknownHostException;
 import java.util.Map;
 import java.util.UUID;
+import java.util.function.Function;
+import java.util.function.Supplier;
 import java.util.Optional;
 
 import org.eclipse.core.resources.IProject;
@@ -33,6 +35,8 @@ import com.ditrix.edt.mcp.server.utils.InfobaseAccessSupport;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
 import com.ditrix.edt.mcp.server.utils.LaunchOverrides;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
+import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
+import com.ditrix.edt.mcp.server.utils.git.BranchBindingLock;
 import com.e1c.g5.dt.applications.ApplicationException;
 import com.e1c.g5.dt.applications.IApplication;
 import com.e1c.g5.dt.applications.IApplicationManager;
@@ -345,6 +349,30 @@ public class CreateLaunchConfigTool implements IMcpTool
         {
             return ToolResult.error("Attach requires infobaseAlias and a loopback HTTP debug server URL with an explicit port.").toJson();
         }
+        return withAttachCreationGuard(projectName, ProjectStateChecker::checkoutReloadErrorOrNull,
+            () -> createBoundAttach(projectName, applicationId, name, alias, url));
+    }
+
+    static String withAttachCreationGuard(String projectName, Function<String, String> checkoutReloadCheck,
+        Supplier<String> create)
+    {
+        if (!BranchBindingLock.tryLock())
+        {
+            return ToolResult.error("Refusing Attach: " + BranchBindingLock.busyReason()).toJson(); //$NON-NLS-1$
+        }
+        try
+        {
+            String refusal = BranchInfobaseBinding.attachBranchTransitionError(projectName, checkoutReloadCheck);
+            return refusal == null ? create.get() : ToolResult.error(refusal).toJson();
+        }
+        finally
+        {
+            BranchBindingLock.unlock();
+        }
+    }
+
+    private static String createBoundAttach(String projectName, String applicationId, String name, String alias, String url)
+    {
         ProjectResolution resolved = resolveOpenProject(projectName);
         if (resolved.error != null)
         {

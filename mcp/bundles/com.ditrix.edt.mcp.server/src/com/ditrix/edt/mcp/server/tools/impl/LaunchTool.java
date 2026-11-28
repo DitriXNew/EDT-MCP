@@ -53,6 +53,7 @@ import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils.LaunchOperation;
 import com.ditrix.edt.mcp.server.utils.LaunchUpdateDialogAutoConfirmer;
 import com.ditrix.edt.mcp.server.utils.McpJobs;
 import com.ditrix.edt.mcp.server.utils.PlatformFailures;
+import com.ditrix.edt.mcp.server.utils.BranchInfobaseBinding;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.git.BranchBindingLock;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
@@ -653,17 +654,10 @@ public class LaunchTool implements IMcpTool
         try
         {
             String projectName = config.getAttribute(LaunchConfigUtils.ATTR_PROJECT_NAME, ""); //$NON-NLS-1$
-            if (BranchBindingLock.inFlightAmong(List.of(projectName)) != null)
+            String branchTransition = BranchInfobaseBinding.attachBranchTransitionError(projectName, checkoutReloadCheck);
+            if (branchTransition != null)
             {
-                throw new CoreException(new Status(IStatus.ERROR, Activator.PLUGIN_ID,
-                    "Refusing Attach: a branch change is still running for project '" + projectName //$NON-NLS-1$
-                        + "'. Retry once it finishes.")); //$NON-NLS-1$
-            }
-            String reload = checkoutReloadCheck.apply(projectName);
-            if (reload != null)
-            {
-                throw new CoreException(new Status(IStatus.ERROR, Activator.PLUGIN_ID,
-                    "Refusing Attach: " + reload)); //$NON-NLS-1$
+                throw new CoreException(new Status(IStatus.ERROR, Activator.PLUGIN_ID, branchTransition));
             }
             String refusal = savedAttachBindingError(config, typeId, projectName, bindingCheck);
             if (refusal != null)

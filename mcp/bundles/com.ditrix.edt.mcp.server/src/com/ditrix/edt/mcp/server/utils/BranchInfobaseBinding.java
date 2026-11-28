@@ -13,6 +13,7 @@ import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.function.Function;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
@@ -26,6 +27,7 @@ import com._1c.g5.v8.dt.platform.services.model.FileConnectionString;
 import com._1c.g5.v8.dt.platform.services.model.IConnectionString;
 import com._1c.g5.v8.dt.platform.services.model.InfobaseReference;
 import com.ditrix.edt.mcp.server.Activator;
+import com.ditrix.edt.mcp.server.utils.git.BranchBindingLock;
 import com.e1c.g5.dt.applications.IApplication;
 
 /**
@@ -65,6 +67,18 @@ public final class BranchInfobaseBinding
     {
         return refusalOrNull(Activator.getDefault().getInfobaseAssociationManager(), project, application,
             applicationId);
+    }
+
+    /** Checks for a branch transition while the caller holds the shared checkout lock. */
+    public static String attachBranchTransitionError(String projectName, Function<String, String> checkoutReloadCheck)
+    {
+        if (BranchBindingLock.inFlightAmong(List.of(projectName)) != null)
+        {
+            return "Refusing Attach: a branch change is still running for project '" + projectName //$NON-NLS-1$
+                + "'. Retry once it finishes."; //$NON-NLS-1$
+        }
+        String reload = checkoutReloadCheck.apply(projectName);
+        return reload == null ? null : "Refusing Attach: " + reload; //$NON-NLS-1$
     }
 
     /** Checks the same branch binding for Attach and reports recovery supported by Attach. */

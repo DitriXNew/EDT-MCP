@@ -17,6 +17,7 @@ import java.util.Map;
 import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
+import com.ditrix.edt.mcp.server.utils.git.BranchBindingLock;
 
 /**
  * Tests for {@link CreateLaunchConfigTool}.
@@ -29,6 +30,25 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
  */
 public class CreateLaunchConfigToolTest
 {
+    @Test
+    public void attachCreationRefusesPendingReloadBeforeValidatingOrSaving()
+    {
+        String refusal = CreateLaunchConfigTool.withAttachCreationGuard("Project", project -> { //$NON-NLS-1$
+            assertEquals("Project", project); //$NON-NLS-1$
+            assertTrue(BranchBindingLock.isHeldByCurrentThread());
+            return "EDT is importing the branch."; //$NON-NLS-1$
+        }, () -> { throw new AssertionError("Attach creation must not run during a reload"); }); //$NON-NLS-1$
+        assertTrue(refusal, refusal.contains("Refusing Attach: EDT is importing the branch.")); //$NON-NLS-1$
+        assertFalse(BranchBindingLock.isHeldByCurrentThread());
+
+        String result = CreateLaunchConfigTool.withAttachCreationGuard("Project", project -> null, () -> { //$NON-NLS-1$
+            assertTrue(BranchBindingLock.isHeldByCurrentThread());
+            return "saved"; //$NON-NLS-1$
+        });
+        assertEquals("saved", result); //$NON-NLS-1$
+        assertFalse(BranchBindingLock.isHeldByCurrentThread());
+    }
+
     @Test
     public void acceptsNumericLoopbackSpellingsAndRejectsRemoteHosts()
     {
