@@ -7,6 +7,7 @@
 package com.ditrix.edt.mcp.server.tools.impl;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
@@ -16,6 +17,7 @@ import java.util.Map;
 import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
+import com.ditrix.edt.mcp.server.utils.git.BranchBindingLock;
 
 /**
  * Tests for {@link CreateLaunchConfigTool}.
@@ -28,6 +30,37 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
  */
 public class CreateLaunchConfigToolTest
 {
+    @Test
+    public void attachCreationRefusesPendingReloadBeforeValidatingOrSaving()
+    {
+        String refusal = CreateLaunchConfigTool.withAttachCreationGuard("Project", project -> { //$NON-NLS-1$
+            assertEquals("Project", project); //$NON-NLS-1$
+            assertTrue(BranchBindingLock.isHeldByCurrentThread());
+            return "EDT is importing the branch."; //$NON-NLS-1$
+        }, () -> { throw new AssertionError("Attach creation must not run during a reload"); }); //$NON-NLS-1$
+        assertTrue(refusal, refusal.contains("Refusing Attach: EDT is importing the branch.")); //$NON-NLS-1$
+        assertFalse(BranchBindingLock.isHeldByCurrentThread());
+
+        String result = CreateLaunchConfigTool.withAttachCreationGuard("Project", project -> null, () -> { //$NON-NLS-1$
+            assertTrue(BranchBindingLock.isHeldByCurrentThread());
+            return "saved"; //$NON-NLS-1$
+        });
+        assertEquals("saved", result); //$NON-NLS-1$
+        assertFalse(BranchBindingLock.isHeldByCurrentThread());
+    }
+
+    @Test
+    public void acceptsNumericLoopbackSpellingsAndRejectsRemoteHosts()
+    {
+        assertTrue(CreateLaunchConfigTool.validLocalDebugUrl("http://127.0.0.2:1550")); //$NON-NLS-1$
+        assertTrue(CreateLaunchConfigTool.validLocalDebugUrl("http://[0:0:0:0:0:0:0:1]:1550")); //$NON-NLS-1$
+        assertTrue(CreateLaunchConfigTool.validLocalDebugUrl("http://localhost:1550/")); //$NON-NLS-1$
+        assertFalse(CreateLaunchConfigTool.validLocalDebugUrl("http://128.0.0.2:1550")); //$NON-NLS-1$
+        assertFalse(CreateLaunchConfigTool.validLocalDebugUrl("http://[::2]:1550")); //$NON-NLS-1$
+        assertFalse(CreateLaunchConfigTool.validLocalDebugUrl("http://127.0.0.1.example.test:1550")); //$NON-NLS-1$
+        assertFalse(CreateLaunchConfigTool.validLocalDebugUrl("http://127.0.0.1:1550/?query")); //$NON-NLS-1$
+    }
+
     @Test
     public void testName()
     {
@@ -152,7 +185,7 @@ public class CreateLaunchConfigToolTest
         assertTrue("invalid clientType must be an error", result.contains("\"success\":false")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("error must name the bad value", result.contains("mobile")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("error must list the allowed kinds", //$NON-NLS-1$
-            result.contains("thin") && result.contains("thick") && result.contains("web")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            result.contains("Must be one of: thin, thick, web, attach.")); //$NON-NLS-1$
     }
 
     // ──────────────────────────────────────────────────────────────────────────

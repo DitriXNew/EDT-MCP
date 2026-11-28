@@ -327,3 +327,22 @@ def test_create_malformed_automated_testing_port_names_caller_value():
             {"automatedTestingMode": "TESTCLIENT", "automatedTestingPort": port},
             ["automatedTestingPort", "Invalid automatedTestingPort: '%s'." % raw],
             ["Use an integer from 1 to 65535", "TESTCLIENT"])
+
+
+@e2e_test(tool="create_launch_config", kind="action")
+def test_attach_requires_explicit_application_without_saving_configuration():
+    """Attach must never inherit the project's default runtime-client binding."""
+    name = "e2e_CreateLaunchConfigTest_InvalidAttach"
+    result = call("create_launch_config", {
+        "projectName": PROJECT,
+        "clientType": "attach",
+        "name": name,
+        "infobaseAlias": "Example",
+        "debugServerUrl": "http://127.0.0.1:1550",
+    })
+    error = assert_error(result, "Attach without an explicit application")
+    assert_error_quality(error, names=["applicationId"], ctx="Attach requires an explicit application")
+    listed = call("list_configurations", {"projectName": PROJECT, "type": "attach"})
+    assert_ok(listed, "Attach configurations after validation failure")
+    assert all(config.get("name") != name for config in listed.structured["configurations"])
+    assert_no_diff("Invalid Attach must not change project sources")

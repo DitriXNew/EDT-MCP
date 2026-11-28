@@ -115,6 +115,30 @@ public class BranchInfobaseBindingTest
     }
 
     @Test
+    public void attachMismatchAndUnreadableBindingGiveAttachRecovery()
+    {
+        var association = bound(ref("CurrentBase", UUID.randomUUID())); //$NON-NLS-1$
+        String mismatch = BranchInfobaseBinding.decide(association, ref("PreviousBase", UUID.randomUUID()), //$NON-NLS-1$
+            null, "Proj", "AttachApp", "id", (left, right) -> false, 250, true); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertTrue(mismatch, mismatch.contains("bound: CurrentBase")); //$NON-NLS-1$
+        assertAttachRecovery(mismatch);
+
+        IProject project = mock(IProject.class);
+        when(project.getName()).thenReturn("Proj"); //$NON-NLS-1$
+        String unreadable = BranchInfobaseBinding.refusalOrNull(null, project, mock(IApplication.class),
+            "id", true); //$NON-NLS-1$
+        assertTrue(unreadable, unreadable.contains("could not be read")); //$NON-NLS-1$
+        assertAttachRecovery(unreadable);
+    }
+
+    private static void assertAttachRecovery(String refusal)
+    {
+        assertTrue(refusal, refusal.startsWith("Refusing Attach:")); //$NON-NLS-1$
+        assertTrue(refusal, refusal.contains("use or create an Attach configuration")); //$NON-NLS-1$
+        assertTrue(refusal, !refusal.contains("ignoreBranchBinding")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testUnresolvableTargetUnderABindingIsRefused()
     {
         String refusal = BranchInfobaseBinding.decide(bound(ref("BranchB", UUID.randomUUID())), null, null, //$NON-NLS-1$

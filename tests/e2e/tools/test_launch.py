@@ -94,6 +94,14 @@ from harness import (
 
 
 @e2e_test(tool="launch", kind="read")
+def test_guide_explains_saved_remote_attach_binding_check():
+    r = call("get_tool_guide", {"toolName": "launch"})
+    assert_ok(r, "RemoteRuntime Attach binding guide")
+    assert "rechecks the saved infobase and debug alias" in r.text, r.text
+    assert "create a configuration for the current branch" in r.text, r.text
+
+
+@e2e_test(tool="launch", kind="read")
 def test_guide_refuses_launch_during_an_update():
     r = call("get_tool_guide", {"toolName": "launch"})
     assert_ok(r, "launch serialization guide")

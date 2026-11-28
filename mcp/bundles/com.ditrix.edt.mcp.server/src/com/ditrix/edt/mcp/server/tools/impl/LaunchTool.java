@@ -13,6 +13,7 @@ import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 import org.eclipse.core.resources.IProject;
@@ -52,7 +53,9 @@ import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils.LaunchOperation;
 import com.ditrix.edt.mcp.server.utils.LaunchUpdateDialogAutoConfirmer;
 import com.ditrix.edt.mcp.server.utils.McpJobs;
 import com.ditrix.edt.mcp.server.utils.PlatformFailures;
+import com.ditrix.edt.mcp.server.utils.BranchInfobaseBinding;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
+import com.ditrix.edt.mcp.server.utils.git.BranchBindingLock;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.ditrix.edt.mcp.server.utils.StandaloneServerPortConflictPolicy;
 import com.ditrix.edt.mcp.server.utils.StandaloneServerStateRecovery;
@@ -481,32 +484,11 @@ public class LaunchTool implements IMcpTool
                 return ToolResult.error(operation.error()).toJson();
             }
 
-            // Unified existing-session decision. One
-            // (project, app-id) → at most one live CLIENT session, with the
-            // CLIENT-typed-thread discriminator applied so a standalone-SERVER /
-            // profiling session sharing this app id — including a debug-mode server
-            // whose live thread is typed SERVER — NEVER short-circuits the client.
-            // Covers both a live DEBUG target and a debug-target-less RUN-mode launch
-            // (the legacy already-running guard). restartIfRunning is honored here exactly as in
-            // the target-manager path: false → alreadyRunning, true → non-interactive
-            // terminate + relaunch.
-            ExistingClientSession existingByName =
-                LaunchLifecycleUtils.resolveExistingClientSession(effectiveAppId);
-            if (existingByName != null)
+            String existingClientResult = handleExistingNamedClientSession(isAttach, effectiveAppId,
+                restartIfRunning, config, typeId, configProject, LaunchLifecycleUtils::resolveExistingClientSession);
+            if (existingClientResult != null)
             {
-                AlreadyRunningContext ctx = new AlreadyRunningContext(alreadyRunningMessage(existingByName.launch));
-                ctx.launchConfiguration = config.getName();
-                ctx.configurationType = typeId;
-                ctx.attach = Boolean.valueOf(isAttach);
-                ctx.project = configProject;
-                String shortCircuit = handleExistingClientSession(existingByName, effectiveAppId,
-                    restartIfRunning, ctx);
-                if (shortCircuit != null)
-                {
-                    return shortCircuit;
-                }
-                // restartIfRunning=true: the old client was terminated — fall through
-                // and relaunch.
+                return existingClientResult;
             }
 
             // Delegate-criterion duplicate guard. Runtime-client DEBUG
@@ -581,6 +563,113 @@ public class LaunchTool implements IMcpTool
         finally
         {
             if (operation != null) { operation.close(); }
+        }
+    }
+
+    /**
+     * Applies client restart policy only to runtime-client configurations. Attach configs may
+     * carry the same real application ID, but that ID is only their infobase identity here.
+     */
+    String handleExistingNamedClientSession(boolean attach, String applicationId, boolean restartIfRunning,
+        ILaunchConfiguration config, String typeId, String projectName,
+        Function<String, ExistingClientSession> lookup)
+    {
+        if (attach)
+        {
+            return null;
+        }
+        ExistingClientSession existing = lookup.apply(applicationId);
+        if (existing == null)
+        {
+            return null;
+        }
+        AlreadyRunningContext ctx = new AlreadyRunningContext(alreadyRunningMessage(existing.launch));
+        ctx.launchConfiguration = config.getName();
+        ctx.configurationType = typeId;
+        ctx.attach = Boolean.FALSE;
+        ctx.project = projectName;
+        return handleExistingClientSession(existing, applicationId, restartIfRunning, ctx);
+    }
+
+    @FunctionalInterface
+    interface AttachBindingCheck
+    {
+        String validate(String projectName, String applicationId, String alias);
+    }
+
+    static String savedAttachBindingError(ILaunchConfiguration config, String typeId, String projectName,
+        AttachBindingCheck bindingCheck) throws CoreException
+    {
+        if (!LaunchConfigUtils.TYPE_REMOTE_RUNTIME.equals(typeId))
+        {
+            return null;
+        }
+        String applicationId = config.getAttribute(LaunchConfigUtils.ATTR_APPLICATION_ID, (String) null);
+        if (applicationId == null || applicationId.isBlank())
+        {
+            // EDT can also create an unbound RemoteRuntime configuration.
+            return null;
+        }
+        if (projectName.isBlank())
+        {
+            return ToolResult.error("The bound Attach configuration has no EDT project. Recreate it for the current branch.").toJson();
+        }
+        String alias = config.getAttribute(LaunchConfigUtils.ATTR_DEBUG_INFOBASE_ALIAS, (String) null);
+        return bindingCheck.validate(projectName, applicationId, alias);
+    }
+
+    private static String validateSavedAttachBinding(String projectName, String applicationId, String alias)
+    {
+        IProject project = ProjectContext.of(projectName).project();
+        return project == null ? ToolResult.error(ProjectContext.notFoundMessage(projectName)).toJson()
+            : CreateLaunchConfigTool.validateAttachBinding(project, applicationId, alias);
+    }
+
+    @FunctionalInterface
+    interface LaunchDispatch
+    {
+        void run() throws CoreException;
+    }
+
+    // Validate at the dispatch boundary only: an earlier association lookup can see the previous
+    // branch while EDT imports the checked-out model.
+    static void dispatchWithAttachBinding(ILaunchConfiguration config, Function<String, String> checkoutReloadCheck,
+        AttachBindingCheck bindingCheck, LaunchDispatch dispatch) throws CoreException
+    {
+        String typeId = LaunchConfigUtils.getConfigTypeId(config);
+        String applicationId = LaunchConfigUtils.TYPE_REMOTE_RUNTIME.equals(typeId)
+            ? config.getAttribute(LaunchConfigUtils.ATTR_APPLICATION_ID, (String) null) : null;
+        if (applicationId == null || applicationId.isBlank())
+        {
+            dispatch.run();
+            return;
+        }
+
+        if (!BranchBindingLock.tryLock())
+        {
+            throw new CoreException(new Status(IStatus.ERROR, Activator.PLUGIN_ID,
+                "Refusing Attach: " + BranchBindingLock.busyReason())); //$NON-NLS-1$
+        }
+
+        try
+        {
+            String projectName = config.getAttribute(LaunchConfigUtils.ATTR_PROJECT_NAME, ""); //$NON-NLS-1$
+            String branchTransition = BranchInfobaseBinding.attachBranchTransitionError(projectName, checkoutReloadCheck);
+            if (branchTransition != null)
+            {
+                throw new CoreException(new Status(IStatus.ERROR, Activator.PLUGIN_ID, branchTransition));
+            }
+            String refusal = savedAttachBindingError(config, typeId, projectName, bindingCheck);
+            if (refusal != null)
+            {
+                String message = JsonParser.parseString(refusal).getAsJsonObject().get("error").getAsString(); //$NON-NLS-1$
+                throw new CoreException(new Status(IStatus.ERROR, Activator.PLUGIN_ID, message));
+            }
+            dispatch.run();
+        }
+        finally
+        {
+            BranchBindingLock.unlock();
         }
     }
 
@@ -2544,10 +2633,12 @@ public class LaunchTool implements IMcpTool
      * @return the names, never {@code null}; {@code inconclusive()} separates "no such name" from
      *     "the read did not answer"
      */
-    private static LaunchLifecycleUtils.AttributionNames launchAttributionNames(
-        ILaunchConfiguration config)
+    static LaunchLifecycleUtils.AttributionNames launchAttributionNames(ILaunchConfiguration config)
     {
-        if (config == null)
+        // Remote Attach does not update the infobase or start a server. Its application lookup
+        // belongs exclusively to the guarded dispatch, after the checkout reload check.
+        if (config == null
+            || LaunchConfigUtils.TYPE_REMOTE_RUNTIME.equals(LaunchConfigUtils.getConfigTypeId(config)))
         {
             return LaunchLifecycleUtils.attributionNames(null, null, null);
         }
@@ -2757,7 +2848,9 @@ public class LaunchTool implements IMcpTool
         InfobaseAuthDialogSuppressor.markActivityStart();
         try
         {
-            recordFinishedLaunch(StandaloneServerStateRecovery.launchWithRecovery(config, launchMode, null));
+            dispatchWithAttachBinding(config, ProjectStateChecker::checkoutReloadErrorOrNull,
+                LaunchTool::validateSavedAttachBinding,
+                () -> recordFinishedLaunch(StandaloneServerStateRecovery.launchWithRecovery(config, launchMode, null)));
             return null;
         }
         catch (CoreException e)
@@ -2913,8 +3006,10 @@ public class LaunchTool implements IMcpTool
         java.util.List<org.eclipse.debug.core.ILaunch> started = new java.util.ArrayList<>();
         try
         {
-            StandaloneServerStateRecovery.launchWithRecovery(config, launchMode, monitor,
-                () -> abandonedLaunchMessage(config.getName(), abortReason.reason()), started::add);
+            dispatchWithAttachBinding(config, ProjectStateChecker::checkoutReloadErrorOrNull,
+                LaunchTool::validateSavedAttachBinding,
+                () -> StandaloneServerStateRecovery.launchWithRecovery(config, launchMode, monitor,
+                    () -> abandonedLaunchMessage(config.getName(), abortReason.reason()), started::add));
             String declined = declinedConflictMessage(launchPolicy, conflicts);
             if (declined != null)
             {

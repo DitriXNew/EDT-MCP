@@ -925,7 +925,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Configure an EDT runtime client for launching a 1C application. Parameters and examples: get_tool_guide('create_launch_config').",
+    "description": "Configure an EDT runtime client or attach to an existing 1C debug server. Parameters and examples: get_tool_guide('create_launch_config').",
     "inputSchema": {
       "properties": {
         "applicationId": {
@@ -945,8 +945,15 @@
           "enum": [
             "thin",
             "thick",
-            "web"
+            "web",
+            "attach"
           ],
+          "type": "string"
+        },
+        "debugServerUrl": {
+          "type": "string"
+        },
+        "infobaseAlias": {
           "type": "string"
         },
         "name": {
@@ -981,6 +988,12 @@
           "type": "integer"
         },
         "clientType": {
+          "type": "string"
+        },
+        "debugServerUrl": {
+          "type": "string"
+        },
+        "infobaseAlias": {
           "type": "string"
         },
         "message": {

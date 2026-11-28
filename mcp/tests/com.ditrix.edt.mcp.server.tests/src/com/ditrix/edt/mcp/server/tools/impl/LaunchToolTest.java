@@ -32,6 +32,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -68,6 +69,7 @@ import com.ditrix.edt.mcp.server.utils.BoundedJob;
 import com.ditrix.edt.mcp.server.utils.ExternalInfobaseChangesPolicy;
 import com.ditrix.edt.mcp.server.utils.InfobaseAuthDialogSuppressor;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
+import com.ditrix.edt.mcp.server.utils.git.BranchBindingLock;
 import com.ditrix.edt.mcp.server.utils.LaunchOverrides;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils.ExistingClientSession;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils;
@@ -101,6 +103,108 @@ import com.google.gson.JsonParser;
  */
 public class LaunchToolTest
 {
+    @Test
+    public void remoteAttachSkipsInfobaseAttributionBeforeGuardedDispatch() throws Exception
+    {
+        ILaunchConfiguration config = mock(ILaunchConfiguration.class);
+        ILaunchConfigurationType type = mock(ILaunchConfigurationType.class);
+        when(type.getIdentifier()).thenReturn(LaunchConfigUtils.TYPE_REMOTE_RUNTIME);
+        when(config.getType()).thenReturn(type);
+
+        LaunchLifecycleUtils.AttributionNames names = LaunchTool.launchAttributionNames(config);
+
+        assertNull(names.infobaseName());
+        assertNull(names.serverName());
+        verify(config, never()).getAttribute(eq(LaunchConfigUtils.ATTR_PROJECT_NAME), anyString());
+    }
+
+    @Test
+    public void boundRemoteAttachRevalidatesUnderTheCheckoutLockAtDispatch() throws Exception
+    {
+        ILaunchConfiguration config = mock(ILaunchConfiguration.class);
+        ILaunchConfigurationType type = mock(ILaunchConfigurationType.class);
+        when(type.getIdentifier()).thenReturn(LaunchConfigUtils.TYPE_REMOTE_RUNTIME);
+        when(config.getType()).thenReturn(type);
+        when(config.getAttribute(LaunchConfigUtils.ATTR_APPLICATION_ID, (String) null))
+            .thenReturn("bound"); //$NON-NLS-1$
+        when(config.getAttribute(LaunchConfigUtils.ATTR_PROJECT_NAME, "")).thenReturn("Project"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        LaunchTool.dispatchWithAttachBinding(config, project -> null, (project, app, alias) -> {
+            assertTrue(BranchBindingLock.isHeldByCurrentThread());
+            return null;
+        }, () -> assertTrue(BranchBindingLock.isHeldByCurrentThread()));
+        assertFalse(BranchBindingLock.isHeldByCurrentThread());
+
+        CoreException failure = org.junit.Assert.assertThrows(CoreException.class,
+            () -> LaunchTool.dispatchWithAttachBinding(config, project -> null, (project, app, alias) ->
+                "{\"success\":false,\"error\":\"Branch changed before dispatch\"}", //$NON-NLS-1$
+                () -> { throw new AssertionError("Refused Attach must not dispatch"); })); //$NON-NLS-1$
+        assertEquals("Branch changed before dispatch", failure.getStatus().getMessage()); //$NON-NLS-1$
+        assertFalse(BranchBindingLock.isHeldByCurrentThread());
+
+        CoreException reloadFailure = org.junit.Assert.assertThrows(CoreException.class,
+            () -> LaunchTool.dispatchWithAttachBinding(config, project -> {
+                assertEquals("Project", project); //$NON-NLS-1$
+                assertTrue(BranchBindingLock.isHeldByCurrentThread());
+                return "EDT is importing the checked-out branch."; //$NON-NLS-1$
+            }, (project, app, alias) -> {
+                throw new AssertionError("A pending reload must be refused before reading the binding"); //$NON-NLS-1$
+            }, () -> {
+                throw new AssertionError("A pending reload must be refused before dispatch"); //$NON-NLS-1$
+            }));
+        assertEquals("Refusing Attach: EDT is importing the checked-out branch.", //$NON-NLS-1$
+            reloadFailure.getStatus().getMessage());
+        assertFalse(BranchBindingLock.isHeldByCurrentThread());
+    }
+
+    @Test
+    public void savedAttachRefusesMissingAndClosedProjectHandlesBeforeResolvingApplication()
+    {
+        IProject project = mock(IProject.class);
+        when(project.getName()).thenReturn("SavedProject"); //$NON-NLS-1$
+        String applicationId = "34567890-1234-4567-89ab-0123456789ab"; //$NON-NLS-1$
+        String alias = "base"; //$NON-NLS-1$
+
+        String missing = CreateLaunchConfigTool.validateAttachBinding(project, applicationId, alias);
+        assertTrue(missing, missing.contains("Project not found: SavedProject")); //$NON-NLS-1$
+        verify(project, never()).isOpen();
+
+        when(project.exists()).thenReturn(true);
+        String closed = CreateLaunchConfigTool.validateAttachBinding(project, applicationId, alias);
+        assertTrue(closed, closed.contains("Project is closed: SavedProject")); //$NON-NLS-1$
+        assertTrue(closed, closed.contains("Open the project first")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void boundRemoteAttachRevalidatesSavedApplicationAndAliasBeforeLaunch() throws Exception
+    {
+        ILaunchConfiguration config = mock(ILaunchConfiguration.class);
+        when(config.getAttribute(LaunchConfigUtils.ATTR_APPLICATION_ID, (String) null))
+            .thenReturn("previous-branch-id"); //$NON-NLS-1$
+        when(config.getAttribute(LaunchConfigUtils.ATTR_DEBUG_INFOBASE_ALIAS, (String) null))
+            .thenReturn("previous-alias"); //$NON-NLS-1$
+        String refusal = LaunchTool.savedAttachBindingError(config, LaunchConfigUtils.TYPE_REMOTE_RUNTIME,
+            "Project", (project, appId, alias) -> { //$NON-NLS-1$
+                assertEquals("Project", project); //$NON-NLS-1$
+                assertEquals("previous-branch-id", appId); //$NON-NLS-1$
+                assertEquals("previous-alias", alias); //$NON-NLS-1$
+                return "Application belongs to another branch"; //$NON-NLS-1$
+            });
+        assertEquals("Application belongs to another branch", refusal); //$NON-NLS-1$
+        assertNull(LaunchTool.savedAttachBindingError(config, LaunchConfigUtils.TYPE_REMOTE_RUNTIME,
+            "Project", (project, appId, alias) -> null)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void unboundRemoteAttachKeepsTheNativeEdtLaunchPath() throws Exception
+    {
+        ILaunchConfiguration config = mock(ILaunchConfiguration.class);
+        assertNull(LaunchTool.savedAttachBindingError(config, LaunchConfigUtils.TYPE_REMOTE_RUNTIME,
+            "Project", (project, appId, alias) -> { //$NON-NLS-1$
+                throw new AssertionError("An unbound configuration has no application to revalidate"); //$NON-NLS-1$
+            }));
+    }
+
     private static ILaunchConfiguration lockedLaunchConfig(String project, String application) throws Exception
     {
         ILaunchConfiguration config = mock(ILaunchConfiguration.class);
@@ -2106,6 +2210,33 @@ public class LaunchToolTest
         assertNull("restartIfRunning=true must proceed to relaunch (null), not short-circuit",
             result);
         verify(client, times(1)).terminate();
+    }
+
+    @Test
+    public void namedAttachDoesNotShortCircuitOrTerminateRunningClient() throws Exception
+    {
+        ILaunch runningClient = mock(ILaunch.class);
+        IDebugTarget debugClient = targetWithThreads(liveThread());
+        ILaunchConfiguration attachConfig = mock(ILaunchConfiguration.class);
+        ExistingClientSession run = new ExistingClientSession(runningClient, null, "run"); //$NON-NLS-1$
+        ExistingClientSession debug = new ExistingClientSession(runningClient, debugClient, "debug"); //$NON-NLS-1$
+        LaunchTool tool = new LaunchTool();
+        for (ExistingClientSession session : List.of(run, debug))
+        {
+            for (boolean restart : new boolean[] {false, true})
+            {
+                AtomicBoolean lookedUp = new AtomicBoolean();
+                assertNull(tool.handleExistingNamedClientSession(true, "app-3", restart, attachConfig, //$NON-NLS-1$
+                    "com._1c.g5.v8.dt.debug.core.RemoteRuntime", "MyProject", appId -> //$NON-NLS-1$ //$NON-NLS-2$
+                    {
+                        lookedUp.set(true);
+                        return session;
+                    }));
+                assertFalse("Attach must bypass runtime-client lookup", lookedUp.get()); //$NON-NLS-1$
+            }
+        }
+        verify(runningClient, never()).terminate();
+        verify(debugClient, never()).terminate();
     }
 
     @Test

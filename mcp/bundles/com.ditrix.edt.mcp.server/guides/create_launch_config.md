@@ -1,4 +1,14 @@
-Creates a 1C:EDT runtime-client launch configuration (thin / thick / web client) and persists it in the workspace metadata. The configuration is immediately visible in `list_configurations` and usable by `launch`, `run_yaxunit_tests`, and `update_database`.
+Creates a 1C:EDT runtime-client launch configuration (thin / thick / web client) and persists it in the workspace metadata. The configuration is immediately visible in `list_configurations` and usable by `launch`. Runtime-client configurations can also be used by `run_yaxunit_tests` and `update_database`.
+
+## Attach to an existing debug server
+
+Use `clientType: "attach"` with an explicit `name`, `projectName`, and the real
+`applicationId` of the current branch. Pass its exact `infobaseAlias` and
+`debugServerUrl` (loopback HTTP with an explicit port). The tool saves a
+`RemoteRuntime` configuration. Call `launch` with its returned name and
+`mode: "debug"` to connect EDT without starting or terminating a 1C client.
+Check `debug_status` and identify the intended thread before resuming it.
+Automated testing options are only for runtime-client configurations.
 
 ## Run vs debug — one config, two modes
 
@@ -7,14 +17,14 @@ There is **no separate debug configuration type** for a runtime client. The same
 - `launch({launchConfigurationName: "<name>"})` — launches and attaches the debugger.
 - `run_yaxunit_tests({launchConfigurationName: "<name>"})` — runs YAXUnit tests.
 
-Run mode vs debug mode is chosen at launch time (the mode string), never a different config or attribute. Attach-to-server configs (`RemoteRuntime` / `LocalRuntime`) are a different feature and are out of scope here.
+Run mode vs debug mode is chosen at launch time (the mode string), never a different config or attribute. Attach-to-server configs (`RemoteRuntime` / `LocalRuntime`) connect EDT to the debug server separately from runtime-client launches.
 
 ## Parameter details
 
 - **projectName** (required): must be a V8 **configuration** project (V8ConfigurationNature). Extension projects, dictionary storage projects, and external-objects projects are rejected — a runtime client targets a configuration. Use `list_projects` to discover available projects and their type.
-- **clientType** (enum, default `thin`): `thin` / `thick` / `web`. Determines which 1C:Enterprise client executable is launched. Web client configs additionally require a published PWA/web application on the infobase, which is outside the scope of this tool.
-- **name** (optional): exact name for the new config. If omitted a unique name is generated: `<Project> Thin|Thick|Web Client` (uniquified if a conflict exists). If a config with the supplied name already exists the call is rejected — use `list_configurations` to check.
-- **applicationId** (optional): the infobase/application ID from `get_applications`. If omitted the project's **default application** is resolved automatically. If the project has no applications the call is rejected with a hint to create an infobase first.
+- **clientType** (enum, default `thin`): `thin` / `thick` / `web` / `attach`. For runtime clients, determines which 1C:Enterprise client executable is launched. Web client configs additionally require a published PWA/web application on the infobase, which is outside the scope of this tool.
+- **name** (optional): exact name for the new config. Required for Attach. Otherwise, if omitted a unique name is generated: `<Project> Thin|Thick|Web Client` (uniquified if a conflict exists). If a config with the supplied name already exists the call is rejected — use `list_configurations` to check.
+- **applicationId** (optional): the infobase/application ID from `get_applications`. Required for Attach. For a runtime client, omitting it selects the project's **default application**. If the project has no applications the call is rejected with a hint to create an infobase first.
 
 ## Automated testing
 
@@ -42,7 +52,7 @@ but cannot clear it. To clear a saved mode, delete and recreate the configuratio
 
 ## Why applicationId is required (internal)
 
-The tool always writes a real `applicationId` so `list_configurations` shows it with the real id (not the synthetic `launch:<name>` fallback), and so `launch` / `run_yaxunit_tests` can resolve the config by `projectName + applicationId` without an "Application not found" error.
+The saved `applicationId` is the infobase binding. Runtime-client configurations use it for selection by `projectName + applicationId`. Attach configurations use `attach:<name>` in `list_configurations` and debug tools, so a runtime client bound to the same infobase has independent debugger state.
 
 ## Result
 

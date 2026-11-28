@@ -6,7 +6,13 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import java.net.InetAddress;
+import java.net.URI;
+import java.net.UnknownHostException;
 import java.util.Map;
+import java.util.UUID;
+import java.util.function.Function;
+import java.util.function.Supplier;
 import java.util.Optional;
 
 import org.eclipse.core.resources.IProject;
@@ -16,6 +22,7 @@ import org.eclipse.debug.core.ILaunchConfigurationType;
 import org.eclipse.debug.core.ILaunchConfigurationWorkingCopy;
 import org.eclipse.debug.core.ILaunchManager;
 
+import com._1c.g5.v8.dt.platform.services.core.infobases.InfobaseReferences;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
@@ -23,9 +30,13 @@ import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.ApplicationSupport;
+import com.ditrix.edt.mcp.server.utils.BranchInfobaseBinding;
+import com.ditrix.edt.mcp.server.utils.InfobaseAccessSupport;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
 import com.ditrix.edt.mcp.server.utils.LaunchOverrides;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
+import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
+import com.ditrix.edt.mcp.server.utils.git.BranchBindingLock;
 import com.e1c.g5.dt.applications.ApplicationException;
 import com.e1c.g5.dt.applications.IApplication;
 import com.e1c.g5.dt.applications.IApplicationManager;
@@ -37,7 +48,7 @@ import com.e1c.g5.dt.applications.IApplicationManager;
  * <em>mode string</em> passed to {@code launch} / {@code run_yaxunit_tests}, never a
  * different config type or attribute. There is therefore no separate "debug configuration" type —
  * this one tool covers all launch / debug use-cases for runtime clients. (Attach-to-server configs
- * such as RemoteRuntime / LocalRuntime are a separate feature and are out of scope v1.)
+ * can also be created explicitly with clientType=attach.)
  *
  * <p>The created config carries a real {@code ATTR_APPLICATION_ID} (resolved from
  * {@link IApplicationManager} if the caller omits it) so it round-trips through
@@ -126,7 +137,7 @@ public class CreateLaunchConfigTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Configure an EDT runtime client for launching a 1C application. Parameters and examples: " //$NON-NLS-1$
+        return "Configure an EDT runtime client or attach to an existing 1C debug server. Parameters and examples: " //$NON-NLS-1$
             + "get_tool_guide('create_launch_config')."; //$NON-NLS-1$
     }
 
@@ -139,8 +150,10 @@ public class CreateLaunchConfigTool implements IMcpTool
                 + "Use list_projects to discover available projects.", //$NON-NLS-1$
                 true)
             .enumProperty(KEY_CLIENT_TYPE,
-                "Client kind: thin (default), thick, or web.", //$NON-NLS-1$
-                "thin", KEY_THICK, "web") //$NON-NLS-1$ //$NON-NLS-2$
+                "Client kind: thin (default), thick, web, or attach.", //$NON-NLS-1$
+                "thin", KEY_THICK, "web", "attach") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("debugServerUrl", "Explicit local HTTP debug server URL for attach.")
+            .stringProperty("infobaseAlias", "Exact debug alias of the selected infobase for attach.")
             .stringProperty("name", //$NON-NLS-1$
                 "Config name; default '<Project> Thin|Thick|Web Client', uniquified. " //$NON-NLS-1$
                 + "If a config with this name already exists the call is rejected.") //$NON-NLS-1$
@@ -165,7 +178,9 @@ public class CreateLaunchConfigTool implements IMcpTool
             .stringProperty("action", "Always 'created' on success.") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("name", "Exact name of the created launch configuration.") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("project", "Project the configuration targets.") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty(KEY_CLIENT_TYPE, "Client kind: thin, thick, or web.") //$NON-NLS-1$
+            .stringProperty(KEY_CLIENT_TYPE, "Client kind: thin, thick, web, or attach.")
+            .stringProperty("debugServerUrl", "Saved debug server URL for attach.")
+            .stringProperty("infobaseAlias", "Saved infobase debug alias for attach.") //$NON-NLS-1$
             .stringProperty(McpKeys.APPLICATION_ID,
                 "Application ID stored in the config (real IApplicationManager id).") //$NON-NLS-1$
             .stringProperty("type", "Launch configuration type id.") //$NON-NLS-1$ //$NON-NLS-2$
@@ -200,6 +215,14 @@ public class CreateLaunchConfigTool implements IMcpTool
         String clientTypeParam = JsonUtils.extractStringArgument(params, KEY_CLIENT_TYPE);
         String nameParam = JsonUtils.extractStringArgument(params, "name"); //$NON-NLS-1$
         String applicationIdParam = JsonUtils.extractStringArgument(params, McpKeys.APPLICATION_ID);
+        if ("attach".equalsIgnoreCase(clientTypeParam))
+        {
+            return createAttach(params, projectName, applicationIdParam, nameParam);
+        }
+        if (params.containsKey("debugServerUrl") || params.containsKey("infobaseAlias"))
+        {
+            return ToolResult.error("debugServerUrl and infobaseAlias require clientType=attach.").toJson();
+        }
         String automatedTestingPortInput = JsonUtils.extractStringArgument(params, KEY_AUTOMATED_TESTING_PORT);
         LaunchOverrides testingOverrides = LaunchOverrides.of(null, null, null,
             JsonUtils.extractStringArgument(params, KEY_AUTOMATED_TESTING_MODE),
@@ -312,6 +335,189 @@ public class CreateLaunchConfigTool implements IMcpTool
         }
     }
 
+    private static String createAttach(Map<String, String> params, String projectName,
+        String applicationId, String name)
+    {
+        if (applicationId == null || name == null || name.isBlank()
+            || params.containsKey(KEY_AUTOMATED_TESTING_MODE) || params.containsKey(KEY_AUTOMATED_TESTING_PORT))
+        {
+            return ToolResult.error("Attach requires explicit name and applicationId and accepts no testing options.").toJson();
+        }
+        String alias = JsonUtils.extractStringArgument(params, "infobaseAlias");
+        String url = JsonUtils.extractStringArgument(params, "debugServerUrl");
+        if (alias == null || alias.isBlank() || !validLocalDebugUrl(url))
+        {
+            return ToolResult.error("Attach requires infobaseAlias and a loopback HTTP debug server URL with an explicit port.").toJson();
+        }
+        return withAttachCreationGuard(projectName, ProjectStateChecker::checkoutReloadErrorOrNull,
+            () -> createBoundAttach(projectName, applicationId, name, alias, url));
+    }
+
+    static String withAttachCreationGuard(String projectName, Function<String, String> checkoutReloadCheck,
+        Supplier<String> create)
+    {
+        if (!BranchBindingLock.tryLock())
+        {
+            return ToolResult.error("Refusing Attach: " + BranchBindingLock.busyReason()).toJson(); //$NON-NLS-1$
+        }
+        try
+        {
+            String refusal = BranchInfobaseBinding.attachBranchTransitionError(projectName, checkoutReloadCheck);
+            return refusal == null ? create.get() : ToolResult.error(refusal).toJson();
+        }
+        finally
+        {
+            BranchBindingLock.unlock();
+        }
+    }
+
+    private static String createBoundAttach(String projectName, String applicationId, String name, String alias, String url)
+    {
+        ProjectResolution resolved = resolveOpenProject(projectName);
+        if (resolved.error != null)
+        {
+            return resolved.error;
+        }
+        String natureError = checkConfigurationNature(resolved.project, projectName);
+        if (natureError != null)
+        {
+            return natureError;
+        }
+        String bindingError = validateAttachBinding(resolved.project, applicationId, alias);
+        if (bindingError != null)
+        {
+            return bindingError;
+        }
+        ILaunchManager manager = LaunchConfigUtils.getLaunchManager();
+        ILaunchConfigurationType type = manager == null ? null
+            : manager.getLaunchConfigurationType(LaunchConfigUtils.TYPE_REMOTE_RUNTIME);
+        if (type == null)
+        {
+            return ToolResult.error("EDT RemoteRuntime configuration type is unavailable.").toJson();
+        }
+        synchronized (CreateLaunchConfigTool.class)
+        {
+            NameResolution resolvedName = resolveEffectiveName(manager, name, projectName, "Attach");
+            if (resolvedName.error != null)
+            {
+                return resolvedName.error;
+            }
+            try
+            {
+                ILaunchConfigurationWorkingCopy wc = type.newInstance(null, resolvedName.name);
+                wc.setAttribute(LaunchConfigUtils.ATTR_PROJECT_NAME, projectName);
+                wc.setAttribute(LaunchConfigUtils.ATTR_APPLICATION_ID, applicationId);
+                wc.setAttribute(LaunchConfigUtils.ATTR_DEBUG_INFOBASE_ALIAS, alias);
+                wc.setAttribute(LaunchConfigUtils.ATTR_DEBUG_SERVER_URL, url);
+                wc.setMappedResources(new IProject[] {resolved.project});
+                ILaunchConfiguration saved = wc.doSave();
+                return ToolResult.success().put("action", "created").put("name", saved.getName())
+                    .put("project", projectName).put(McpKeys.APPLICATION_ID, applicationId)
+                    .put(KEY_CLIENT_TYPE, "attach").put("type", LaunchConfigUtils.TYPE_REMOTE_RUNTIME)
+                    .put("infobaseAlias", alias).put("debugServerUrl", url).toJson();
+            }
+            catch (CoreException e)
+            {
+                Activator.logError("Error creating Attach configuration", e);
+                return ToolResult.error("Failed to create Attach configuration: " + e.getMessage()).toJson();
+            }
+        }
+    }
+
+    /** Checks the infobase selected by both a new and a saved RemoteRuntime Attach configuration. */
+    static String validateAttachBinding(IProject project, String applicationId, String alias)
+    {
+        String projectName = project.getName();
+        if (!project.exists())
+        {
+            return ToolResult.error(ProjectContext.notFoundMessage(projectName)).toJson();
+        }
+        if (!project.isOpen())
+        {
+            return ToolResult.error("Project is closed: " + projectName //$NON-NLS-1$
+                + ". Open the project first.").toJson(); //$NON-NLS-1$
+        }
+        try
+        {
+            UUID.fromString(applicationId);
+        }
+        catch (IllegalArgumentException e)
+        {
+            return ToolResult.error("Attach requires the real infobase application UUID.").toJson();
+        }
+        IApplicationManager applicationManager = Activator.getDefault().getApplicationManager();
+        if (applicationManager == null)
+        {
+            return ToolResult.error(ApplicationSupport.MANAGER_UNAVAILABLE).toJson();
+        }
+        var lookup = ApplicationSupport.getApplicationBounded(applicationManager, project,
+            applicationId, ApplicationSupport.LOOKUP_TIMEOUT_MS);
+        if (!lookup.concluded())
+        {
+            return ToolResult.error("Attach application lookup did not complete: " + lookup.deadlineFailure()).toJson();
+        }
+        try
+        {
+            Optional<IApplication> application = lookup.valueOrRethrow();
+            if (application.isEmpty())
+            {
+                return buildAppNotFoundError(project.getName(), applicationId);
+            }
+            String refusal = BranchInfobaseBinding.attachRefusalOrNull(project, application.get(), applicationId);
+            if (refusal != null)
+            {
+                return ToolResult.error(refusal).toJson();
+            }
+            var infobase = InfobaseAccessSupport.resolveInfobaseReference(application.get());
+            if (infobase == null || alias == null || !alias.equals(InfobaseReferences.getAlias(infobase)))
+            {
+                return ToolResult.error("The Attach debug alias does not match the selected application. Check the current branch binding and recreate the configuration.").toJson();
+            }
+        }
+        catch (ApplicationException e)
+        {
+            Activator.logError("Error resolving the Attach application", e);
+            return ToolResult.error("Could not resolve the selected Attach application.").toJson();
+        }
+        return null;
+    }
+
+    static boolean validLocalDebugUrl(String url)
+    {
+        if (url == null)
+        {
+            return false;
+        }
+        try
+        {
+            URI uri = URI.create(url);
+            String host = uri.getHost();
+            String path = uri.getRawPath();
+            return "http".equalsIgnoreCase(uri.getScheme())
+                && uri.getPort() > 0 && uri.getPort() <= 65535
+                && uri.getRawUserInfo() == null && uri.getRawQuery() == null && uri.getRawFragment() == null
+                && ("".equals(path) || "/".equals(path))
+                && isDebugLoopbackHost(host);
+        }
+        catch (IllegalArgumentException | UnknownHostException e)
+        {
+            return false;
+        }
+    }
+
+    private static boolean isDebugLoopbackHost(String host) throws UnknownHostException
+    {
+        if ("localhost".equalsIgnoreCase(host)) //$NON-NLS-1$
+        {
+            return true;
+        }
+        // URI accepts brackets only for IPv6 literals. Limit IPv4 to dotted decimal and
+        // exclude IPv6 zone ids so only numeric addresses reach getByName, without DNS.
+        return host != null && (host.matches("[0-9]{1,3}(?:\\.[0-9]{1,3}){3}") //$NON-NLS-1$
+            || (host.startsWith("[") && host.indexOf('%') < 0)) //$NON-NLS-1$
+            && InetAddress.getByName(host).isLoopbackAddress();
+    }
+
     // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------
@@ -333,7 +539,7 @@ public class CreateLaunchConfigTool implements IMcpTool
         if (componentTypeId == null)
         {
             return ClientTypeResolution.error(ToolResult.error("Invalid clientType: '" + clientType //$NON-NLS-1$
-                + "'. Must be one of: thin, thick, web.").toJson()); //$NON-NLS-1$
+                + "'. Must be one of: thin, thick, web, attach.").toJson()); //$NON-NLS-1$
         }
         return ClientTypeResolution.of(clientType, componentTypeId, clientLabelFor(clientType));
     }

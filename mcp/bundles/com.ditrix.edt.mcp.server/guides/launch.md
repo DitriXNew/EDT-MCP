@@ -94,7 +94,7 @@ The tool refuses missing objects, the wrong project nature, or disabled external
 
 ## Already-running guard
 
-If a live CLIENT session of the same configuration/application exists — including a RUN-mode launch with no debug target, and a debug client EDT tracks only through its debug target manager (started from EDT's UI, or from a configuration without an application id) — the tool returns `alreadyRunning: true` with a `mode` and starts nothing, instead of letting EDT raise its blocking 'Debug session already exists' (code 1003) modal. For a fresh session pass `restartIfRunning=true`, or call `terminate_launch` first.
+If a live CLIENT session of the same configuration/application exists — including a RUN-mode launch with no debug target, and a debug client EDT tracks only through its debug target manager (started from EDT's UI, or from a configuration without an application id) — the tool returns `alreadyRunning: true` with a `mode` and starts nothing, instead of letting EDT raise its blocking 'Debug session already exists' (code 1003) modal. For a fresh runtime-client session pass `restartIfRunning=true`, or call `terminate_launch` first. Attach bypasses this guard and leaves existing clients running, including when `restartIfRunning=true`.
 
 Only CLIENT-typed sessions count. A standalone-server debug session shares its clients' application id, so it is told apart by the type of its live threads (`IRuntimeDebugTargetThread.getType()`, classified by EDT's `DebugTargetTypeUtil`): a thread typed SERVER (shown as «Сервер») is not a client; unknown types count as client; a target with no live thread is not a client. So launching a client WHILE a debug-server of the same application runs is allowed: it attaches to that server, which is never restarted or terminated.
 
@@ -119,7 +119,7 @@ If the 1003 modal still appears in a debug launch (a race with a second client),
 
 ## Gotchas
 
-- Attach is reachable ONLY via launchConfigurationName; projectName+applicationId never starts an Attach session.
+- Select Attach by `launchConfigurationName`. The returned `applicationId` is `attach:<name>` for use in debug tools. For a bound RemoteRuntime Attach configuration, EDT MCP rechecks the saved infobase and debug alias against the current project before connecting. If the binding changed, create a configuration for the current branch.
 - Attach configurations support only `mode="debug"`; `mode="run"` is rejected before launch.
 - `alreadyRunning: true` is a success, not an error — don't retry it; terminate first if you truly need a fresh session.
 - `updateBeforeLaunch` has no effect on Attach configs.
