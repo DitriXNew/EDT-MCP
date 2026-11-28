@@ -104,6 +104,21 @@ import com.google.gson.JsonParser;
 public class LaunchToolTest
 {
     @Test
+    public void remoteAttachSkipsInfobaseAttributionBeforeGuardedDispatch() throws Exception
+    {
+        ILaunchConfiguration config = mock(ILaunchConfiguration.class);
+        ILaunchConfigurationType type = mock(ILaunchConfigurationType.class);
+        when(type.getIdentifier()).thenReturn(LaunchConfigUtils.TYPE_REMOTE_RUNTIME);
+        when(config.getType()).thenReturn(type);
+
+        LaunchLifecycleUtils.AttributionNames names = LaunchTool.launchAttributionNames(config);
+
+        assertNull(names.infobaseName());
+        assertNull(names.serverName());
+        verify(config, never()).getAttribute(eq(LaunchConfigUtils.ATTR_PROJECT_NAME), anyString());
+    }
+
+    @Test
     public void boundRemoteAttachRevalidatesUnderTheCheckoutLockAtDispatch() throws Exception
     {
         ILaunchConfiguration config = mock(ILaunchConfiguration.class);

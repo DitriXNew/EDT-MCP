@@ -2639,10 +2639,12 @@ public class LaunchTool implements IMcpTool
      * @return the names, never {@code null}; {@code inconclusive()} separates "no such name" from
      *     "the read did not answer"
      */
-    private static LaunchLifecycleUtils.AttributionNames launchAttributionNames(
-        ILaunchConfiguration config)
+    static LaunchLifecycleUtils.AttributionNames launchAttributionNames(ILaunchConfiguration config)
     {
-        if (config == null)
+        // Remote Attach does not update the infobase or start a server. Its application lookup
+        // belongs exclusively to the guarded dispatch, after the checkout reload check.
+        if (config == null
+            || LaunchConfigUtils.TYPE_REMOTE_RUNTIME.equals(LaunchConfigUtils.getConfigTypeId(config)))
         {
             return LaunchLifecycleUtils.attributionNames(null, null, null);
         }
