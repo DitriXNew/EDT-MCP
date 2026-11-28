@@ -637,8 +637,8 @@ public class LaunchTool implements IMcpTool
         void run() throws CoreException;
     }
 
-    static void dispatchWithAttachBinding(ILaunchConfiguration config, AttachBindingCheck bindingCheck,
-        LaunchDispatch dispatch) throws CoreException
+    static void dispatchWithAttachBinding(ILaunchConfiguration config, Function<String, String> checkoutReloadCheck,
+        AttachBindingCheck bindingCheck, LaunchDispatch dispatch) throws CoreException
     {
         String typeId = LaunchConfigUtils.getConfigTypeId(config);
         String applicationId = LaunchConfigUtils.TYPE_REMOTE_RUNTIME.equals(typeId)
@@ -663,6 +663,12 @@ public class LaunchTool implements IMcpTool
                 throw new CoreException(new Status(IStatus.ERROR, Activator.PLUGIN_ID,
                     "Refusing Attach: a branch change is still running for project '" + projectName //$NON-NLS-1$
                         + "'. Retry once it finishes.")); //$NON-NLS-1$
+            }
+            String reload = checkoutReloadCheck.apply(projectName);
+            if (reload != null)
+            {
+                throw new CoreException(new Status(IStatus.ERROR, Activator.PLUGIN_ID,
+                    "Refusing Attach: " + reload)); //$NON-NLS-1$
             }
             String refusal = savedAttachBindingError(config, typeId, projectName, bindingCheck);
             if (refusal != null)
@@ -2851,7 +2857,8 @@ public class LaunchTool implements IMcpTool
         InfobaseAuthDialogSuppressor.markActivityStart();
         try
         {
-            dispatchWithAttachBinding(config, LaunchTool::validateSavedAttachBinding,
+            dispatchWithAttachBinding(config, ProjectStateChecker::checkoutReloadErrorOrNull,
+                LaunchTool::validateSavedAttachBinding,
                 () -> recordFinishedLaunch(StandaloneServerStateRecovery.launchWithRecovery(config, launchMode, null)));
             return null;
         }
@@ -3008,7 +3015,8 @@ public class LaunchTool implements IMcpTool
         java.util.List<org.eclipse.debug.core.ILaunch> started = new java.util.ArrayList<>();
         try
         {
-            dispatchWithAttachBinding(config, LaunchTool::validateSavedAttachBinding,
+            dispatchWithAttachBinding(config, ProjectStateChecker::checkoutReloadErrorOrNull,
+                LaunchTool::validateSavedAttachBinding,
                 () -> StandaloneServerStateRecovery.launchWithRecovery(config, launchMode, monitor,
                     () -> abandonedLaunchMessage(config.getName(), abortReason.reason()), started::add));
             String declined = declinedConflictMessage(launchPolicy, conflicts);

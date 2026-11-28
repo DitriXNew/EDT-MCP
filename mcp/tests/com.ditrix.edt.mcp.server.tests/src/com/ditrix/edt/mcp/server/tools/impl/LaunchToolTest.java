@@ -114,17 +114,31 @@ public class LaunchToolTest
             .thenReturn("bound"); //$NON-NLS-1$
         when(config.getAttribute(LaunchConfigUtils.ATTR_PROJECT_NAME, "")).thenReturn("Project"); //$NON-NLS-1$ //$NON-NLS-2$
 
-        LaunchTool.dispatchWithAttachBinding(config, (project, app, alias) -> {
+        LaunchTool.dispatchWithAttachBinding(config, project -> null, (project, app, alias) -> {
             assertTrue(BranchBindingLock.isHeldByCurrentThread());
             return null;
         }, () -> assertTrue(BranchBindingLock.isHeldByCurrentThread()));
         assertFalse(BranchBindingLock.isHeldByCurrentThread());
 
         CoreException failure = org.junit.Assert.assertThrows(CoreException.class,
-            () -> LaunchTool.dispatchWithAttachBinding(config, (project, app, alias) ->
+            () -> LaunchTool.dispatchWithAttachBinding(config, project -> null, (project, app, alias) ->
                 "{\"success\":false,\"error\":\"Branch changed before dispatch\"}", //$NON-NLS-1$
                 () -> { throw new AssertionError("Refused Attach must not dispatch"); })); //$NON-NLS-1$
         assertEquals("Branch changed before dispatch", failure.getStatus().getMessage()); //$NON-NLS-1$
+        assertFalse(BranchBindingLock.isHeldByCurrentThread());
+
+        CoreException reloadFailure = org.junit.Assert.assertThrows(CoreException.class,
+            () -> LaunchTool.dispatchWithAttachBinding(config, project -> {
+                assertEquals("Project", project); //$NON-NLS-1$
+                assertTrue(BranchBindingLock.isHeldByCurrentThread());
+                return "EDT is importing the checked-out branch."; //$NON-NLS-1$
+            }, (project, app, alias) -> {
+                throw new AssertionError("A pending reload must be refused before reading the binding"); //$NON-NLS-1$
+            }, () -> {
+                throw new AssertionError("A pending reload must be refused before dispatch"); //$NON-NLS-1$
+            }));
+        assertEquals("Refusing Attach: EDT is importing the checked-out branch.", //$NON-NLS-1$
+            reloadFailure.getStatus().getMessage());
         assertFalse(BranchBindingLock.isHeldByCurrentThread());
     }
 
