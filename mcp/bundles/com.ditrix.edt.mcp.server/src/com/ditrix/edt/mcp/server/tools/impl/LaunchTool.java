@@ -519,13 +519,6 @@ public class LaunchTool implements IMcpTool
                 return preflightError;
             }
 
-            String bindingError = savedAttachBindingError(config, typeId, configProject,
-                LaunchTool::validateSavedAttachBinding);
-            if (bindingError != null)
-            {
-                return bindingError;
-            }
-
             // An Attach configuration performs no DB update at all (the preflight above is
             // skipped for it), so the conflict matcher must stay unarmed: an "Infobase
             // configuration changes" dialog appearing during an Attach is somebody else's.
@@ -637,6 +630,8 @@ public class LaunchTool implements IMcpTool
         void run() throws CoreException;
     }
 
+    // Validate at the dispatch boundary only: an earlier association lookup can see the previous
+    // branch while EDT imports the checked-out model.
     static void dispatchWithAttachBinding(ILaunchConfiguration config, Function<String, String> checkoutReloadCheck,
         AttachBindingCheck bindingCheck, LaunchDispatch dispatch) throws CoreException
     {
