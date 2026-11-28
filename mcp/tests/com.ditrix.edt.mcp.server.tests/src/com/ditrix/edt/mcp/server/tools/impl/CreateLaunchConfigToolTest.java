@@ -7,6 +7,7 @@
 package com.ditrix.edt.mcp.server.tools.impl;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
@@ -28,6 +29,18 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
  */
 public class CreateLaunchConfigToolTest
 {
+    @Test
+    public void acceptsNumericLoopbackSpellingsAndRejectsRemoteHosts()
+    {
+        assertTrue(CreateLaunchConfigTool.validLocalDebugUrl("http://127.0.0.2:1550")); //$NON-NLS-1$
+        assertTrue(CreateLaunchConfigTool.validLocalDebugUrl("http://[0:0:0:0:0:0:0:1]:1550")); //$NON-NLS-1$
+        assertTrue(CreateLaunchConfigTool.validLocalDebugUrl("http://localhost:1550/")); //$NON-NLS-1$
+        assertFalse(CreateLaunchConfigTool.validLocalDebugUrl("http://128.0.0.2:1550")); //$NON-NLS-1$
+        assertFalse(CreateLaunchConfigTool.validLocalDebugUrl("http://[::2]:1550")); //$NON-NLS-1$
+        assertFalse(CreateLaunchConfigTool.validLocalDebugUrl("http://127.0.0.1.example.test:1550")); //$NON-NLS-1$
+        assertFalse(CreateLaunchConfigTool.validLocalDebugUrl("http://127.0.0.1:1550/?query")); //$NON-NLS-1$
+    }
+
     @Test
     public void testName()
     {

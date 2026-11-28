@@ -6,7 +6,9 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import java.net.InetAddress;
 import java.net.URI;
+import java.net.UnknownHostException;
 import java.util.Map;
 import java.util.UUID;
 import java.util.Optional;
@@ -464,15 +466,28 @@ public class CreateLaunchConfigTool implements IMcpTool
             String host = uri.getHost();
             String path = uri.getRawPath();
             return "http".equalsIgnoreCase(uri.getScheme())
-                && ("localhost".equalsIgnoreCase(host) || "127.0.0.1".equals(host) || "[::1]".equals(host))
                 && uri.getPort() > 0 && uri.getPort() <= 65535
                 && uri.getRawUserInfo() == null && uri.getRawQuery() == null && uri.getRawFragment() == null
-                && ("".equals(path) || "/".equals(path));
+                && ("".equals(path) || "/".equals(path))
+                && isDebugLoopbackHost(host);
         }
-        catch (IllegalArgumentException e)
+        catch (IllegalArgumentException | UnknownHostException e)
         {
             return false;
         }
+    }
+
+    private static boolean isDebugLoopbackHost(String host) throws UnknownHostException
+    {
+        if ("localhost".equalsIgnoreCase(host)) //$NON-NLS-1$
+        {
+            return true;
+        }
+        // URI accepts brackets only for IPv6 literals. Limit IPv4 to dotted decimal and
+        // exclude IPv6 zone ids so only numeric addresses reach getByName, without DNS.
+        return host != null && (host.matches("[0-9]{1,3}(?:\\.[0-9]{1,3}){3}") //$NON-NLS-1$
+            || (host.startsWith("[") && host.indexOf('%') < 0)) //$NON-NLS-1$
+            && InetAddress.getByName(host).isLoopbackAddress();
     }
 
     // -------------------------------------------------------------------------
