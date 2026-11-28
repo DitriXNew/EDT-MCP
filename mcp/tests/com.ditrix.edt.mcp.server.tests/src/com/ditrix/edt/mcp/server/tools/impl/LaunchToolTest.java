@@ -103,6 +103,24 @@ import com.google.gson.JsonParser;
 public class LaunchToolTest
 {
     @Test
+    public void savedAttachRefusesMissingAndClosedProjectHandlesBeforeResolvingApplication()
+    {
+        IProject project = mock(IProject.class);
+        when(project.getName()).thenReturn("SavedProject"); //$NON-NLS-1$
+        String applicationId = "34567890-1234-4567-89ab-0123456789ab"; //$NON-NLS-1$
+        String alias = "base"; //$NON-NLS-1$
+
+        String missing = CreateLaunchConfigTool.validateAttachBinding(project, applicationId, alias);
+        assertTrue(missing, missing.contains("Project not found: SavedProject")); //$NON-NLS-1$
+        verify(project, never()).isOpen();
+
+        when(project.exists()).thenReturn(true);
+        String closed = CreateLaunchConfigTool.validateAttachBinding(project, applicationId, alias);
+        assertTrue(closed, closed.contains("Project is closed: SavedProject")); //$NON-NLS-1$
+        assertTrue(closed, closed.contains("Open the project first")); //$NON-NLS-1$
+    }
+
+    @Test
     public void boundRemoteAttachRevalidatesSavedApplicationAndAliasBeforeLaunch() throws Exception
     {
         ILaunchConfiguration config = mock(ILaunchConfiguration.class);

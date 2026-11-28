@@ -397,6 +397,16 @@ public class CreateLaunchConfigTool implements IMcpTool
     /** Checks the infobase selected by both a new and a saved RemoteRuntime Attach configuration. */
     static String validateAttachBinding(IProject project, String applicationId, String alias)
     {
+        String projectName = project.getName();
+        if (!project.exists())
+        {
+            return ToolResult.error(ProjectContext.notFoundMessage(projectName)).toJson();
+        }
+        if (!project.isOpen())
+        {
+            return ToolResult.error("Project is closed: " + projectName //$NON-NLS-1$
+                + ". Open the project first.").toJson(); //$NON-NLS-1$
+        }
         try
         {
             UUID.fromString(applicationId);
